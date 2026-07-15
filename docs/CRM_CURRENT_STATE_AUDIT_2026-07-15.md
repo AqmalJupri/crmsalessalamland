@@ -397,7 +397,7 @@ Primary evidence: `app.js:935-990`, `app.js:3102-3141`, `app.js:3749-3819`, `app
 
 | ID | Finding | Target control |
 |---|---|---|
-| P1-01 | No per-person account lifecycle, MFA, durable session, device/session revocation | OIDC-compatible named identity, MFA for privileged users, Redis/database sessions, access reviews |
+| P1-01 | No per-person account lifecycle, MFA, durable session, device/session revocation | OIDC-compatible named identity, MFA for privileged users, PostgreSQL-authoritative CRM sessions, access reviews; Redis only for reconstructable coordination |
 | P1-02 | Client is trusted for core order/payment/status/audit logic | Server-side commands, schema validation, policy checks, transactions, immutable audit |
 | P1-03 | No durable webhook inbox, queue, outbox, retry, DLQ, or replay control | Persist-before-ack inbox, unique event keys, queue workers, outbox, DLQ and controlled replay |
 | P1-04 | TikTok HMAC lacks timestamp freshness and query-string secrets are accepted | Header-only credential, timestamp skew window, nonce/event replay key, per-connection secret |

@@ -1,0 +1,34 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# Next.js
+.next/
+out/
+
+# tests
+coverage/
+playwright-report/
+test-results/
+
+# local runtime
+.env*
+!.env.example
+*.log
+*.tsbuildinfo
+
+# generated/database
+drizzle/meta/
+.superpowers/
+
+# operating systems and editors
+.DS_Store
+.idea/
+.vscode/
+
+# sensitive exports and runtime artifacts
+uploads/
+exports/
+backups/
+runtime*.json
+auth*.json

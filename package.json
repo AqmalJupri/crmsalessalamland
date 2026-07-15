@@ -1,0 +1,55 @@
+{
+  "name": "crm-salam-fortress",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=22.22.0 <23"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:db": "vitest run --config vitest.integration.config.ts",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:coverage:production": "vitest run --config vitest.production-coverage.config.ts --coverage",
+    "test:e2e": "playwright test",
+    "test:runtime": "node tests/production/runtime-smoke.mjs",
+    "db:migrate": "tsx src/server/db/migrate.ts",
+    "clean:next": "node -e \"require('node:fs').rmSync('.next', { recursive: true, force: true })\"",
+    "verify": "pnpm clean:next && pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm test:coverage:production && pnpm build",
+    "verify:full": "pnpm verify && pnpm test:db && pnpm test:e2e"
+  },
+  "dependencies": {
+    "clsx": "2.1.1",
+    "drizzle-orm": "0.45.2",
+    "lucide-react": "1.24.0",
+    "next": "16.2.10",
+    "openid-client": "6.8.4",
+    "postgres": "3.4.9",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "server-only": "0.0.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.61.1",
+    "@testing-library/react": "16.3.0",
+    "@testing-library/user-event": "14.6.1",
+    "@types/node": "22.20.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitest/coverage-v8": "4.1.10",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.2.10",
+    "jsdom": "26.1.0",
+    "tsx": "4.23.1",
+    "typescript": "6.0.3",
+    "vitest": "4.1.10"
+  }
+}

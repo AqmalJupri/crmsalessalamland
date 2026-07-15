@@ -1,16 +1,20 @@
 # CRM Salam Fortress V2 — Production Product Requirements Document
 
-**Document version:** 1.0
+**Document version:** 1.7
 
 **Date:** 15 July 2026 (MYT)
 
-**Status:** Draft for business, legal, product, and engineering approval
+**Status:** Draft for business, legal, product, and engineering approval; every release/acceptance gate is **Not passed**
 
 **Product type:** Multi-business-unit CRM and revenue operations platform
 
 **Initial business units:** Salam Land, Bumi Hayat Printing, Barakah Emas
 
 **Current-state reference:** `CRM_CURRENT_STATE_AUDIT_2026-07-15.md`
+
+**Execution reference:** `CRM_EXECUTION_PLAN_V2_2026-07-15.md`
+
+**Revision 1.7:** preserves the 1.6 target and adds a repo-level bounded rejection for malformed Next router-prefetch contracts, its red/green production-runtime regression, and a clearer separation between implemented application guards and still-required edge rate limits/timeouts while retaining explicit non-release status.
 
 ---
 
@@ -20,7 +24,7 @@ CRM Salam Fortress V2 will be the trusted operational system from first customer
 
 V2 preserves the valuable workflow knowledge demonstrated in the existing application, while replacing its file-backed state, shared accounts, browser-owned business rules, exposed attachments/secrets, and synchronous provider processing.
 
-The recommended product is a **modular monolith with asynchronous workers**, not an immediate microservice estate. This gives one consistent domain model and transaction boundary while still allowing web/API nodes and workers to scale horizontally. PostgreSQL is the system of record; Redis supports sessions, rate limits, short locks, and jobs; sensitive files use private object storage; provider events are durably accepted before asynchronous processing; all consequential actions are server-authoritative and auditable.
+The recommended product is a **modular monolith with asynchronous workers**, not an immediate microservice estate. This gives one consistent domain model and transaction boundary while still allowing web/API nodes and workers to scale horizontally. PostgreSQL is the system of record and stores authoritative CRM session metadata/token hashes; Redis is planned only for reconstructable rate-limit, cache, short-lock and queue-coordination state. Sensitive files use private object storage; provider events are durably accepted before asynchronous processing; all consequential actions are server-authoritative and auditable.
 
 The production outcome must be:
 
@@ -31,6 +35,10 @@ The production outcome must be:
 - recoverable, observable, testable, and deployable through controlled releases;
 - usable on mobile and desktop, including keyboard and assistive technology;
 - able to grow from the current three business units to future units without data leakage or architectural rewrite.
+
+### 1.1 Current implementation classification
+
+The present V2 branch is a **hardened production foundation**, not a production release. Local implementation now supplies meaningful database, Lead-command, identity-session, migration, CSP/runtime and demo-UI evidence, but it does not satisfy any gate. Hosted CI/promotion, a real managed IdP and MFA policy, production infrastructure, workers/queue dispatch, private object storage, telemetry, backup/PITR and restore rehearsal, capacity/soak proof, migration/UAT evidence, and named business, security, privacy, finance and operations approvals are still absent.
 
 ## 2. Document authority and decision order
 
@@ -149,7 +157,7 @@ These are design assumptions to validate in discovery, not claims about current 
 | Recovery point objective | 15 minutes or better |
 | Recovery time objective | 4 hours or better |
 
-The architecture should be able to tighten RPO/RTO later without redesign. Operations and management must formally approve cost versus objective.
+The architecture should be able to tighten RPO/RTO later without redesign. Operations and management must formally approve cost versus objective. Decision `D-18` locks the capacity, workload skew, client/network profile, SLO measurement method and error-budget contract used by `PERF-001` and `PERF-002`.
 
 ## 7. Users and access model
 
@@ -173,10 +181,10 @@ The architecture should be able to tighten RPO/RTO later without redesign. Opera
 
 V2 uses RBAC plus contextual rules:
 
-- **RBAC:** permission bundles such as `leads.read`, `leads.assign`, `orders.approve`, `payments.refund`, `integrations.manage`, `users.manage`, `exports.run`.
+- **RBAC:** stable singular-resource capability keys such as `lead.read`, `lead.assign`, `order.approve`, `payment.refund`, `integration.manage`, `user.manage`, `export.run`.
 - **Scope:** organisation, business unit, branch, team, own records, assigned queue, or explicitly shared record.
 - **Attributes:** amount thresholds, record state, document sensitivity, legal hold, working group, and maker-checker separation.
-- **Database guard:** every business entity carries `organization_id` and `business_unit_id`; high-risk queries may additionally use PostgreSQL row-level security.
+- **Database guard:** every tenant-owned row carries `organization_id`. Business-unit-scoped aggregates such as Lead, Opportunity, Order, Lot, Conversation and Integration Connection also carry `business_unit_id`. Organisation-scoped party/identity rows are exposed to a business unit only through an authorised relationship and central policy. High-risk queries may additionally use PostgreSQL row-level security.
 
 ### 7.3 Capability baseline
 
@@ -250,9 +258,12 @@ erDiagram
     CONTACT ||--o{ CONTACT_IDENTITY : has
     CONTACT ||--o{ CONSENT_PREFERENCE : grants_or_withdraws
     CONTACT ||--o{ LEAD : makes
+    BUSINESS_UNIT ||--o{ LEAD : scopes
     LEAD ||--o| OPPORTUNITY : converts_to
+    BUSINESS_UNIT ||--o{ OPPORTUNITY : scopes
     OPPORTUNITY ||--o{ QUOTE : proposes
     OPPORTUNITY ||--o| ORDER : wins_as
+    BUSINESS_UNIT ||--o{ ORDER : scopes
     ORDER ||--o{ ORDER_ITEM : contains
     ORDER ||--o{ INSTALLMENT : schedules
     ORDER ||--o{ PAYMENT_ALLOCATION : receives
@@ -283,13 +294,14 @@ erDiagram
 - A natural-person Contact is mastered at organisation scope so the same person can have multiple legitimate journeys, but ordinary business-unit users gain access only through an explicit, effective-dated `PartyRelationship`. Cross-business-unit matching does not automatically reveal the other unit's record or activity.
 - Business customers are represented by `BusinessAccount`; households/joint buyers and named contact roles support printing-company buyers, land co-buyers, guardians/representatives, billing contacts and authorised recipients. Leads, opportunities, orders and files identify each party's role instead of forcing every customer into one individual Contact.
 - Identity matching may use protected organisation-level canonical values or keyed hashes. Match results expose only a possible-match workflow until access purpose, controller/brand relationship and permission are validated.
+- A Contact–Business Unit relationship is an authorization boundary, not a dedupe side effect. Lead create must serialize identity reuse, lock/recheck the active relationship inside its transaction, and fail closed if concurrent restriction wins; it must never reactivate or attach a Lead to a relationship that is no longer active.
 - Consent and preferences declare controller/organisation, business unit or brand where applicable, channel, purpose and legal basis. An organisation-wide suppression is applied only when the notice, channel ownership or law requires it; narrower consent is never silently broadened across business units.
 - IDs are globally unique, non-sequential public identifiers; internal database keys may differ.
 - Every mutable business record has a server-owned `version` for optimistic concurrency.
 - All timestamps are stored in UTC with explicit source, received, ingested, created, updated, state-transition, and deletion times as applicable.
 - MYT is the initial display/reporting timezone, configurable per business unit.
 - Phone identities are stored canonically in E.164 plus original input and verification state.
-- Money uses integer minor units or fixed-precision decimals with an ISO currency code; never binary floating point.
+- Money uses integer minor units or fixed-precision decimals with an ISO currency code; never binary floating point. Lead has no monetary-value field: expected commercial amount begins on Opportunity, and actual obligations/cash belong to Order/Finance entities.
 - Human-readable numbers use unique sequences per business unit and document type.
 - Soft deletion is not a substitute for retention. Records have lifecycle state, retention policy, and legal-hold handling.
 - Integration credentials are references to encrypted secret storage, never general entity fields.
@@ -330,6 +342,7 @@ Rules:
 `Open → Discovery → Proposal/Quote → Negotiation/Booking → Won | Lost | On Hold`
 
 - stage probabilities are configurable but historical forecasts retain the value used at the time;
+- expected amount and ISO currency belong to Opportunity, never Lead; forecast history retains the amount/probability basis used at the time;
 - Won requires approved commercial fields and creates/links the relevant order/booking exactly once;
 - reopen requires permission and reason;
 - expected close date is a date, while actual `won_at`/`lost_at` are immutable event timestamps.
@@ -341,16 +354,32 @@ Rules:
 - Refund: `Requested → Approved → Processing → Settled | Failed | Rejected`.
 - No state is achieved by overwriting the original amount; allocations, adjustments, credits, reversals, and refunds are separate entries.
 
+### 10.4 Orthogonal state dimensions and legacy-status contract
+
+V2 does not use one catch-all status field. The current application mixes pipeline, outreach, provider delivery, fulfilment and payment meanings in values such as `WS Sent`, `Bluetick`, `Reply`, `Tak Jawab`, `Quotation`, `Production`, `Payment` and `Closed`. Those meanings become independent, server-owned dimensions:
+
+| Dimension | Examples | Owner and rule |
+|---|---|---|
+| Lead lifecycle | New, Assigned, Attempting Contact, Contacted, Qualified, Converted, Lost | Lead module; only approved lead-transition commands may change it |
+| Contact-attempt outcome | No Answer, Connected, Callback Requested, Invalid Number | Activity module; a new attempt appends an event and never overwrites commercial stage |
+| Message delivery/engagement | Queued, Sent, Delivered, Read, Failed, Customer Replied | Conversation module; provider events advance only legal message transitions |
+| Opportunity stage | Discovery, Proposal, Negotiation, Won, Lost, On Hold | Opportunity module; commercial evidence and permissions govern transition |
+| Order state | Draft, Submitted, Approved, Active, Completed, Cancelled | Order module; fulfilment or a message receipt cannot close an order by itself |
+| Fulfilment state | Lot hold/reservation, printing production/QC/delivery, gold transaction state | Respective vertical module; transitions follow vertical invariants |
+| Finance state | Installment, payment, allocation, refund and reconciliation lifecycles | Finance module; immutable ledger events drive balances |
+
+Migration preserves the exact raw source value as `legacy_status`, applies a versioned and signed mapping to one or more dimensions, and quarantines ambiguous values. A provider callback or automation may update only the dimension it owns; it cannot regress a commercial stage or overwrite a manual ownership lock.
+
 ## 11. Functional requirements
 
-Priority meanings: **P0** required before any production cutover, **P1** required for initial GA, **P2** subsequent controlled release.
+Priority meanings: **P0** required before any production cutover and non-waivable, **P1** required for initial GA, **P2** subsequent controlled release. A P0 may be changed only through a new approved PRD revision that replaces the requirement with an equivalent or stronger control; it cannot be waived in a release decision. A narrowly scoped P1 exception follows Gate D.
 
 ### 11.1 Identity, tenant isolation, and administration
 
 | ID | Pri | Requirement | Acceptance summary |
 |---|---|---|---|
 | IAM-001 | P0 | Every human uses a unique named account | No shared operational account; actor can be traced for every consequential action |
-| IAM-002 | P0 | Invite, activate, password change/reset, disable, unlock, and offboard lifecycle | Disabled user cannot authenticate; all sessions and grants are revoked; open work is reassigned |
+| IAM-002 | P0 | Identity-provider and CRM access lifecycle | The approved IdP owns credential reset, unlock and MFA enrollment; CRM owns pre-provisioning, Membership activation/suspension, authorization, session revocation, offboarding, work reassignment and audit. Either side disabling access prevents CRM use within the approved propagation objective |
 | IAM-003 | P0 | Privileged MFA and step-up authentication | Admin, credential, export, sensitive-file, refund, and policy-defined actions require appropriate assurance |
 | IAM-004 | P0 | Secure revocable sessions | No bearer token in `localStorage`; session rotation, idle/absolute expiry, device list, logout-all, CSRF protection |
 | IAM-005 | P0 | Server-authoritative RBAC + scope | Direct API and manipulated UI attempts return 403; all role × scope × action cases are policy-tested |
@@ -358,6 +387,7 @@ Priority meanings: **P0** required before any production cutover, **P1** require
 | IAM-007 | P1 | Effective-dated membership and team history | Moving staff does not rewrite historical ownership/reporting |
 | IAM-008 | P1 | Maker-checker and amount thresholds | Requester cannot approve own protected action; policy and exception are audited |
 | IAM-009 | P1 | Emergency access | Time-limited, reasoned, approved, alerted, and reviewed break-glass access |
+| IAM-010 | P0 | Managed OIDC federation boundary | Authorization Code + PKCE validates exact issuer/audience/redirect, state and nonce; only a pre-provisioned active User with active Membership enters; unknown subjects, replay, assurance failure, provider/JWKS failure and key rotation fail closed with redacted audit/telemetry |
 | ADM-001 | P1 | Configure business units, branches, teams, products, stages, reasons, SLAs, working hours | Validated changes are versioned, previewable, and auditable; unsafe deletion is blocked |
 | ADM-002 | P1 | Feature flags and staged rollout | Flag has owner, environment, scope, expiry/review date, audit, and safe default |
 | ADM-003 | P1 | User access review | Quarterly export/review and attest/revoke workflow for privileged permissions |
@@ -381,12 +411,15 @@ Priority meanings: **P0** required before any production cutover, **P1** require
 
 | ID | Pri | Requirement | Acceptance summary |
 |---|---|---|---|
-| LEAD-001 | P0 | Create lead manually, by verified integration, or controlled import | Required fields and provenance are server-validated; create is idempotent |
+| LEAD-001 | P0 | Create lead manually, by verified integration, or controlled import | Required fields and provenance are server-validated; create is idempotent; canonical provider/source lineage is retained; no Lead monetary value is accepted or returned |
 | LEAD-002 | P1 | Editable lead detail with notes, activities, tags, next action and files | Every update has actor/time/version and respects field permissions |
-| LEAD-003 | P0 | Controlled stage transitions | Invalid transition or missing reason/field is rejected on server |
+| LEAD-003 | P0 | Controlled configurable stage transitions | A versioned active `pipeline_stage_transitions` edge defines allowed source/target, required capability and reason; missing, disabled, cross-pipeline or stale-version transitions are rejected on the server and successful transitions append history |
 | LEAD-004 | P1 | Qualify/disqualify/nurture/reopen workflows | Required reason and next action; service metrics use transition timestamps |
 | LEAD-005 | P0 | Convert lead exactly once | Creates/links one opportunity, preserves source/campaign/owner, and prevents metric double count |
 | LEAD-006 | P1 | Bulk actions with preview and limits | Scope/validation errors shown before commit; one batch ID and audit evidence |
+| STATE-001 | P0 | Separate lead, outreach, message, opportunity, order, fulfilment and finance states | Updating one dimension cannot silently change another; each transition uses its owning server command and audit event |
+| STATE-002 | P0 | Versioned legacy-status mapping | Every imported status is preserved raw, deterministically mapped under a signed rule version, or quarantined; no ambiguous status is guessed |
+| STATE-003 | P1 | Automation transition boundary | Provider/message events cannot regress commercial stage, replace a manual owner lock or close an order without the required domain command |
 | ASG-001 | P0 | Transactional assignment | Lead creation, selected owner, cursor/capacity update, task and outbox commit together |
 | ASG-002 | P1 | Rules for company, source/form, product, territory, language, team, shift, leave and capacity | Simulation explains which rule won; invalid/unmapped lead enters visible exception queue |
 | ASG-003 | P1 | Fair round robin and manual lock | Duplicate events do not advance cursor; manual owner is never silently replaced |
@@ -407,6 +440,7 @@ Priority meanings: **P0** required before any production cutover, **P1** require
 | LAND-006 | P1 | Transfer, cancellation, reopening and exception approval | No silent lot release; financial and document dependencies are checked |
 | LAND-007 | P1 | Visual lot board | Filters, legend, last-updated, accessibility alternative, drill-down and real-time conflict refresh |
 | LAND-008 | P2 | Availability publishing feed | Only approved non-sensitive lot state is exposed; cache freshness and withdrawal are controlled |
+| LAND-009 | P0 | Separate Lot, Hold and Reservation aggregates with one active-allocation invariant | Concurrent Hold/Reservation commands for one Lot produce at most one active allocation; derived availability and every losing conflict are deterministic |
 
 Lot, Hold and Reservation are separate aggregates:
 
@@ -588,6 +622,8 @@ Automation cannot directly mutate financial ledger, refund approval, lot reserva
 - destructive, financial, security, consent, and inventory actions use purpose-built confirmation with consequences and required reason;
 - every asynchronous action shows queued/running/succeeded/failed/partially completed state;
 - integration “ready” state must come from a real checked health signal with timestamp, not static UI copy.
+- Lead screens never request or display a monetary value; provider/source and stage labels come from canonical keys, while unknown but valid keys render a neutral, safe fallback instead of crashing or exposing untrusted markup;
+- Pipeline totals are derived from the authoritative Opportunity result set/aggregate, not hard-coded counters or Lead values; client-only card movement is demo behaviour and cannot represent a saved production transition;
 - Bahasa Melayu is the initial default UI language; user-facing copy, dates, numbers, currency, names, phone/address formats and generated documents use a localisation framework so English or future languages can be added without changing business logic.
 
 ### 12.2 Responsive requirements
@@ -624,6 +660,16 @@ Target: **WCAG 2.2 AA**.
 - media has dimensions and appropriate responsive delivery;
 - frontend error reporting redacts PII and correlates with server request ID.
 
+### 12.5 Cross-cutting offline, durability, and capacity requirements
+
+| ID | Pri | Requirement | Acceptance summary |
+|---|---|---|---|
+| OFF-001 | P0 | Initial GA has no offline customer/operational data cache | With API unavailable, after logout, and after remote session revocation, the client shows a safe unavailable screen and exposes no cached CRM record or integration secret |
+| REL-001 | P0 | Every accepted verified provider event has a durable terminal or recoverable state | Forced API/dispatcher/queue/worker restarts leave each accepted event queryable as processed, retrying, quarantined or dead-lettered; reconciliation reports zero silent loss |
+| REL-002 | P0 | Domain write and outbound work use an atomic database outbox; inbound events use a durable inbox | Killing the process at every commit/publish boundary produces neither an orphaned business action nor an untraceable send; queue loss is replayed from PostgreSQL with stable keys |
+| PERF-001 | P0 | Capacity proof uses the approved design envelope and realistic data skew | Load report covers approved contacts/leads, activities/messages, concurrent sessions, sustained/burst webhooks, common dashboards, imports/exports and queue recovery while meeting approved SLOs |
+| PERF-002 | P1 | Soak and degradation tests prove stable operation | Sustained workload has bounded memory, connections, queue age and error rate; provider/cache/worker degradation is visible and recovers without duplicate business effects |
+
 ## 13. Reference production architecture
 
 ### 13.1 Logical architecture
@@ -634,7 +680,7 @@ flowchart TB
     EDGE["DNS + CDN/WAF + TLS"]
     API["Stateless API nodes<br/>modular monolith"]
     DB[("PostgreSQL<br/>transactional system of record")]
-    REDIS[("Redis<br/>session, rate limit, cache, locks")]
+    REDIS[("Redis<br/>rate limit, cache, short locks, queue coordination")]
     DISPATCH["Inbox / outbox dispatcher<br/>replayable from PostgreSQL"]
     QUEUE["Durable job queues"]
     WORKER["Workers<br/>webhook, message, sync, import/export"]
@@ -697,6 +743,12 @@ flowchart TB
 
 Modules interact through defined service interfaces and domain events, not cross-module table mutation. A module becomes a separate service only after measured scaling/team-isolation need and an approved architecture decision.
 
+### 13.4 Current hardened-foundation evidence boundary
+
+The current migration runner admits only strictly zero-padded registered filenames, validates the exact manifest/source/ledger checksum, uses a PostgreSQL advisory lock with bounded lock/statement timeouts, applies first-run changes transactionally, treats an exact replay as a no-op, and fails on ledger tampering. Readiness requires the expected migration ledger rather than database connectivity alone. Production environment parsing requires coherent HTTPS `APP_URL`, OIDC issuer and exact callback origin/path. Per-request CSP nonces are enforced on normal pages, dynamic 404 responses, purpose-prefetch HTML and unexpected prefetch-header values. Exact framework RSC prefetches intentionally skip nonce rendering but retain a non-executable `default-src 'none'` fallback CSP and `no-store`. A `beforeFiles` contract guard rewrites `next-router-prefetch=1` without exact `rsc=1` to a bounded non-cacheable `400`, preventing the malformed request from occupying the Next renderer; production ingress must still enforce independent rate limits and origin request timeouts.
+
+These are local foundation controls, not proof of the target topology. No production environment, worker, queue dispatcher, object store, telemetry pipeline, backup/PITR automation, restore rehearsal, or remotely promoted release is evidenced.
+
 ## 14. API, events, and concurrency contract
 
 ### 14.1 API principles
@@ -707,7 +759,7 @@ Modules interact through defined service interfaces and domain events, not cross
 - optimistic concurrency with `version`/ETag; stale update returns `409 Conflict` and current representation/diff metadata;
 - `Idempotency-Key` required for create, payment, refund, send, conversion and other retry-sensitive commands;
 - server owns actor, timestamps, totals, derived statuses and audit;
-- request body limits are endpoint-specific;
+- request body limits are endpoint-specific; the implemented Lead-create route rejects invalid declared length, stream-counts actual UTF-8 bytes, and caps the body at 32,768 bytes before JSON/schema processing;
 - exports and expensive reports return job IDs;
 - API versioning and deprecation policy are documented.
 
@@ -754,11 +806,25 @@ Delivery is at-least-once; consumers must be idempotent. “Exactly once” is a
 - stage transition performed through commands, with database check/trigger only where it safely reinforces invariant;
 - audit and financial events cannot be updated/deleted through application roles.
 
+### 14.4 Idempotency decision and replay contract
+
+For Lead create—and as the minimum pattern for other retry-sensitive commands—the idempotency row is a protected decision record, not a cache of the caller's response body. Lead attribution accepts only JSON scalars/plain objects/arrays within depth 3, 32 keys per object, 64 total keys, 64-code-point keys, 1,024-code-point strings, 20 items per array and 128 total nodes:
+
+- the request HMAC covers canonical input; key reuse with different input fails before replay hydration, and comparison is timing-safe;
+- the replay snapshot contains only server-owned IDs, stage, version and timestamps; PII/input fields are reconstructed from the matched request only after HMAC verification;
+- a 32-byte HMAC-SHA256 response MAC keyed by `AUTH_HASH_KEY` binds the full canonical decision envelope: tenant/business unit, actor scope/User, command/key, request hash, status, result type/ID, response code and snapshot;
+- response-MAC verification is timing-safe and precedes snapshot parsing/hydration;
+- the acquisition envelope is immutable, expiry cannot decrease, and completed/failed terminal decisions cannot change;
+- unexpired deletion and all `TRUNCATE` operations are blocked; expired-row purge is allowed through the governed retention path; and
+- duplicate-provider handling maps only PostgreSQL `23505` for the named Lead provider/external-ID constraint, including safely traversed wrapped errors; every unrelated database failure remains sanitized and generic.
+
+The current 24-hour idempotency retention and single unversioned `AUTH_HASH_KEY` create an operational rotation boundary: replacing the key can invalidate still-live request/response MAC evidence. Before production, the key design/runbook must support versioned or dual-key verification, or deliberately drain the retention window, with monitoring, rollback and approved purge evidence.
+
 ## 15. Security requirements
 
 ### 15.1 Application and infrastructure
 
-- TLS 1.2+ with managed renewal, HSTS after safe rollout, secure headers and environment-specific CSP;
+- TLS 1.2+ with managed renewal, HSTS after safe rollout, secure headers and environment-specific CSP; production application/OIDC/callback URLs are HTTPS and origin/path coherent;
 - output encoding by default; sanitisation only for explicitly supported rich text;
 - CSRF protection for cookie-authenticated mutations;
 - rate limits by IP, account, tenant, endpoint and integration key, with trusted-proxy configuration;
@@ -769,7 +835,7 @@ Delivery is at-least-once; consumers must be idempotent. “Exactly once” is a
 - SAST, secret scanning, dependency/container/IaC scanning, DAST and penetration test before GA;
 - no PII/secrets in URLs, logs, traces, analytics, notifications or error messages;
 - admin endpoints isolated and protected by stronger authentication/authorisation;
-- security headers and CSP tested against stored-XSS fixtures from every customer/provider field;
+- security headers and per-request nonce CSP tested on success, error and dynamic 404 responses, plus stored-XSS fixtures from every customer/provider field;
 - backup encryption with separate key access and tested restore.
 
 ### 15.2 Privacy and Malaysian PDPA workstream
@@ -812,7 +878,7 @@ The official DPO guidance currently requires appointment where processing involv
 - connection pooling and bounded timeouts;
 - durable queues with retry limits, jitter, poison-message isolation and DLQ;
 - transactional outbox and idempotent consumers;
-- health endpoints split into liveness, readiness and dependency health;
+- health endpoints split into liveness, readiness and dependency health; readiness validates production-safe configuration, database access and the exact expected migration manifest/ledger before admitting traffic, plus role-specific dependencies once workers/object storage/queues exist;
 - graceful shutdown stops intake, drains bounded work and releases leases;
 - web/API nodes hold no unique state;
 - worker concurrency and provider rate budgets configurable per queue/business unit;
@@ -828,6 +894,9 @@ The official DPO guidance currently requires appointment where processing involv
 - checksum and backup-job evidence; failure alerts are actionable;
 - monthly automated restore validation and quarterly business-level restore drill initially;
 - restore into isolated environment; no overwrite of production during proof;
+- identity-provider tenant/client configuration, subject-mapping rules, secret references and break-glass dependencies are included in configuration recovery evidence;
+- a restored database cannot silently resurrect revoked/offboarded access: recovery either invalidates all restored sessions or replays post-backup revocations and IdP/offboarding deltas before users are admitted;
+- consent withdrawal, suppression, retention/anonymisation/deletion and legal-hold deltas after the restore point are replayed before reopening; a restore cannot republish erased or suppressed data into ordinary service;
 - restore report includes backup ID, time range, schema version, counts, checksums, referential checks, sampled business reconciliation, achieved RPO/RTO and approvals;
 - disaster declaration, communication, failover/failback and post-incident review are documented.
 
@@ -840,7 +909,7 @@ The official DPO guidance currently requires appointment where processing involv
 **Metrics:**
 
 - HTTP rate/error/latency by route and status;
-- auth success/failure/lockout/MFA and permission denials;
+- OIDC start/callback success/failure, unknown subject, state/nonce/issuer/assurance rejection, provider/JWKS health, MFA/step-up and permission denials;
 - webhook verified/rejected/duplicate/unmapped/processed/failed and ingest latency;
 - queue depth, age, retries, DLQ and worker saturation;
 - leads assigned/unassigned and SLA breach;
@@ -971,7 +1040,24 @@ No archive is declared canonical solely because it is newest or largest.
 - zero-record tenant, high-volume tenant and user moved between teams;
 - late campaign spend and closed-period restatement.
 
+### 20.3 Latest settled local evidence
+
+| Evidence | Settled result | Boundary |
+|---|---|---|
+| Lint, TypeScript, build, runtime | Pass | Local build/runtime smoke is not hosted promotion or production deployment evidence |
+| High-confidence unit/component coverage | 34 files, 220 tests pass | Explicit unit scope: statements 91.22%, branches 83.80%, functions 91.40%, lines 92.32%; gates remain 85% statements/lines/functions and 80% branches. Request/DB-bound Viewer resolution is excluded only from this scope and exercised by PostgreSQL plus production-runtime suites |
+| All-production-source coverage | 231 tests across 35 files: the 220 unit/component cases plus 11 auth-route boundary cases, measured against every production `src/**/*.{ts,tsx}` file including Viewer and currently unexercised boundaries | Statements 63.74%, branches 59.14%, functions 70.18%, lines 64.07%; independent anti-regression floors are 62% statements/lines, 69% functions and 58% branches. Zero-covered files remain visible debt rather than disappearing from the denominator |
+| PostgreSQL 16.14 | 5 files, 57 tests pass on disposable database `crm_salam_codex_final_test_20260715` | Includes OIDC redirect no-store and anonymous-callback write-containment assertions, Lead record-scope and idempotent-transition replay, refund maker-checker, selected concurrent invariants, and first/no-op/tamper migration-runner coverage; this is not HA, PITR, restore, RLS or capacity evidence |
+| Demo browser | 7 pass, 1 intentional desktop skip | Proves responsive demo journeys, no Lead value, dynamic client totals, modal interaction and mobile-drawer containment; unit/route evidence separately proves seeded read models and synthetic counts are absent for non-demo viewers. Lead reads and Opportunity writes remain unimplemented |
+| Dependency audit | `pnpm audit --audit-level moderate` is clean with one resolved PostCSS `8.5.16` version | A package audit is not a full application, container, IaC, DAST or penetration review |
+
+Reproducibility is authored around Node.js `22.22.0`, pnpm `11.9.0`, Next.js `16.2.10`, React `19.2.7`, TypeScript `6.0.3`; commit-pinned checkout `34e114876b0b11c390a56381ad16ebd13914f8d5`, pnpm setup `b906affcce14559ad1aafd4ab0e942779e9f58b1`, and Node setup `49933ea5288caeca8642d1e84afbd3f7d6820020`; and PostgreSQL image `postgres:16.14-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777`. The pinned GitHub Actions workflow is authored but has not run remotely.
+
+The explicit module `403` boundary currently relies on pinned Next.js `experimental.authInterrupts`. Local production build/runtime coverage reduces regression risk but does not replace a release-time framework-risk decision or migration to a stable equivalent.
+
 ## 21. Release gates
+
+Every gate is currently **Not passed**. That includes the Plan, A, B, Core-slice, Finance-slice, Vertical-slice, Integration-slice, Reporting-slice, C and D gates defined across this PRD and the execution plan. Local tests and demos cannot change a gate state without the named evidence and approvals.
 
 ### 21.1 Gate A — containment complete
 
@@ -984,7 +1070,7 @@ No archive is declared canonical solely because it is newest or largest.
 
 ### 21.2 Gate B — production foundation
 
-- named accounts, privileged MFA, secure sessions, server policy tests;
+- ADR-002/`D-14` approval plus named pre-provisioned accounts, real-provider Authorization Code + PKCE callback tests, privileged MFA/assurance/step-up, secure-session rotation/revocation/logout-all, recovery/offboarding and server policy tests;
 - PostgreSQL/resource APIs/concurrency/idempotency/audit deployed in staging;
 - private object storage and scan workflow;
 - durable inbox/outbox/queue/DLQ;
@@ -997,6 +1083,7 @@ No archive is declared canonical solely because it is newest or largest.
 - Salam lot race, printing production, gold rate/transaction, finance reconciliation and opt-out tests pass;
 - dashboard/report/export reconcile using signed fixtures;
 - migration reconciliation and cutover rehearsal pass;
+- `PERF-001`, `PERF-002`, `REL-001` and `REL-002` evidence passes against the approved capacity envelope and failure matrix;
 - privacy/legal/security reviews close all launch blockers;
 - WCAG/mobile/browser matrix meets acceptance.
 
@@ -1066,23 +1153,30 @@ Expected programme range: **24–36 weeks**, with overlap possible after the fou
 
 ## 24. Decisions required before build lock
 
-| ID | Decision | Owner | Needed by |
-|---|---|---|---|
-| D-01 | Confirm legal organisation/tenant structure and whether future external tenants are in scope | Management/Product | End discovery |
-| D-02 | Approve per-role capability matrix and maker-checker thresholds | Business owners/Finance/Security | Foundation design |
-| D-03 | Declare canonical live environment and source dataset | Operations/Data owner | Before migration build |
-| D-04 | Approve lead stages, lost reasons, SLA and assignment rules by business unit | Sales owners | Core CRM design |
-| D-05 | Approve Contact vs repeat Lead dedupe/merge policy | Sales/Marketing/Privacy | Core CRM design |
-| D-06 | Approve lot hold duration, extension, deposit, reservation and release policies | Salam Land owner/Finance | Land design |
-| D-07 | Approve printing quote/approval/production/QC/change-order rules | Bumi Hayat owner | Printing design |
-| D-08 | Approve gold sources, freshness, spread/upah, override and buyback rules | Barakah/Finance | Gold design |
-| D-09 | Approve installment, overpayment, refund, cancellation and reconciliation policy | Finance | Finance design |
-| D-10 | Approve attribution models and canonical KPI dictionary | Marketing/Sales/Finance | Reporting build |
-| D-11 | Confirm WhatsApp senders, consent purposes, templates, service-window and opt-in/out policy | Marketing/Privacy | Integration build |
-| D-12 | Approve data categories, retention, legal holds, DSR, breach and DPO assessment | Privacy/legal/Management | Before staging data |
-| D-13 | Approve hosting region/provider, RPO/RTO, availability and cost envelope | Management/Operations | Architecture sign-off |
-| D-14 | Choose identity approach: managed IdP/OIDC or in-product identity under equivalent controls | Security/Engineering | Foundation design |
-| D-15 | Decide whether n8n remains governed middleware or is decommissioned | Engineering/Operations | Integration architecture |
+All decisions below remain unapproved. `Proposed` records a recommended direction, not permission to deploy. Approval requires a dated record naming approvers and evidence; until then the approval record is `None`.
+
+| ID | Status | Decision required | Current proposal/evidence | Owner | Needed by | Approval record |
+|---|---|---|---|---|---|---|
+| D-01 | Open | Confirm legal organisation/tenant structure and whether future external tenants are in scope | PRD Sections 7 and 9 describe one Organization with explicit BU relationships | Management/Product | End discovery | None |
+| D-02 | Open | Approve per-role capability matrix and maker-checker thresholds | PRD Section 7.3 is a baseline only | Business owners/Finance/Security | Foundation design | None |
+| D-03 | Open | Declare canonical live environment and source dataset | Current-state audit identifies conflicting snapshots | Operations/Data owner | Before migration build | None |
+| D-04 | Open | Approve Lead pipelines, configurable stage edges, lost reasons, SLA and assignment rules by BU | `pipeline_stage_transitions` is the proposed server-owned edge model | Sales owners/Product | Core CRM design | None |
+| D-05 | Open | Approve Contact versus repeat-Lead dedupe/merge policy | Organisation party master plus BU relationship boundary is proposed | Sales/Marketing/Privacy | Core CRM design | None |
+| D-06 | Open | Approve lot hold duration, extension, deposit, reservation and release policies | `LAND-001`–`LAND-009` define the proposed invariant boundary | Salam Land owner/Finance | Land design | None |
+| D-07 | Open | Approve printing quote/approval/production/QC/change-order rules | `PRINT-001`–`PRINT-008` are proposed | Bumi Hayat owner | Printing design | None |
+| D-08 | Open | Approve gold sources, freshness, spread/upah, override and buyback rules | `GOLD-001`–`GOLD-008` are proposed | Barakah/Finance | Gold design | None |
+| D-09 | Open | Approve installment, overpayment, refund, cancellation and reconciliation policy | Finance requirements and ledger model are proposed | Finance | Finance design | None |
+| D-10 | Open | Approve attribution models and canonical KPI dictionary | Section 18 is an unsigned initial dictionary | Marketing/Sales/Finance | Reporting build | None |
+| D-11 | Open | Confirm WhatsApp senders, consent purposes, templates, service window and opt-in/out policy | Communication requirements are proposed; provider ownership is unverified | Marketing/Privacy | Integration build | None |
+| D-12 | Open | Approve data categories, retention, legal holds, DSR, breach and DPO assessment | Section 15.2 and `PRIV-001`–`PRIV-009` require legal validation | Privacy/legal/Management | Before staging data | None |
+| D-13 | Open | Approve hosting region/provider, supported PostgreSQL version, HA topology, RPO/RTO, availability, connection budget and cost envelope | ADR-001 is topology direction only; no hosting approval exists | Management/Operations | Architecture sign-off | None |
+| D-14 | Proposed | Approve managed IdP provider/tenant/region, client and callback configuration, provisioning/bootstrap, MFA/recovery, assurance mapping, logout/session policy, subject migration, data residency and break glass | ADR-002 proposes managed OIDC; local code/tests are not provider approval | Security/Engineering/Management/Privacy | Foundation design | None |
+| D-15 | Open | Decide whether n8n remains governed middleware or is decommissioned | No authoritative middleware inventory exists | Engineering/Operations | Integration architecture | None |
+| D-16 | Open | Approve organisation-level party matching, BU visibility, controller/brand boundaries and consent/opt-out propagation | PRD Sections 7 and 9 propose explicit BU relationships | Privacy/legal/Business owners/Product | Before party schema lock | None |
+| D-17 | Open | Sign legacy-status mapping into separate lead, outreach, message, opportunity, order, fulfilment and finance dimensions | `STATE-001`–`STATE-003` define the target dimensions | Business owners/Product/Data/Finance | Before importer lock | None |
+| D-18 | Open | Approve capacity envelope, workload/data skew, client/network profile and measurable SLO/error-budget contract | Section 6 values are design assumptions only | Product/Engineering/Operations/Finance | Before performance harness lock | None |
+| D-19 | Open | Approve database roles, RLS rollout, transaction-local tenant context and support/break-glass bypass controls | ADR-001 and `DATA_MODEL.md` describe an unimplemented defence-in-depth direction | Engineering/Security/Operations | Before staging authorization proof | None |
+| D-20 | Open | Approve queue/dispatcher technology, durability boundary, retry/DLQ/replay operations and ownership | PostgreSQL inbox/outbox is authoritative; Redis/queue implementation is undecided | Engineering/Operations/Security | Before integration foundation | None |
 
 ## 25. Definition of done
 
@@ -1099,7 +1193,7 @@ A feature is done only when:
 - operations runbook, alerts and support path exist;
 - privacy/security review is completed for new data, file, export, provider or permission use;
 - documentation and OpenAPI/event schema are current;
-- no high/critical vulnerability or unresolved P0/P1 defect remains;
+- no high/critical vulnerability or unresolved P0 defect remains; any P1 exception must satisfy the narrow, time-limited Gate D risk-acceptance rule;
 - Product and named business owner accept the behaviour using production-like synthetic fixtures.
 
 The programme is ready for GA only when all release gates pass, a production restore has been rehearsed, data/financial reconciliation is signed, provider routes are uniquely controlled, and rollback can be executed inside the approved objective.
@@ -1113,11 +1207,15 @@ The programme is ready for GA only when all release gates pass, a production res
 | Meta/TikTok HMAC and body limits | Webhook gateway | Add timestamp/replay, durable inbox, per-connection secrets and async processing |
 | External-ID/fingerprint dedupe | Idempotency + identity-resolution modules | Separate replay prevention from possible-person matching |
 | Scoped runtime response logic | Central RBAC/ABAC and tenant query layer | Provision named staff; test every API/file/export/cache path |
+| Shared phone/contact fields across records | Organisation party master plus explicit BU relationships | Detect possible matches without revealing another BU; support business accounts, households and joint buyers |
+| Mixed statuses such as WS Sent/Bluetick/Production/Payment | `STATE-001`–`STATE-003` orthogonal state dimensions | Preserve raw legacy value; map by signed version; never let message state become commercial stage |
 | Lot board | Salam Land inventory module | Authoritative units, transactional holds/reservations and accessible board |
 | Payment schedule UI | Installment and ledger modules | Separate plans from actual immutable transactions/allocations/refunds |
 | Campaign spend and CPL views | Marketing semantic/reporting layer | Canonical date/attribution/reconciliation; prevent staff double attribution |
 | WhatsApp messages/opt-out | Conversation/consent/outbox platform | Verify signatures, isolate senders, durable state, policy enforcement |
 | Atomic JSON write and corruption quarantine | Database transactions, backups, migrations | Preserve safety intent; remove full-state file architecture |
+| Browser local-state fallback | `OFF-001` safe online-only initial GA | Remove cached CRM/secret state and show an explicit unavailable screen |
+| Synchronous/file-backed background work | `REL-001`–`REL-002` inbox, outbox, dispatcher and durable queue | Commit durable intent in PostgreSQL and replay after queue/worker loss |
 | Smoke test fixtures | Provider contract and regression suites | Keep useful cases; expand to concurrency/live-like/role/UI/security tests |
 | Production-package allowlist | CI signed release artifact | Add secret scan, SBOM, checksum, version and archive-content verification |
 

@@ -1,10 +1,10 @@
 # CRM Salam Fortress V2 — Production Product Requirements Document
 
-**Document version:** 1.7
+**Document version:** 1.8
 
-**Date:** 15 July 2026 (MYT)
+**Date:** 16 July 2026 (MYT)
 
-**Status:** Draft for business, legal, product, and engineering approval; every release/acceptance gate is **Not passed**
+**Status:** Product direction approved on 16 July 2026; business-rule, legal/privacy, security, operations, migration, UAT, and every release/acceptance gate remain **Not passed**
 
 **Product type:** Multi-business-unit CRM and revenue operations platform
 
@@ -14,7 +14,9 @@
 
 **Execution reference:** `CRM_EXECUTION_PLAN_V2_2026-07-15.md`
 
-**Revision 1.7:** preserves the 1.6 target and adds a repo-level bounded rejection for malformed Next router-prefetch contracts, its red/green production-runtime regression, and a clearer separation between implemented application guards and still-required edge rate limits/timeouts while retaining explicit non-release status.
+**Approved design reference:** `plans/2026-07-16-unified-crm-production-design.md`
+
+**Revision 1.8:** locks the approved product direction: one canonical production PostgreSQL, one shared modular API, two purpose-built UI applications, source-specific migration contracts for Salam CRM/Tasha/Niagawan/Barakah Sheet, an isolated production stack, the concise visual/copy system, and simultaneous go-live for all three business units. It does not promote the current foundation or mark any release gate passed.
 
 ---
 
@@ -36,7 +38,21 @@ The production outcome must be:
 - usable on mobile and desktop, including keyboard and assistive technology;
 - able to grow from the current three business units to future units without data leakage or architectural rewrite.
 
-### 1.1 Current implementation classification
+### 1.1 Approved operating design baseline — 16 July 2026
+
+The product owner approved the following direction:
+
+- one canonical production PostgreSQL is the sole operational system of record across Salam Land, Bumi Hayat Printing, and Barakah Emas;
+- one shared, versioned modular API owns authorization, validation, domain commands, audit, and integration behavior;
+- `crm.salamland.my` serves marketing, sales, management, shared CRM work, and all three business-unit verticals;
+- `tasha.salamland.my` serves the focused Salam Land sales-administration workflow;
+- Salam CRM JSON and Tasha SQLite, Niagawan CSV, and the approved Barakah Sheet snapshot enter through controlled staging/import paths and do not become parallel write authorities after cutover;
+- the existing multipurpose Hostinger VPS may temporarily host separately isolated legacy and sanitised staging roles; production requires a dedicated isolated stack and legacy becomes read-only after cutover;
+- internal delivery and UAT may be phased, but both UIs and all three business units enter production in one coordinated go-live window.
+
+These are product-direction approvals, not legal, security, operations, finance, migration, UAT, or release approval. Exact field mappings, extraction checksums/cutoffs, business rules, RPO/RTO evidence, rollback thresholds, and named sign-offs remain mandatory evidence.
+
+### 1.2 Current implementation classification
 
 The present V2 branch is a **hardened production foundation**, not a production release. Local implementation now supplies meaningful database, Lead-command, identity-session, migration, CSP/runtime and demo-UI evidence, but it does not satisfy any gate. Hosted CI/promotion, a real managed IdP and MFA policy, production infrastructure, workers/queue dispatch, private object storage, telemetry, backup/PITR and restore rehearsal, capacity/soak proof, migration/UAT evidence, and named business, security, privacy, finance and operations approvals are still absent.
 
@@ -55,15 +71,16 @@ The existing application is evidence of intended workflow, not the final authori
 
 ## 3. Problem statement
 
-The organisation currently has useful CRM workflows but no single production-grade system of record. The existing solution combines browser state, one JSON runtime, shared logins, client-side rules, integrations, reports, uploads, and backups in one Node process.
+The organisation has useful but fragmented operational systems and no single production-grade system of record. Salam Land acquisition and sales are held in the legacy CRM JSON runtime, while sales administration is held in Tasha SQLite without a durable CRM Lead link. Bumi Hayat Printing uses Niagawan and can export CSV but has no approved API. Barakah Emas operates from a Google Sheet whose exact link/schema is still required. The current CRM also combines browser state, shared logins, client-side rules, integrations, reports, uploads, and backups in one Node process.
 
-This creates five business problems:
+This creates six business problems:
 
 1. **Trust:** concurrent edits and provider events can silently overwrite one another; dashboards cannot always prove their source or date basis.
 2. **Security and privacy:** customer and identity-document data, access credentials, and integration secrets are not protected to production standard.
 3. **Operational control:** lead ownership, tasks, lot reservations, printing jobs, gold-rate approvals, payments, refunds, and opt-outs lack durable state machines and approval trails.
 4. **Scale:** each client loads a broad state object and each write can replace the entire state, preventing safe horizontal growth.
 5. **Change safety:** deployment paths, ports, process names, data snapshots, and historical documents conflict; tests do not yet cover the full product.
+6. **Reconciliation:** customer identity, lifecycle, lot, order, finance, and source lineage do not yet reconcile deterministically across the four legacy inputs.
 
 ## 4. Product vision
 
@@ -81,6 +98,9 @@ This creates five business problems:
 8. **Privacy by default.** Collect the minimum data, limit access, retain only as long as approved, and record every sensitive-file view/export.
 9. **Accessible and mobile-first.** Sales users can complete core work on a small screen and without a mouse.
 10. **Operationally boring.** Releases, backups, restores, retries, alerts, and rollbacks are repeatable and evidenced.
+11. **One operational truth, two purpose-built surfaces.** Both UIs use the same identity, permissions, domain commands, API, and canonical records; neither owns a shadow database or copied business rules.
+12. **Legacy is an input, not an authority after cutover.** Every source is checksummed, staged, reconciled, archived read-only, and prevented from uncontrolled post-cutover writes.
+13. **Reference-locked, concise UI.** The approved palette, density, navigation language, and action-first copy are captured as dated acceptance criteria rather than inheriting silently from a changing website.
 
 ## 5. Goals, outcomes, and non-goals
 
@@ -96,7 +116,9 @@ This creates five business problems:
 | Reliable integrations | Meta, TikTok, LeadsBridge and WhatsApp events are verified, idempotent, retryable, observable, and isolated per business unit |
 | Reliable reporting | Dashboard, report and export agree for the same metric, period, timezone, currency, and scope |
 | Safe operations | Named identity, least privilege, private files, audit, retention, backup, restore, monitoring, and controlled deployment |
-| Scale without rewrite | Stateless web/API nodes and independent workers can scale while one transactional database remains authoritative |
+| Scale without rewrite | Both stateless UIs, shared API nodes, and independent workers scale while one transactional database remains authoritative across every business unit |
+| Controlled migration | Salam CRM/Tasha, Niagawan CSV, and Barakah Sheet imports reconcile by signed batch, mapping version, checksum, and quarantine outcome |
+| Coordinated launch | Both UIs and the three approved business-unit slices pass one go/no-go and simultaneous production cutover |
 
 ### 5.2 Success measures for first general-availability quarter
 
@@ -143,7 +165,9 @@ These are design assumptions to validate in discovery, not claims about current 
 | Attachment storage | 5 TB with lifecycle tiers |
 | Common list size | Cursor-paginated; never download whole tenant state |
 
-### 6.2 Service objectives proposed for approval
+Capacity evidence must measure each UI independently and their combined traffic against the same API, worker, PostgreSQL connection, cache, queue, and object-storage budgets. A passing test for only one UI is insufficient.
+
+### 6.2 Product-approved service targets pending operational acceptance
 
 | Objective | Proposed target |
 |---|---|
@@ -157,7 +181,7 @@ These are design assumptions to validate in discovery, not claims about current 
 | Recovery point objective | 15 minutes or better |
 | Recovery time objective | 4 hours or better |
 
-The architecture should be able to tighten RPO/RTO later without redesign. Operations and management must formally approve cost versus objective. Decision `D-18` locks the capacity, workload skew, client/network profile, SLO measurement method and error-budget contract used by `PERF-001` and `PERF-002`.
+Product has approved these as initial targets, not measured achievements. The architecture should be able to tighten RPO/RTO later without redesign. Operations and Management must formally approve topology/capacity/cost and demonstrate the objectives. Decision `D-18` locks the workload skew, client/network profile, SLO measurement method and error-budget contract used by `PERF-001` and `PERF-002`; D-13 retains infrastructure acceptance.
 
 ## 7. Users and access model
 
@@ -184,7 +208,7 @@ V2 uses RBAC plus contextual rules:
 - **RBAC:** stable singular-resource capability keys such as `lead.read`, `lead.assign`, `order.approve`, `payment.refund`, `integration.manage`, `user.manage`, `export.run`.
 - **Scope:** organisation, business unit, branch, team, own records, assigned queue, or explicitly shared record.
 - **Attributes:** amount thresholds, record state, document sensitivity, legal hold, working group, and maker-checker separation.
-- **Database guard:** every tenant-owned row carries `organization_id`. Business-unit-scoped aggregates such as Lead, Opportunity, Order, Lot, Conversation and Integration Connection also carry `business_unit_id`. Organisation-scoped party/identity rows are exposed to a business unit only through an authorised relationship and central policy. High-risk queries may additionally use PostgreSQL row-level security.
+- **Database guard:** every tenant-owned row carries `organization_id`. Business-unit-scoped aggregates such as Lead, Opportunity, Order, Lot, Conversation and Integration Connection also carry `business_unit_id`. Organisation-scoped party/identity rows are exposed to a business unit only through an authorised relationship and central policy. RLS is mandatory defence-in-depth for production tenant-owned tables, subject to D-19 approval of roles, transaction-local context, bypass/break-glass and policy-test design; application authorization remains mandatory and cannot rely on RLS alone.
 
 ### 7.3 Capability baseline
 
@@ -206,25 +230,39 @@ The final matrix must be signed by business owners. “Boss” or “management�
 
 ## 8. Information architecture and navigation
 
-V2 will use real, permission-protected routes and deep links:
+V2 has two independently deployable, permission-protected UI applications over the same API and canonical records.
 
-1. Home
+**`crm.salamland.my` — marketing, sales, and management workspace**
+
+1. Home and work queue
 2. Contacts
-3. Leads
-4. Pipeline
-5. Tasks & Follow-ups
-6. Orders
-7. Inventory / Lots or Production
-8. Finance
-9. Conversations
-10. Marketing
-11. Reports
-12. Team
-13. Integrations
-14. Administration
+3. Leads and Pipeline
+4. Tasks and Follow-ups
+5. Orders
+6. Salam Land, Bumi Printing, and Barakah Emas vertical workspaces
+7. Conversations
+8. Marketing and attribution
+9. Reports
+10. Team, Integrations, and Administration
+
+**`tasha.salamland.my` — Salam Land sales-administration workspace**
+
+1. Home and exception queue
+2. Clients/Contacts
+3. Projects, phases, and lots
+4. Holds and reservations
+5. Orders and agreements
+6. Installments, payments, credits, and refunds
+7. Documents and operational tasks
+8. Reconciliation and authorised reports
 
 Requirements:
 
+- both applications use the same named identity, Membership, Contact master, server capability policy, versioned API, audit model, and canonical PostgreSQL; neither UI owns separate business rules or direct database writes;
+- the business-unit switcher always exposes an explicit `Semua | Salam Land | Bumi Hayat | Barakah Emas` menu/combobox where the user is authorised; `Semua` is read-only across authorised rows, every row identifies its unit, and create/write requires an explicit business unit;
+- the selected scope is carried in an auth-safe URL/deep link and is revalidated by the server, never trusted from the client;
+- cross-UI deep links identify the intended surface and exact authorised record without leaking data in the URL;
+- Tasha presents Salam Land administration only; shared Contact or Finance records remain canonical and do not fork when opened from Tasha;
 - the menu only shows capabilities the server authorises, but hidden navigation is never the security boundary;
 - every record has an auth-safe URL and breadcrumb;
 - login returns the user to the originally authorised target;
@@ -306,6 +344,8 @@ erDiagram
 - Soft deletion is not a substitute for retention. Records have lifecycle state, retention policy, and legal-hold handling.
 - Integration credentials are references to encrypted secret storage, never general entity fields.
 - Raw provider events are immutable, access-restricted, encrypted, and retained under a separate policy.
+- Every migrated object retains `source_system`, stable `source_record_id` where available, immutable extraction batch/checksum, raw legacy state, mapping/transform version, destination ID, reconciliation outcome, and archive location through `ImportBatch`, `ImportRow`, `LegacyObjectLink`, and `ReconciliationResult` records.
+- An importer row is never silently dropped or guessed: it reaches imported, no-op/replayed, rejected, quarantined, or explicitly approved partial-batch outcome with operator evidence.
 
 ## 10. Global workflow states
 
@@ -389,7 +429,7 @@ Priority meanings: **P0** required before any production cutover and non-waivabl
 | IAM-009 | P1 | Emergency access | Time-limited, reasoned, approved, alerted, and reviewed break-glass access |
 | IAM-010 | P0 | Managed OIDC federation boundary | Authorization Code + PKCE validates exact issuer/audience/redirect, state and nonce; only a pre-provisioned active User with active Membership enters; unknown subjects, replay, assurance failure, provider/JWKS failure and key rotation fail closed with redacted audit/telemetry |
 | ADM-001 | P1 | Configure business units, branches, teams, products, stages, reasons, SLAs, working hours | Validated changes are versioned, previewable, and auditable; unsafe deletion is blocked |
-| ADM-002 | P1 | Feature flags and staged rollout | Flag has owner, environment, scope, expiry/review date, audit, and safe default |
+| ADM-002 | P1 | Feature flags and controlled exposure | Flag has owner, environment, scope, expiry/review date, audit, and safe default; flags may support testing/safety but cannot create a phased initial production authority switch by business unit |
 | ADM-003 | P1 | User access review | Quarterly export/review and attest/revoke workflow for privileged permissions |
 
 ### 11.2 Contacts and identity resolution
@@ -411,7 +451,7 @@ Priority meanings: **P0** required before any production cutover and non-waivabl
 
 | ID | Pri | Requirement | Acceptance summary |
 |---|---|---|---|
-| LEAD-001 | P0 | Create lead manually, by verified integration, or controlled import | Required fields and provenance are server-validated; create is idempotent; canonical provider/source lineage is retained; no Lead monetary value is accepted or returned |
+| LEAD-001 | P0 | Create lead manually, by verified integration, or controlled import | Required fields and provenance are server-validated; create is idempotent; source system/record, extraction batch, raw legacy status, mapping version and reconciliation outcome are retained; no Lead monetary value is accepted or returned |
 | LEAD-002 | P1 | Editable lead detail with notes, activities, tags, next action and files | Every update has actor/time/version and respects field permissions |
 | LEAD-003 | P0 | Controlled configurable stage transitions | A versioned active `pipeline_stage_transitions` edge defines allowed source/target, required capability and reason; missing, disabled, cross-pipeline or stale-version transitions are rejected on the server and successful transitions append history |
 | LEAD-004 | P1 | Qualify/disqualify/nurture/reopen workflows | Required reason and next action; service metrics use transition timestamps |
@@ -463,6 +503,7 @@ One database-enforced active allocation may exist per Lot across the Hold and Re
 | PRINT-006 | P1 | QC and rework | Checklist, failure reason, photos/files, rework count, cost and sign-off are retained |
 | PRINT-007 | P1 | Delivery/collection proof | Recipient, date/time, method, tracking/reference and evidence; order closes only when policy is met |
 | PRINT-008 | P2 | Controlled change order | Post-approval spec/quantity/date change creates a priced version and reapproval, not silent overwrite |
+| PRINT-009 | P0 | Versioned Niagawan CSV intake | Approved export/template, original file/hash/operator, row provenance, schema drift, encoding, amount, formula-injection, duplicate and partial-row outcomes are validated in dry run before an authorised batch can affect canonical records |
 
 ### 11.6 Barakah Emas workflow
 
@@ -476,6 +517,7 @@ One database-enforced active allocation may exist per Lot across the Hold and Re
 | GOLD-006 | P1 | Rate/price override maker-checker | Reason, previous/new value, threshold and approver recorded; requester cannot self-approve |
 | GOLD-007 | P1 | Receipt and reconciliation | Cash/bank/reference, inventory movement and transaction value reconcile before close |
 | GOLD-008 | P2 | Inventory movement | Stock acquisition, sale, adjustment and count use immutable movements and discrepancy approval |
+| GOLD-009 | P0 | Versioned Barakah Sheet intake and cutover | Exact document/tab/range/schema snapshot is immutable and checksummed; missing/renamed columns fail closed; approved rows are reconciled before canonical writes and uncontrolled bidirectional sync is prohibited |
 
 ### 11.7 Orders, installments, payments, credits, and refunds
 
@@ -534,10 +576,11 @@ One database-enforced active allocation may exist per Lot across the Hold and Re
 | INT-005 | P1 | Dead-letter and replay console | Authorised operator sees redacted error, repairs mapping and replays without duplicate business action |
 | INT-006 | P1 | Provider checkpoint/cursor | Polling fetches incrementally; restarts resume safely; no repeated full-history scans |
 | INT-007 | P1 | Timeouts, bounded exponential retry, jitter, circuit breaker and rate-limit handling | Provider outage does not exhaust web workers; stale/degraded state is visible |
-| INT-008 | P1 | Connection lifecycle | Test, enable, pause, rotate, expire, revoke, owner, environment and last-success/failure timestamps |
+| INT-008 | P1 | Connection lifecycle and truthful health | Screen shows provider, BU, environment, external account/page/form/phone IDs, owner, scopes, last verified, expiry/rotation due, webhook freshness and last failure; raw token is never revealed/copied; without a live check status is `Tidak diketahui`, not `Tersambung` |
 | INT-009 | P1 | Raw-event retention and redaction | Access is restricted; search/debug metadata is separated from sensitive payload |
-| INT-010 | P1 | Import framework | Dry run, schema map, row validation, duplicate plan, checksum, authorisation, resumability and result report |
+| INT-010 | P0 | Source-specific migration framework | Salam CRM/Tasha reconciliation, Niagawan CSV, and Barakah Sheet use immutable checksum/cutoff, versioned mapping, staging, dry run/diff, row validation, dedupe plan, quarantine, approval, resumability, idempotent replay, reconciliation report, and no post-cutover dual write |
 | INT-011 | P1 | Export framework | Scope/fields/reason/watermark/expiry/download audit; large exports asynchronous and encrypted |
+| INT-012 | P0 | Canonical authority switch | Final source delta and write freeze are signed; both UIs write only through the shared API after cutover; legacy jobs, webhooks and write credentials are disabled and the sources retained read-only under approved retention |
 
 Provider-specific minimums:
 
@@ -613,6 +656,28 @@ Automation cannot directly mutate financial ledger, refund approval, lot reserva
 
 ### 12.1 UX requirements
 
+The shared design system is a compact, light, data-dense operational interface inspired provisionally by the reachable `tasha.salamland.my` surface. The requested `tasya.salamdev.my` reference was unavailable because of a redirect loop. Tasha (the Salam administration source/product) and Tasya (the requested visual-reference hostname) are treated as different names and are not assumed to be aliases. Before UI acceptance, desktop/mobile reference captures, computed tokens, capture date, and SHA-256 must be stored as an immutable reference pack; a changing live URL is not acceptance evidence.
+
+| ID | Pri | Locked UI/metadata requirement | Acceptance summary |
+|---|---|---|---|
+| UX-001 | P1 | Versioned visual reference | Dated desktop/mobile captures, extracted tokens and SHA-256 are reviewed; unavailable `tasya.salamdev.my` is recorded and the live URL cannot silently redefine acceptance |
+| UX-002 | P1 | Exact semantic theme tokens | Canvas `#F8FAFC`, surface `#FFFFFF`, sidebar `#0B172A`, raised sidebar `#1E293B`, text `#1E293B`, muted `#64748B`, divider `#E2E8F0`, action `#2563EB`, hover `#1D4ED8`, Salam gold `#F59E0B`; components consume named semantic tokens rather than scattered hex values |
+| UX-003 | P1 | Colour-role discipline | Blue is action/selection; gold is logo/brand/attention and uses dark text where needed, never primary CTA/generic status; no violet/purple theme, decorative gradient, or emoji icon |
+| UX-004 | P1 | Compact operational layout | 4/8px spacing rhythm; 36–40px desktop controls and at least 44px for coarse pointers; 8–12px radii; shadow only for overlays/real elevation |
+| UX-005 | P1 | Card discipline | Cards are reserved for self-contained interactive units such as KPIs/dialogs/record tiles; no card-within-card or generic wrapper per section; desktop tabular work remains a table/surface with dividers |
+| UX-006 | P1 | Concise Malay copy | Page titles ≤3 words, navigation ≤2, action labels normally verb + object ≤3; no eyebrow, motivational copy, redundant subtitle, or decorative note |
+| UX-007 | P1 | Necessary-copy exceptions | Error states provide cause/next step in ≤2 sentences; empty state is one line with ≤1 CTA; financial, destructive, consent, privacy, and security confirmations retain target, consequence, and required reason |
+| UX-008 | P0 | Explicit business-unit switcher | `Semua`, `Salam Land`, `Bumi Hayat`, `Barakah Emas` appear in a real menu/combobox; `Semua` is authorised read-only; write requires an explicit server-validated unit; scope persists in URL/deep link |
+| UX-009 | P1 | Complete state vocabulary | Applicable regions implement loading, empty, filtered-empty, stale, syncing/queued, partial, success, failed, conflict, offline, forbidden, and unknown with text/icon, never colour alone |
+| UX-010 | P1 | Icon and type system | Lucide only with consistent size/stroke; icon-only controls have accessible names; self-hosted Inter 400/500/600/700 or approved system fallback; no runtime Google Fonts; money/count uses tabular numerals |
+| UX-011 | P1 | Visual acceptance evidence | Screenshot regression at 320, 390, 768, 1024, 1440 for login, dashboard, leads, pipeline, switcher, integrations, and production states; computed-token, axe, keyboard, screen-reader, zoom, and reflow evidence passes |
+| META-001 | P0 | Private-app metadata | Every response uses `noindex, nofollow, noarchive` and production `X-Robots-Tag`; title, metadata, URL, share preview, and telemetry contain no customer PII or commercial amount |
+| META-002 | P1 | Route metadata | `<html lang="ms">`, light color scheme, route-specific title using `{Modul} · Salam CRM` or the Tasha host equivalent; generic metadata description is not rendered as visible page copy |
+| PWA-001 | P1 | Host-specific manifests | Each host has its own `lang: ms`, normal `/` start URL/scope, standalone display, background `#F8FAFC`, theme `#0B172A`, favicon/apple icon and square 192/512/maskable assets |
+| PWA-002 | P0 | No sensitive offline cache | Service worker/app cache contains no CRM record, API response, PII, document or secret; outage displays the safe unavailable state required by `OFF-001` |
+
+Accessibility-derived tokens must supplement, not change, the approved palette: gold on white is not body text; the light divider is not the sole input/control boundary; sidebar foreground/muted values and a control-border token must pass the relevant WCAG 2.2 AA contrast requirement.
+
 - common list views support server pagination, filters, saved views, sorting, permission-aware search, bulk selection, and clear empty/error/loading/stale states;
 - form errors appear beside the relevant field, receive focus, and are also enforced by the server;
 - Malaysia phone numbers use mobile-friendly input and show canonical interpretation;
@@ -621,7 +686,7 @@ Automation cannot directly mutate financial ledger, refund approval, lot reserva
 - conflicts return a readable diff and refresh/merge option; last-writer-wins is prohibited for ordinary edits;
 - destructive, financial, security, consent, and inventory actions use purpose-built confirmation with consequences and required reason;
 - every asynchronous action shows queued/running/succeeded/failed/partially completed state;
-- integration “ready” state must come from a real checked health signal with timestamp, not static UI copy.
+- integration “ready” state must come from a real checked health signal with timestamp, not static UI copy; otherwise it reads `Tidak diketahui`;
 - Lead screens never request or display a monetary value; provider/source and stage labels come from canonical keys, while unknown but valid keys render a neutral, safe fallback instead of crashing or exposing untrusted markup;
 - Pipeline totals are derived from the authoritative Opportunity result set/aggregate, not hard-coded counters or Lead values; client-only card movement is demo behaviour and cannot represent a saved production transition;
 - Bahasa Melayu is the initial default UI language; user-facing copy, dates, numbers, currency, names, phone/address formats and generated documents use a localisation framework so English or future languages can be added without changing business logic.
@@ -629,7 +694,7 @@ Automation cannot directly mutate financial ledger, refund approval, lot reserva
 ### 12.2 Responsive requirements
 
 - no horizontal page overflow at 320, 375, 390, 768, 1024, 1280 and 1440 CSS pixels;
-- tables transform to task-appropriate cards or controlled horizontal regions without losing labels/actions;
+- tables transform only where necessary into compact labelled stacked rows or controlled horizontal regions without losing labels/actions; mobile adaptation must not create card excess;
 - touch targets meet WCAG 2.2 target-size requirements or documented exceptions;
 - mobile users can complete login → lead review → call/message → note/task → conversion/order;
 - installed app opens the normal responsive route, never a forced desktop preview/zoom mode;
@@ -640,7 +705,7 @@ Automation cannot directly mutate financial ledger, refund approval, lot reserva
 
 Target: **WCAG 2.2 AA**.
 
-- semantic headings, landmarks, labels, descriptions and table captions/scope;
+- semantic headings, landmarks, accessible names/descriptions and table captions/scope; removing decorative visible descriptions must never remove assistive labels or critical instructions;
 - skip link, visible `:focus-visible`, logical focus order and focus restoration after dialogs;
 - keyboard completion of every core workflow;
 - `aria-current`, live regions for save/job/error state, and accessible validation summary;
@@ -676,7 +741,8 @@ Target: **WCAG 2.2 AA**.
 
 ```mermaid
 flowchart TB
-    UI["Responsive Web/PWA"]
+    CRMUI["crm.salamland.my<br/>Marketing · Sales · Management · 3 BUs"]
+    TASHAUI["tasha.salamland.my<br/>Salam Land Sales Administration"]
     EDGE["DNS + CDN/WAF + TLS"]
     API["Stateless API nodes<br/>modular monolith"]
     DB[("PostgreSQL<br/>transactional system of record")]
@@ -691,8 +757,12 @@ flowchart TB
     OBS["Logs + metrics + traces + alerts"]
     BACKUP["Encrypted backups + PITR + restore environment"]
     BI["Read replica / analytical store<br/>when justified"]
+    SOURCES["Migration-only inputs<br/>Salam CRM JSON · Tasha SQLite<br/>Niagawan CSV · Barakah Sheet"]
+    STAGE["Immutable staging<br/>validate · diff · quarantine · approve"]
 
-    UI --> EDGE --> API
+    CRMUI --> EDGE
+    TASHAUI --> EDGE
+    EDGE --> API
     API <-->|"queries + atomic domain/inbox/outbox transaction"| DB
     API <--> REDIS
     API <--> OBJ
@@ -712,7 +782,12 @@ flowchart TB
     DB --> BACKUP
     OBJ --> BACKUP
     DB -.-> BI
+    SOURCES --> STAGE --> DB
 ```
+
+Both UIs consume the same versioned API/commands. Neither has direct database access, UI-specific domain-rule copies, or a shadow system of record.
+
+The production boundary is a dedicated isolated Hostinger stack. Legacy and staging may temporarily share the existing transition VPS only as isolated environments: staging uses synthetic/formally sanitised data, legacy becomes read-only after cutover, and neither shares production databases, buckets, OIDC clients, routes, secrets, service users, writable volumes, or backup credentials. D-13 still controls provider/region/account ownership, sizing, network zones, PostgreSQL placement/HA, connection budget, cost, and failure-domain acceptance.
 
 ### 13.2 Deployment units
 
@@ -722,6 +797,8 @@ flowchart TB
 - **Scheduler:** enqueues work only; singleton guaranteed by database/Redis lock.
 - **Migration job:** one controlled, versioned database migration process.
 - **Observability agent:** structured log/metric/trace export with redaction.
+
+The runtime artifact pins Node.js `22.22.0`/`<23` and an immutable base image, runs under non-root UID/GID with dropped capabilities and bounded resources, and is promoted unchanged from staging to production. The edge must prevent direct-origin bypass and document Tunnel/proxied-DNS choice, trusted proxies, origin authentication, route limits, 429 handling, and connect/read/send timeouts.
 
 ### 13.3 Module boundaries inside the monolith
 
@@ -830,7 +907,7 @@ The current 24-hour idempotency retention and single unversioned `AUTH_HASH_KEY`
 - rate limits by IP, account, tenant, endpoint and integration key, with trusted-proxy configuration;
 - parameterised database access, schema validation, SSRF controls, safe redirects and restricted outbound network destinations where practical;
 - secrets in managed vault/KMS with rotation, version, owner and access audit;
-- least-privilege service identities and separate production/staging credentials;
+- dedicated production isolation with least-privilege service identities and separate databases, buckets, OIDC clients, provider routes, queues, secrets, service users, writable volumes, observability and backup credentials from staging/demo/legacy;
 - dependency pinning, automated vulnerability/license scanning, SBOM and signed release artifacts;
 - SAST, secret scanning, dependency/container/IaC scanning, DAST and penetration test before GA;
 - no PII/secrets in URLs, logs, traces, analytics, notifications or error messages;
@@ -874,7 +951,7 @@ The official DPO guidance currently requires appointment where processing involv
 ### 16.1 Reliability controls
 
 - database transactions and optimistic concurrency;
-- multi-AZ/managed database capability where budget permits;
+- dedicated production is mandatory; exact managed/self-hosted PostgreSQL, multi-AZ/HA and failover topology require D-13 evidence and explicit single-failure-domain risk acceptance where applicable;
 - connection pooling and bounded timeouts;
 - durable queues with retry limits, jitter, poison-message isolation and DLQ;
 - transactional outbox and idempotent consumers;
@@ -887,10 +964,10 @@ The official DPO guidance currently requires appointment where processing involv
 
 ### 16.2 Backup and restore
 
-- PostgreSQL PITR plus encrypted daily retained backups;
+- PostgreSQL PITR plus encrypted daily retained backups outside the Hostinger production account and primary failure domain;
 - object-storage versioning/lifecycle or equivalent protected backup;
 - configuration, schema, secret references, audit, and required metadata included;
-- backups stored off the primary failure domain with least-privilege access;
+- backups stored off the primary failure domain with least-privilege access, separate key authority, object/version immutability or delete protection, and actionable WAL/archive-lag monitoring;
 - checksum and backup-job evidence; failure alerts are actionable;
 - monthly automated restore validation and quarterly business-level restore drill initially;
 - restore into isolated environment; no overwrite of production during proof;
@@ -899,6 +976,8 @@ The official DPO guidance currently requires appointment where processing involv
 - consent withdrawal, suppression, retention/anonymisation/deletion and legal-hold deltas after the restore point are replayed before reopening; a restore cannot republish erased or suppressed data into ordinary service;
 - restore report includes backup ID, time range, schema version, counts, checksums, referential checks, sampled business reconciliation, achieved RPO/RTO and approvals;
 - disaster declaration, communication, failover/failback and post-incident review are documented.
+
+The initial RPO of 15 minutes or better and RTO of 4 hours or better are product-approved targets. Operations/Management capacity, cost, topology and measured acceptance remain pending under D-13/D-18; the target alone is not restore evidence.
 
 ## 17. Observability and operations
 
@@ -971,7 +1050,18 @@ All dashboards display:
 
 ## 19. Migration and cutover plan
 
-### 19.1 Source-of-truth discovery
+### 19.1 Approved-source registration and verification
+
+Product direction has selected the sources; importer lock still requires their exact extract, mapping, cutoff, checksum, owner, reconciliation and archive evidence.
+
+| Business/domain | Registered pre-cutover source | Target authority | Required source evidence |
+|---|---|---|---|
+| Salam Land acquisition/sales | Legacy CRM JSON | Canonical Marketing/Sales | Final snapshot, schema, source IDs/times, owner/status/campaign mappings, file manifest, checksum/cutoff |
+| Salam Land administration | Tasha SQLite | Canonical Land/Orders/Finance/Legal/Files | Database copy/checksum, SQLite integrity/FK report, dependency map, client/CRM identity review, lot/finance reconciliation |
+| Bumi Hayat Printing | Niagawan CSV | Canonical CRM/Printing; Niagawan financial snapshots remain read-only authority temporarily | Approved export/template/version, sample and final files, encoding/formula/amount rules, batch checksum/cutoff, cadence/owner |
+| Barakah Emas | Approved Google Sheet snapshot | Canonical Gold/Orders/Inventory/Finance at cutover | Exact document/tab/range, owner, immutable snapshot, schema/version watermark, checksum/cutoff, formula/value rules |
+
+Read-only audit baseline on 16 July 2026 found 1,161 CRM records, 47 campaigns and 358 daily insights, all Salam Land in the inspected CRM source. Tasha contained 81 clients, 88 bookings, 432 lots, 201 payments, 12 refunds and related administration data; its SQLite integrity/FK checks passed. No Tasha client carried a CRM Lead ID. Aggregate phone matching yielded 10 candidates—8 unique and 2 ambiguous—so automatic joining is prohibited without the review rules. These figures are audit evidence, not a final signed migration cutoff.
 
 Before importing anything, inventory and sign off:
 
@@ -979,20 +1069,20 @@ Before importing anything, inventory and sign off:
 - current runtime, auth, uploads, environment and backup locations;
 - provider app/account/form/phone-number ownership;
 - record counts by kind, business unit, source month, status and owner;
-- conflicts between nine-record/demo, historical 1,028/1,033-record and any actual live state;
+- conflicts between demo/historical archives and the registered live extracts, including source-specific exceptions and missing lineage;
 - secrets requiring rotation and sensitive archives requiring quarantine.
 
 No archive is declared canonical solely because it is newest or largest.
 
 ### 19.2 Migration stages
 
-1. **Discover and freeze mappings:** field inventory, state mapping, identity rules, dates, amounts, file references, provider IDs and known anomalies.
+1. **Register and freeze extracts/mappings:** exact source, owner, period/cutoff, immutable checksum, field inventory, state mapping, identity rules, dates, amounts, file references, provider IDs and known anomalies.
 2. **Build repeatable importer:** immutable source checksum, dry run, schema validation, quarantine, deterministic IDs, no direct ad-hoc database editing.
 3. **Trial migration:** isolated environment; counts, sums, uniqueness, references, timeline and sampled record reconciliation.
 4. **Repair through versioned transformations:** each rule has rationale, affected IDs, before/after counts and reversible evidence. A signed status map preserves raw `legacy_status` while independently mapping lead stage, contact-attempt outcome, message delivery status, opportunity stage, order state, fulfilment state and payment state. Unmapped or ambiguous values are quarantined, never guessed.
 5. **Dual-read verification:** compare legacy/new views and canonical reports; no uncontrolled dual write.
 6. **Cutover rehearsal:** timed backup, write quiescence, final delta, smoke, rollback and communication.
-7. **Production cutover:** named change owner, explicit approval, immutable release, health gates, final reconciliation.
+7. **Production cutover:** one approved window switches production authority for both UIs and Salam Land, Bumi Hayat, and Barakah Emas together; named change owner, go/no-go, immutable release, health gates and final reconciliation apply to every UI × BU path.
 8. **Legacy archive:** read-only, encrypted, access-restricted, retention-approved; disable legacy credentials/webhooks/jobs.
 
 ### 19.3 Migration reconciliation gates
@@ -1007,6 +1097,8 @@ No archive is declared canonical solely because it is newest or largest.
 - webhook endpoints point once to the new environment;
 - legacy and new jobs cannot both ingest/send;
 - rollback backup restored successfully before the production window.
+- both UIs read the same sampled canonical records and every UI × BU smoke path shows the signed post-import state;
+- no business unit is production-live early and no legacy/canonical mixed writable authority remains after the switch.
 
 ## 20. Quality strategy
 
@@ -1015,11 +1107,12 @@ No archive is declared canonical solely because it is newest or largest.
 - **Unit:** validators, state transitions, money/rounding, phone parsing, dedupe, assignment, KPI formulas, consent policy.
 - **Database/integration:** constraints, transactions, row scope/RLS, optimistic concurrency, outbox, migrations, retention.
 - **Provider contracts:** signed Meta/TikTok/WhatsApp fixtures, malformed/oversize/replay/out-of-order/duplicate/rate-limit/error cases.
-- **API:** authentication, all permission combinations, idempotency, pagination, schema, error envelope, exports.
-- **E2E:** named role journeys for all three business units, payment/refund, lot race, printing change/QC, gold stale rate, opt-out.
+- **API:** both UIs consume the same contracts; authentication, all permission combinations, idempotency, pagination, schema, error envelope, exports and cross-UI record consistency pass.
+- **Import contracts:** source-specific CRM JSON/Tasha SQLite/Niagawan CSV/Barakah Sheet fixtures cover checksum replay, schema drift, ambiguous identity, quarantine, partial approval, final cutoff and post-cutover no-dual-write controls.
+- **E2E:** named role journeys for both UIs and all three business units, cross-UI consistency, payment/refund, lot race, printing change/QC, gold stale rate, opt-out.
 - **Accessibility:** axe plus manual keyboard/screen-reader/zoom/reflow checks.
-- **Visual/responsive:** agreed viewport/device matrix and regression snapshots.
-- **Performance/capacity:** representative full-envelope data of 2 million contacts/leads and 20 million activities/messages; 500 concurrent authenticated sessions; 20 webhook events/sec sustained plus 100/sec bursts; large import/export, queue-loss recovery and soak tests while measuring every declared latency/availability objective.
+- **Visual/responsive:** immutable reference/token assertions and regression snapshots for both UIs across the agreed viewport/device matrix.
+- **Performance/capacity:** each UI alone and combined against the shared API/PostgreSQL/worker/queue budget; representative full-envelope data of 2 million contacts/leads and 20 million activities/messages; 500 concurrent authenticated sessions; 20 webhook events/sec sustained plus 100/sec bursts; large import/export, queue-loss recovery and soak tests while measuring every declared latency/availability objective.
 - **Resilience:** provider timeout, worker death, duplicate delivery, database failover, cache loss, object-scan delay.
 - **Security/privacy:** SAST/DAST/dependency/secret/IaC, stored XSS, access control, file handling, export/retention and penetration test.
 - **Operations:** deployment rollback, database migration rollback strategy, backup restore, disaster exercise.
@@ -1039,6 +1132,10 @@ No archive is declared canonical solely because it is newest or largest.
 - malicious customer text/CSV formula/HTML/SVG/renamed executable;
 - zero-record tenant, high-volume tenant and user moved between teams;
 - late campaign spend and closed-period restatement.
+- CRM/Tasha same-phone unique, ambiguous, missing-phone and repeat-customer reconciliation;
+- identical/changed Niagawan checksum, unknown template, encoding drift, formula injection, partial/invalid amount row;
+- missing/renamed/deleted Barakah Sheet/tab/range and post-snapshot row change;
+- both UIs reading/updating one canonical record and simultaneous-cutover smoke/rollback-forward rehearsal.
 
 ### 20.3 Latest settled local evidence
 
@@ -1066,7 +1163,7 @@ Every gate is currently **Not passed**. That includes the Plan, A, B, Core-slice
 - public attachments blocked/migrated;
 - unsigned WhatsApp and replayable/query-secret webhook paths blocked;
 - browser fail-open/local PII mode disabled;
-- canonical live environment/data inventory signed.
+- registered Salam CRM/Tasha/Niagawan/Barakah sources, canonical target, exact owners, final extract method and live environment/data inventory verified and signed.
 
 ### 21.2 Gate B — production foundation
 
@@ -1075,14 +1172,16 @@ Every gate is currently **Not passed**. That includes the Plan, A, B, Core-slice
 - private object storage and scan workflow;
 - durable inbox/outbox/queue/DLQ;
 - CI, signed artifact, pinned runtime, staging, automated rollback;
-- encrypted off-site backup and successful isolated restore.
+- encrypted off-site backup and successful isolated restore;
+- dedicated production boundary proves separate database, storage, OIDC clients, routes, credentials, queues, service users, observability and backup access from legacy/staging/demo;
+- edge/origin isolation, non-root immutable Node.js `22.22.0` artifact, resource/health limits, database-role/RLS design and approved queue failure boundary are evidenced.
 
 ### 21.3 Gate C — business UAT
 
-- all P0/P1 journeys accepted by named business owners;
+- all P0/P1 journeys in both UIs accepted by named business owners for Salam Land, Bumi Hayat, and Barakah Emas;
 - Salam lot race, printing production, gold rate/transaction, finance reconciliation and opt-out tests pass;
 - dashboard/report/export reconcile using signed fixtures;
-- migration reconciliation and cutover rehearsal pass;
+- every registered source migration reconciles by signed checksum/cutoff/mapping and both-UI consistency; simultaneous cutover/rollback-forward rehearsal passes;
 - `PERF-001`, `PERF-002`, `REL-001` and `REL-002` evidence passes against the approved capacity envelope and failure matrix;
 - privacy/legal/security reviews close all launch blockers;
 - WCAG/mobile/browser matrix meets acceptance.
@@ -1091,8 +1190,9 @@ Every gate is currently **Not passed**. That includes the Plan, A, B, Core-slice
 
 - change approval, owner roster, rollback trigger and communication approved;
 - production secrets/config validated without printing values;
-- provider routing switched exactly once;
-- live smoke and telemetry green;
+- final delta/write freeze is signed and provider routing switches exactly once;
+- canonical production authority for both UIs and all three business units switches in the same approved window; no early BU go-live or mixed writable legacy authority;
+- live smoke and telemetry are green for every UI × business-unit path;
 - no P0 defect open or waived; only a narrowly scoped P1 defect may receive time-limited written risk acceptance naming accountable owner, expiry, compensating control and rollback trigger;
 - hypercare and incident channels staffed.
 
@@ -1108,9 +1208,11 @@ Estimates are planning ranges and must be refined after discovery and staffing.
 | 3. Orders/finance and vertical modules | 6–8 weeks | Ledger, refunds/reconciliation; Salam inventory; printing quote/job/QC; Barakah rate/transaction controls |
 | 4. Integration and conversations | 4–6 weeks | Durable Meta/TikTok/LeadsBridge/WhatsApp platform, consent, inbox, outbox, retries, DLQ, provider health |
 | 5. Reporting and management | 4–6 weeks | Metric dictionary, reconciled dashboards/reports, controlled exports, scheduled outputs |
-| 6. Hardening, migration and cutover | 3–4 weeks | Load/security/privacy/accessibility/DR tests, UAT, migration rehearsal, go-live and hypercare |
+| 6. Hardening, migration and simultaneous cutover | 3–4 weeks | Both-UI load/security/privacy/accessibility/DR tests, phased internal UAT, source reconciliation, timed rehearsal, one three-BU production authority switch and hypercare |
 
 Expected programme range: **24–36 weeks**, with overlap possible after the foundation. Cutting scope should reduce business modules, not remove P0 controls.
+
+Engineering slices, internal testing, training and UAT may be phased. Initial production adoption is not phased by business unit: Salam Land, Bumi Hayat and Barakah Emas switch within one approved window so no parallel writable authority is created.
 
 ### 22.1 Suggested delivery team
 
@@ -1138,28 +1240,28 @@ Expected programme range: **24–36 weeks**, with overlap possible after the fou
 
 | Risk | Probability / impact | Mitigation |
 |---|---|---|
-| Actual live source of truth is unclear | High / Critical | Inventory all instances and reconcile IDs/counts/sums before write cutover |
+| Approved source extraction is incomplete, drifts, or does not reconcile | High / Critical | Register exact Salam CRM/Tasha/Niagawan/Barakah extracts; checksum, stage, quarantine and sign IDs/counts/sums before write cutover |
 | Sensitive archives/credentials have circulated | High / Critical | Incident handling, rotation, quarantine, access review, secret scan and strict artifact generation |
-| Big-bang rewrite delays business value | Medium / High | Modular monolith, phased strangler migration, vertical slices and bounded parallel verification |
+| Simultaneous launch increases cutover coordination risk | Medium / Critical | Phased build/UAT, source-specific rehearsals, one timed go/no-go, full UI × BU smoke, rollback-forward and staffed hypercare; never use mixed writable authorities |
 | Legacy rules are undocumented or contradictory | High / High | Rule workshops, executable acceptance fixtures, signed decision ledger |
 | Financial history is inconsistent | Medium / Critical | Finance-led reconciliation, quarantine unresolved rows, never invent dates/amounts |
 | Provider permissions or API changes block integration | Medium / High | Sandbox/staging contract tests, provider owner, expiry alerts, queue and manual exception path |
-| Cross-business-unit data leakage | Medium / Critical | Tenant key on every row, central policy, RLS where useful, automated isolation tests |
-| Staff adoption is weak | Medium / High | Role-based work queues, mobile UX, pilot champions, training, staged rollout, feedback telemetry |
+| Cross-business-unit data leakage | Medium / Critical | Tenant key on every row, central policy, mandatory production RLS defence-in-depth subject to D-19 design, and automated isolation tests |
+| Staff adoption is weak | Medium / High | Role-based work queues, mobile UX, pilot champions, phased training/UAT, feedback telemetry and floor support during simultaneous launch |
 | Scope expansion across three businesses | High / High | P0/P1 scope control, configuration boundaries, separate vertical backlogs and change approval |
 | Reporting loses trust during migration | Medium / High | KPI dictionary, dual calculation, signed fixtures and visible freshness/restatement |
 | Queue/retry causes duplicate communications | Medium / High | Outbox, unique business keys, idempotent consumers and replay tests |
 | Backup exists but cannot restore | Medium / Critical | Automated restore validation and scheduled business-level drills |
 
-## 24. Decisions required before build lock
+## 24. Decision ledger and approvals required before build lock
 
-All decisions below remain unapproved. `Proposed` records a recommended direction, not permission to deploy. Approval requires a dated record naming approvers and evidence; until then the approval record is `None`.
+Product-direction decisions identified below were approved on 16 July 2026 by the Product Owner in this task. The approver's full name must be added to the formal record before build lock; the repository owner is not assumed to be that person. `Direction approved` is not permission to deploy and does not close exact extraction evidence, business-rule, legal/privacy, Security, Engineering, Operations or Management approval. `Open` and `Proposed` remain unapproved. No approval in this table passes an implementation or release gate.
 
 | ID | Status | Decision required | Current proposal/evidence | Owner | Needed by | Approval record |
 |---|---|---|---|---|---|---|
 | D-01 | Open | Confirm legal organisation/tenant structure and whether future external tenants are in scope | PRD Sections 7 and 9 describe one Organization with explicit BU relationships | Management/Product | End discovery | None |
 | D-02 | Open | Approve per-role capability matrix and maker-checker thresholds | PRD Section 7.3 is a baseline only | Business owners/Finance/Security | Foundation design | None |
-| D-03 | Open | Declare canonical live environment and source dataset | Current-state audit identifies conflicting snapshots | Operations/Data owner | Before migration build | None |
+| D-03 | Direction approved; extract evidence pending | Declare canonical production authority and registered source datasets | One production PostgreSQL/shared API is the sole target; Salam uses CRM JSON + Tasha SQLite, Bumi uses Niagawan CSV snapshots, Barakah uses the approved Sheet snapshot; exact files/link/tab/cutoff/checksum/mapping still require Data/Operations sign-off | Operations/Data owner/Product | Before migration build | Product Owner (this task), 16 Jul 2026; named record pending |
 | D-04 | Open | Approve Lead pipelines, configurable stage edges, lost reasons, SLA and assignment rules by BU | `pipeline_stage_transitions` is the proposed server-owned edge model | Sales owners/Product | Core CRM design | None |
 | D-05 | Open | Approve Contact versus repeat-Lead dedupe/merge policy | Organisation party master plus BU relationship boundary is proposed | Sales/Marketing/Privacy | Core CRM design | None |
 | D-06 | Open | Approve lot hold duration, extension, deposit, reservation and release policies | `LAND-001`–`LAND-009` define the proposed invariant boundary | Salam Land owner/Finance | Land design | None |
@@ -1169,7 +1271,7 @@ All decisions below remain unapproved. `Proposed` records a recommended directio
 | D-10 | Open | Approve attribution models and canonical KPI dictionary | Section 18 is an unsigned initial dictionary | Marketing/Sales/Finance | Reporting build | None |
 | D-11 | Open | Confirm WhatsApp senders, consent purposes, templates, service window and opt-in/out policy | Communication requirements are proposed; provider ownership is unverified | Marketing/Privacy | Integration build | None |
 | D-12 | Open | Approve data categories, retention, legal holds, DSR, breach and DPO assessment | Section 15.2 and `PRIV-001`–`PRIV-009` require legal validation | Privacy/legal/Management | Before staging data | None |
-| D-13 | Open | Approve hosting region/provider, supported PostgreSQL version, HA topology, RPO/RTO, availability, connection budget and cost envelope | ADR-001 is topology direction only; no hosting approval exists | Management/Operations | Architecture sign-off | None |
+| D-13 | Direction approved; topology evidence open | Approve isolated production requirement plus hosting region/account, PostgreSQL placement/version, network/HA/failover, RPO/RTO evidence, availability, connection budget, cost and failure-domain risk | Dedicated isolated Hostinger production is mandatory; product targets RPO ≤15m/RTO ≤4h; every remaining technical/cost/Operations/Management item is open | Management/Operations/Security | Architecture sign-off | Product Owner (this task), 16 Jul 2026 for isolation/targets only; named record pending |
 | D-14 | Proposed | Approve managed IdP provider/tenant/region, client and callback configuration, provisioning/bootstrap, MFA/recovery, assurance mapping, logout/session policy, subject migration, data residency and break glass | ADR-002 proposes managed OIDC; local code/tests are not provider approval | Security/Engineering/Management/Privacy | Foundation design | None |
 | D-15 | Open | Decide whether n8n remains governed middleware or is decommissioned | No authoritative middleware inventory exists | Engineering/Operations | Integration architecture | None |
 | D-16 | Open | Approve organisation-level party matching, BU visibility, controller/brand boundaries and consent/opt-out propagation | PRD Sections 7 and 9 propose explicit BU relationships | Privacy/legal/Business owners/Product | Before party schema lock | None |
@@ -1177,6 +1279,9 @@ All decisions below remain unapproved. `Proposed` records a recommended directio
 | D-18 | Open | Approve capacity envelope, workload/data skew, client/network profile and measurable SLO/error-budget contract | Section 6 values are design assumptions only | Product/Engineering/Operations/Finance | Before performance harness lock | None |
 | D-19 | Open | Approve database roles, RLS rollout, transaction-local tenant context and support/break-glass bypass controls | ADR-001 and `DATA_MODEL.md` describe an unimplemented defence-in-depth direction | Engineering/Security/Operations | Before staging authorization proof | None |
 | D-20 | Open | Approve queue/dispatcher technology, durability boundary, retry/DLQ/replay operations and ownership | PostgreSQL inbox/outbox is authoritative; Redis/queue implementation is undecided | Engineering/Operations/Security | Before integration foundation | None |
+| D-21 | Direction approved | Approve exactly two product surfaces and shared authority | `crm.salamland.my` serves marketing/sales/management/all BUs; `tasha.salamland.my` serves Salam Land administration; both use one identity/policy/API/PostgreSQL and no UI-specific domain rules/direct DB writes | Product/Business owners/Engineering | Before UI/API lock | Product Owner (this task), 16 Jul 2026; named record pending |
+| D-22 | Direction approved; immutable reference pack pending | Approve the shared UI reference, exact tokens, concise-copy contract, accessibility and metadata/PWA baseline | Section 12 is binding; `tasya.salamdev.my` redirect-loop caveat and provisional `tasha.salamland.my` reference must be replaced/supplemented by dated captures/token extract/checksum before visual acceptance | Product/Design/Accessibility | Before UI implementation acceptance | Product Owner (this task), 16 Jul 2026; named record pending |
+| D-23 | Direction approved; runbook evidence pending | Approve simultaneous initial production authority switch | Internal engineering/UAT/training may phase; both UIs and Salam/Bumi/Barakah switch production authority in one window with no early BU launch or mixed writable authorities | Product/Business owners/Operations | Before cutover-plan lock | Product Owner (this task), 16 Jul 2026; named record pending |
 
 ## 25. Definition of done
 
@@ -1190,13 +1295,16 @@ A feature is done only when:
 - loading, empty, stale, conflict, partial, failure and recovery states work;
 - mobile, keyboard, screen reader and relevant browser coverage pass;
 - migration/backward-compatibility impact is handled;
+- source-specific importer fixtures, checksum replay, mapping lineage, quarantine and reconciliation evidence pass where the feature consumes legacy data;
+- both UIs show the same canonical result for shared records and no direct database/UI-specific domain-rule path exists;
+- exact theme/copy/state/metadata/PWA acceptance and immutable visual reference evidence pass where UI is affected;
 - operations runbook, alerts and support path exist;
 - privacy/security review is completed for new data, file, export, provider or permission use;
 - documentation and OpenAPI/event schema are current;
 - no high/critical vulnerability or unresolved P0 defect remains; any P1 exception must satisfy the narrow, time-limited Gate D risk-acceptance rule;
 - Product and named business owner accept the behaviour using production-like synthetic fixtures.
 
-The programme is ready for GA only when all release gates pass, a production restore has been rehearsed, data/financial reconciliation is signed, provider routes are uniquely controlled, and rollback can be executed inside the approved objective.
+The programme is ready for GA only when all release gates pass, dedicated-production isolation is evidenced, a production restore has been rehearsed, every registered source and financial reconciliation is signed, both UIs/all three business units pass the simultaneous-cutover matrix, provider routes are uniquely controlled, and rollback-forward can be executed inside the approved objective.
 
 ## 26. Traceability from current system to V2
 
@@ -1218,11 +1326,25 @@ The programme is ready for GA only when all release gates pass, a production res
 | Synchronous/file-backed background work | `REL-001`–`REL-002` inbox, outbox, dispatcher and durable queue | Commit durable intent in PostgreSQL and replay after queue/worker loss |
 | Smoke test fixtures | Provider contract and regression suites | Keep useful cases; expand to concurrency/live-like/role/UI/security tests |
 | Production-package allowlist | CI signed release artifact | Add secret scan, SBOM, checksum, version and archive-content verification |
+| Live Salam CRM JSON | Marketing/Sales plus migration lineage | Preserve source IDs/raw statuses/campaign evidence; stage, map, dedupe/quarantine, reconcile and archive read-only |
+| Tasha SQLite sales administration | Land, Orders, Finance, Legal, Files plus `LegacyObjectLink` | Preserve dependency chain and audit; review CRM identity candidates; reconcile lots/bookings/payments/refunds before disabling writes |
+| Niagawan CSV | Printing/Finance import snapshots | Detect signed template, checksum original export, prevent formula/schema/encoding/amount hazards, diff/approve and retain Niagawan authority boundary until separately changed |
+| Barakah Emas Google Sheet | Gold, Orders, Inventory and Finance migration/transition import | Freeze exact document/tab/range/schema, checksum snapshot, fail closed on drift and prohibit uncontrolled bidirectional sync |
+| Existing `crm.salamland.my` UI | Marketing/sales/management application | Rebuild over the shared API/canonical database with explicit three-BU/`Semua` scope and locked concise design system |
+| Existing `tasha.salamland.my` workflow | Salam Land administration application | Preserve high-value admin journeys but replace SQLite/runtime business authority with shared API/canonical records |
+| Requested `tasya.salamdev.my` visual reference | Versioned UI reference pack | Record redirect-loop unavailability; bind acceptance to dated captures/token extraction/checksum, not a mutable URL |
 
 ---
 
 ## 27. Final product decision
 
-Build CRM Salam Fortress V2 as a governed production platform, using the existing application as a workflow reference and temporary migration source. Do not continue scaling the current JSON/full-browser-state design or treat additional UI polish as production readiness.
+Build CRM Salam Fortress V2 as one governed operational platform with:
 
-The first release should prioritise trust: identity, privacy, concurrency, canonical entities, financial integrity, durable integrations, recovery, and one metric truth. New automation and visual enhancements follow those foundations.
+- one canonical production PostgreSQL and one shared modular API/domain policy for all three business units;
+- two purpose-built UIs: `crm.salamland.my` for marketing/sales/management/all BUs and `tasha.salamland.my` for Salam Land sales administration;
+- controlled migration adapters for Salam CRM JSON, Tasha SQLite, Niagawan CSV, and the approved Barakah Sheet snapshot, followed by read-only/disabled legacy authorities;
+- dedicated isolated Hostinger production infrastructure, with exact topology and operational evidence governed by D-13/D-19/D-20;
+- the locked compact blue/navy/gold UI system, concise Malay copy, complete production states, WCAG 2.2 AA, and private-app metadata/PWA controls as GA requirements—not optional decoration;
+- phased engineering/UAT but one coordinated production authority switch for both UIs and Salam Land, Bumi Hayat, and Barakah Emas.
+
+Do not continue scaling the current JSON/full-browser-state or SQLite authority, create shadow databases/business rules per UI, guess ambiguous migration facts, or treat UI polish/local tests as production readiness. The first release prioritises identity, privacy, concurrency, canonical entities, source lineage, financial integrity, durable integrations, recovery, accessible operations, and one metric truth.

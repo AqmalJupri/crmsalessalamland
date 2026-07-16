@@ -1,18 +1,18 @@
 # CRM Salam Fortress V2 — Production Execution Plan
 
-**Document version:** 1.5
+**Document version:** 1.6 compatibility amendment
 
-**Date:** 15 July 2026 (MYT)
+**Date:** 16 July 2026 (MYT)
 
 **Status:** Draft for delivery, business, security, privacy, finance, and operations approval
 
 **Target branch:** `codex/production-foundation`
 
-**Product requirements:** `CRM_PRODUCTION_PRD_V2_2026-07-15.md`, version 1.7
+**Product requirements:** `CRM_PRODUCTION_PRD_V2_2026-07-15.md`, version 1.8
 
 **Current-state evidence:** `CRM_CURRENT_STATE_AUDIT_2026-07-15.md`
 
-**Revision 1.5:** records the bounded malformed-prefetch application guard and production-runtime regression, separates it from still-required edge rate limits/timeouts, and refreshes local verification evidence without changing any release gate.
+**Revision 1.6 compatibility amendment:** preserves all authoritative gate names/states and current evidence, but applies ADR-003/PRD 1.8: one canonical authority, two UIs, registered Salam CRM/Tasha/Niagawan/Barakah sources, dedicated isolated production, and one simultaneous initial three-business-unit authority switch. A detailed replacement implementation plan is written only after the approved specification is reviewed.
 
 ---
 
@@ -25,7 +25,7 @@ The plan does not declare a feature complete because UI exists or code compiles.
 Execution rules:
 
 1. P0 requirements are non-waivable for production cutover. Replacing a P0 requires a formally approved PRD revision with an equivalent or stronger control.
-2. No uncontrolled dual write is permitted between the JSON application and V2.
+2. No uncontrolled dual write is permitted between Salam CRM JSON, Tasha SQLite, Niagawan/Sheet inputs and V2.
 3. Production data, credentials, provider routes, or outbound messages are not changed by documentation approval alone.
 4. Database and event changes use expand/migrate/verify/contract sequencing; destructive change is never bundled into the first cutover step.
 5. Every phase leaves a deployable, supportable and reversible increment, not only partially connected code.
@@ -430,8 +430,8 @@ Every gate decision records date, artifact/build IDs, evidence links, approvers,
 4. Import final delta and run automated reconciliation.
 5. Obtain data/Finance/Operations sign-off.
 6. Switch each provider route exactly once and record provider confirmation.
-7. Enable V2 users in controlled cohorts.
-8. Run scoped auth, lead, lot, order/payment, message, file and report smoke tests.
+7. Switch canonical production authority for both UIs and Salam Land, Bumi Hayat, and Barakah Emas within the same approved window; no unit becomes production-live early.
+8. Enable the approved user population and run scoped auth plus every UI × BU lead, lot, printing, gold, order/payment, message, file and report smoke path.
 9. Start hypercare telemetry and decision timer.
 
 **T+1 to T+14 days**

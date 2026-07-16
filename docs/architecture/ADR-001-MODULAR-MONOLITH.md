@@ -1,8 +1,8 @@
 # ADR-001: Modular Monolith with Durable Asynchronous Workers
 
-- **Status:** Proposed production architecture direction; no approval record or production gate is attached
+- **Status:** Product direction approved 16 July 2026; Engineering, Security, Operations, Management, D-13/D-19/D-20 evidence, and every production gate remain pending/not passed
 - **Date:** 2026-07-15
-- **Proposed decision owners:** Product and Engineering
+- **Decision owners:** Product (direction approved in this task; named record pending) and Engineering (technical approval pending)
 - **Related:** `docs/CRM_PRODUCTION_PRD_V2_2026-07-15.md`, `docs/architecture/DATA_MODEL.md`, `db/migrations/0001_foundation.sql`
 
 ## Context
@@ -78,7 +78,7 @@ Examples of required atomic operations include:
 
 `organization_id` is the primary tenant boundary. Operational records also carry `business_unit_id`. Organisation-mastered parties such as Contacts and Accounts are visible to a business unit only through explicit relationship rows.
 
-Every command and query receives an authenticated actor context containing organization, permitted business-unit scopes, membership, capabilities, and correlation/request IDs. Authorization is enforced in domain services before mutation. Composite foreign keys prevent cross-tenant references. PostgreSQL row-level security is a defence-in-depth control to be enabled after the application and migration connection-role strategy is tested; it is not a replacement for application authorization.
+Every command and query receives an authenticated actor context containing organization, permitted business-unit scopes, membership, capabilities, and correlation/request IDs. Authorization is enforced in domain services before mutation. Composite foreign keys prevent cross-tenant references. PostgreSQL row-level security is mandatory defence-in-depth for production tenant-owned tables, subject to D-19 approval and evidence for application/migration/reporting/support/break-glass roles, transaction-local tenant context, pool reset, bypass controls and policy tests. It is not a replacement for application authorization and is not yet implemented in the foundation migration.
 
 No request may choose an arbitrary tenant merely by sending an ID. Tenant context comes from the authenticated session or narrow service credential and is checked against every target resource.
 

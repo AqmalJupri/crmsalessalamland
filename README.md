@@ -1,6 +1,6 @@
 # CRM Salam Fortress V2
 
-Development foundation for a production CRM spanning Salam Land, Bumi Hayat Printing, and Barakah Emas. This working tree is **not a production release**: the PRD and architecture decisions remain subject to named approval, and every Plan, foundation, functional-slice, UAT and cutover gate is **Not passed**.
+Development foundation for a production CRM spanning Salam Land, Bumi Hayat Printing, and Barakah Emas. Product direction was approved on 16 July 2026, but this working tree is **not a production release**: named business-rule, legal/privacy, security, engineering, operations, management and migration approvals remain pending, and every Plan, foundation, functional-slice, UAT and cutover gate is **Not passed**.
 
 ## Current implementation truth
 
@@ -55,4 +55,4 @@ These commands are necessary engineering checks, not release approval. They do n
 
 The workflow and pins are authored controls, not remotely executed promotion evidence. This repository is a **hardened production foundation**, not a production release.
 
-See `docs/CRM_PRODUCTION_PRD_V2_2026-07-15.md`, `docs/CRM_EXECUTION_PLAN_V2_2026-07-15.md`, and `docs/architecture/ADR-002-MANAGED-IDENTITY.md` for target scope, evidence requirements, and unresolved decisions.
+See `docs/plans/2026-07-16-unified-crm-production-design.md`, `docs/CRM_PRODUCTION_PRD_V2_2026-07-15.md`, `docs/CRM_EXECUTION_PLAN_V2_2026-07-15.md`, and `docs/architecture/ADR-003-UNIFIED-PRODUCTION-BOUNDARY.md` for the approved direction, evidence requirements, and unresolved release decisions.

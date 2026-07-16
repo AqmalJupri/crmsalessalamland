@@ -1,6 +1,6 @@
 # ADR-002 — Managed OpenID Connect Identity
 
-**Status:** Proposed; Security and Management approval required by PRD decision `D-14`
+**Status:** Product direction approved 16 July 2026; provider selection and Security, Engineering, Management, Operations and Privacy approval remain required by PRD decision `D-14`; every production gate is not passed
 
 **Date:** 15 July 2026
 

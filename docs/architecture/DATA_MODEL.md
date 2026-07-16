@@ -1,6 +1,6 @@
 # CRM Salam Fortress V2 — Canonical Data Model
 
-- **Status:** Draft canonical foundation; implementation and production gates remain incomplete
+- **Status:** Product model direction approved 16 July 2026; schema detail, D-19 RLS design, implementation, and every production gate remain pending/not passed
 - **Database:** PostgreSQL 16+ proposed compatibility floor; production version remains open under `D-13`
 - **Foundation migration:** `db/migrations/0001_foundation.sql`
 - **Local PostgreSQL evidence:** source has 46 `CREATE TABLE`, 66 explicit `CREATE [UNIQUE] INDEX`, 50 total trigger declarations (46 ordinary plus 4 constraint triggers), and 8 `crm_*` function declarations. A clean first apply and second no-op pass on PostgreSQL 16.14; the fresh catalog has 47 public base tables including `schema_migrations`, 182 catalog indexes, 50 non-internal trigger rows (64 `information_schema` event rows), 8 `crm_*` functions, and one migration-ledger row. The ledger/source/manifest checksum is `169f78b45d72a1119969defafee5c2ab6934bb21682ebc53e90850e7651ea0de`; 57 PostgreSQL/API integration tests pass across 5 files
@@ -20,7 +20,7 @@ The model is designed for:
 - durable webhook acceptance, idempotent commands, and transactional outbox delivery;
 - optimistic concurrency for mutable aggregates;
 - append-only histories for consequential evidence; and
-- later PostgreSQL row-level security without changing entity ownership.
+- mandatory production PostgreSQL row-level security after D-19 approval/evidence, without changing entity ownership.
 
 ## 2. Conventions
 
@@ -308,20 +308,21 @@ The foundation migration provides:
 
 Search indexes over names, phone/email suffixes, or full text are intentionally deferred until normalization, sensitivity, access, and query plans are approved. Broad GIN indexing of personal-data JSON is prohibited by default.
 
-## 10. RLS readiness
+## 10. Mandatory production RLS readiness
 
-The migration does not enable incomplete generic RLS policies. Before RLS is enabled, ADR approval must define:
+RLS is mandatory defence-in-depth on production tenant-owned tables, but the foundation migration correctly avoids enabling incomplete generic policies. Before RLS is enabled, PRD D-19/ADR approval and evidence must define:
 
-- application, migration, worker, reporting, support, and break-glass database roles;
+- application/API, dispatcher, migration, worker, scheduler, reporting, backup, monitoring, support, and break-glass database roles;
 - transaction-local tenant context propagation;
 - organization-wide versus business-unit membership semantics;
 - explicit party relationship visibility;
 - service-worker/integration scopes;
 - background maintenance and retention bypass controls;
 - connection-pool reset guarantees; and
-- policy tests for read, insert, update, delete, joins, exports, and prepared statements.
+- `FORCE ROW LEVEL SECURITY` applicability, migration/maintenance bypass ownership, and deny-on-missing-context behavior;
+- policy tests for read, insert, update, delete, joins, exports, prepared statements, pooled-connection reuse, and role changes.
 
-All tenant tables already contain the required ownership columns and indexes, so policies can be added without remodeling entities. Until then, every repository query requires explicit organization/business-unit predicates and policy tests at the service layer.
+All tenant tables already contain the required ownership columns and indexes, so policies can be added without remodeling entities. Until D-19 passes, every repository query still requires explicit organization/business-unit predicates and policy tests at the service layer, and the foundation must not be promoted as production-ready.
 
 ## 11. Transaction recipes
 

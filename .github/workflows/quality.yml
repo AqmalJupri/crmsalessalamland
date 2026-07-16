@@ -80,16 +80,17 @@ jobs:
       - name: Smoke production runtime and security headers
         env:
           CRM_DEMO_MODE: "false"
+          PORT: "3100"
         run: |
-          pnpm start >"$RUNNER_TEMP/crm-production.log" 2>&1 &
+          setsid pnpm start >"$RUNNER_TEMP/crm-production.log" 2>&1 &
           server_pid=$!
           cleanup() {
-            kill "$server_pid" 2>/dev/null || true
+            kill -TERM -- "-$server_pid" 2>/dev/null || true
             wait "$server_pid" 2>/dev/null || true
           }
           trap cleanup EXIT
           for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:3000/api/health/live >/dev/null; then
+            if curl --fail --silent http://127.0.0.1:3100/api/health/live >/dev/null; then
               break
             fi
             if ! kill -0 "$server_pid" 2>/dev/null; then
@@ -98,7 +99,7 @@ jobs:
             fi
             sleep 1
           done
-          PRODUCTION_SMOKE_URL=http://127.0.0.1:3000 pnpm test:runtime || {
+          PRODUCTION_SMOKE_URL=http://127.0.0.1:3100 pnpm test:runtime || {
             cat "$RUNNER_TEMP/crm-production.log"
             exit 1
           }

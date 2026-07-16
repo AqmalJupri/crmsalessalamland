@@ -1,0 +1,56 @@
+{
+  "family": "Inter",
+  "verifiedOn": "2026-07-16",
+  "release": {
+    "tag": "v4.1",
+    "commit": "e3a3d4c57d5ecc01453a575621882a384c1995a3",
+    "url": "https://github.com/rsms/inter/releases/tag/v4.1",
+    "archive": {
+      "filename": "Inter-4.1.zip",
+      "url": "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip",
+      "sizeBytes": 33707794
+    }
+  },
+  "fonts": [
+    {
+      "weight": 400,
+      "targetFilename": "inter-400.woff2",
+      "upstreamFilename": "docs/font-files/Inter-Regular.woff2",
+      "url": "https://raw.githubusercontent.com/rsms/inter/e3a3d4c57d5ecc01453a575621882a384c1995a3/docs/font-files/Inter-Regular.woff2",
+      "sizeBytes": 111268,
+      "sha256": "e06f6b1bc553aaea4e4668023ed0ab0a147129c3107f511bc7d03d361b0ae085"
+    },
+    {
+      "weight": 500,
+      "targetFilename": "inter-500.woff2",
+      "upstreamFilename": "docs/font-files/Inter-Medium.woff2",
+      "url": "https://raw.githubusercontent.com/rsms/inter/e3a3d4c57d5ecc01453a575621882a384c1995a3/docs/font-files/Inter-Medium.woff2",
+      "sizeBytes": 114348,
+      "sha256": "0ff3e94614e1493eb556314fd247ae6c4a85a7783b4cc86be539940cf83f2a48"
+    },
+    {
+      "weight": 600,
+      "targetFilename": "inter-600.woff2",
+      "upstreamFilename": "docs/font-files/Inter-SemiBold.woff2",
+      "url": "https://raw.githubusercontent.com/rsms/inter/e3a3d4c57d5ecc01453a575621882a384c1995a3/docs/font-files/Inter-SemiBold.woff2",
+      "sizeBytes": 114812,
+      "sha256": "5cb7103e4e605989afebc03d989c79201e54b21b5183db33981f70db9178a301"
+    },
+    {
+      "weight": 700,
+      "targetFilename": "inter-700.woff2",
+      "upstreamFilename": "docs/font-files/Inter-Bold.woff2",
+      "url": "https://raw.githubusercontent.com/rsms/inter/e3a3d4c57d5ecc01453a575621882a384c1995a3/docs/font-files/Inter-Bold.woff2",
+      "sizeBytes": 114840,
+      "sha256": "fa888127b6da015b65569f0351f3b5c391ad928904951f1c20e9f8462a8d95ea"
+    }
+  ],
+  "license": {
+    "spdx": "OFL-1.1",
+    "targetFilename": "OFL.txt",
+    "upstreamFilename": "LICENSE.txt",
+    "url": "https://raw.githubusercontent.com/rsms/inter/e3a3d4c57d5ecc01453a575621882a384c1995a3/LICENSE.txt",
+    "sizeBytes": 4380,
+    "sha256": "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a"
+  }
+}

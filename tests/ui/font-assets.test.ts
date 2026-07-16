@@ -69,12 +69,12 @@ function productionSources(directory: string): ProductionSource[] {
   });
 }
 
-const remoteFontRequestPatterns = [
+const forbiddenFontRequestPatterns = [
   /fonts\.(?:googleapis|gstatic)\.com/i,
   /next\/font\/google/i,
   /@import\s+(?:url\()?\s*["']?(?:https?:)?\/\//i,
   /url\(\s*["']?(?:https?:)?\/\//i,
-  /new\s+FontFace\s*\([^,]+,\s*["'`]url\(\s*(?:https?:)?\/\//i,
+  /\bnew\s+FontFace\s*\(/i,
   /WebFont\.load\s*\(/i,
   /<link\b(?=[^>]*\brel=["']stylesheet["'])(?=[^>]*\bhref=["'](?:https?:)?\/\/)[^>]*>/i,
   /<link\b(?=[^>]*\bas=["']font["'])(?=[^>]*\bhref=["'](?:https?:)?\/\/)[^>]*>/i,
@@ -145,23 +145,25 @@ describe("Self-hosted Inter assets", () => {
     );
 
     for (const file of sources) {
-      for (const pattern of remoteFontRequestPatterns) {
-        expect(file.source, `${file.path} must not request a remote font`).not.toMatch(pattern);
+      for (const pattern of forbiddenFontRequestPatterns) {
+        expect(file.source, `${file.path} must not load a font at runtime`).not.toMatch(pattern);
       }
     }
 
-    for (const remoteFontSource of [
+    for (const forbiddenFontSource of [
       '@import url("https://fonts.example.test/inter.css");',
       '@font-face { src: url("https://fonts.example.test/inter.woff2"); }',
       'import { Inter } from "next/font/google";',
       'new FontFace("Inter", "url(https://fonts.example.test/inter.woff2)")',
+      'new FontFace("Inter", "url(/fonts/inter-400.woff2)")',
+      'const localSource = "url(/fonts/inter-400.woff2)"; new FontFace("Inter", localSource);',
       'WebFont.load({ google: { families: ["Inter"] } });',
       '<link rel="stylesheet" href="https://fonts.example.test/inter.css" />',
       '<link rel="preload" as="font" href="//fonts.example.test/inter.woff2" />',
     ]) {
       expect(
-        remoteFontRequestPatterns.some((pattern) => pattern.test(remoteFontSource)),
-        remoteFontSource,
+        forbiddenFontRequestPatterns.some((pattern) => pattern.test(forbiddenFontSource)),
+        forbiddenFontSource,
       ).toBe(true);
     }
   });

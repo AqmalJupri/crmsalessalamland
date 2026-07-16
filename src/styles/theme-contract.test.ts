@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const stylesRoot = fileURLToPath(new URL("./", import.meta.url));
@@ -20,8 +21,8 @@ const approvedBrowserMetadataColors = {
 } as const;
 
 const approvedBrowserMetadataFiles = {
-  themeColor: ["src/app/layout.tsx", "src/app/manifest.ts"],
-  theme_color: ["src/app/layout.tsx", "src/app/manifest.ts"],
+  themeColor: ["src/app/layout.tsx"],
+  theme_color: ["src/app/manifest.ts"],
   background_color: ["src/app/manifest.ts"],
 } as const;
 
@@ -137,12 +138,96 @@ function bracedRange(source: string, marker: string) {
   throw new Error(`${marker} must close its block`);
 }
 
+function unwrapExpression(expression: ts.Expression): ts.Expression {
+  if (
+    ts.isParenthesizedExpression(expression) ||
+    ts.isAsExpression(expression) ||
+    ts.isTypeAssertionExpression(expression) ||
+    ts.isSatisfiesExpression(expression)
+  ) {
+    return unwrapExpression(expression.expression);
+  }
+  return expression;
+}
+
+function propertyNameText(name: ts.PropertyName | undefined) {
+  if (name && (ts.isIdentifier(name) || ts.isStringLiteral(name))) return name.text;
+  return undefined;
+}
+
+function manifestMetadataPropertyRanges(file: ProductionSource) {
+  const sourceFile = ts.createSourceFile(
+    file.path,
+    file.source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const manifestFunction = sourceFile.statements.find(
+    (statement): statement is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(statement) &&
+      statement.name?.text === "manifest" &&
+      (statement.modifiers?.some(({ kind }) => kind === ts.SyntaxKind.ExportKeyword) ?? false) &&
+      (statement.modifiers?.some(({ kind }) => kind === ts.SyntaxKind.DefaultKeyword) ?? false),
+  );
+
+  expect(manifestFunction, `${file.path} must default-export function manifest`).toBeDefined();
+  expect(manifestFunction?.body, `${file.path} manifest must have a function body`).toBeDefined();
+  const returnStatements = manifestFunction?.body?.statements.filter(ts.isReturnStatement) ?? [];
+  expect(returnStatements, `${file.path} manifest must directly return one object`).toHaveLength(1);
+  const returnedExpression = returnStatements[0]?.expression;
+  expect(returnedExpression, `${file.path} manifest must return a value`).toBeDefined();
+  const returnedObject = returnedExpression ? unwrapExpression(returnedExpression) : undefined;
+  expect(
+    returnedObject && ts.isObjectLiteralExpression(returnedObject),
+    `${file.path} manifest must directly return an object literal`,
+  ).toBe(true);
+  if (!returnedObject || !ts.isObjectLiteralExpression(returnedObject)) return [];
+
+  const ranges: Array<{
+    end: number;
+    field: "theme_color" | "background_color";
+    start: number;
+  }> = [];
+  const seen = new Set<string>();
+  for (const property of returnedObject.properties) {
+    const name = propertyNameText("name" in property ? property.name : undefined);
+    if (name !== "theme_color" && name !== "background_color") continue;
+
+    expect(
+      ts.isPropertyAssignment(property),
+      `${file.path} ${name} must be a direct property assignment`,
+    ).toBe(true);
+    if (!ts.isPropertyAssignment(property)) continue;
+    const initializer = unwrapExpression(property.initializer);
+    expect(
+      ts.isStringLiteralLike(initializer),
+      `${file.path} ${name} must use an exact string literal`,
+    ).toBe(true);
+    if (!ts.isStringLiteralLike(initializer)) continue;
+    expect(initializer.text, `${file.path} ${name} must equal its exact PRD token`).toBe(
+      approvedBrowserMetadataColors[name],
+    );
+    expect(seen.has(name), `${file.path} must not duplicate ${name}`).toBe(false);
+    seen.add(name);
+    ranges.push({
+      end: property.getEnd(),
+      field: name,
+      start: property.getStart(sourceFile),
+    });
+  }
+
+  return ranges;
+}
+
 function withoutApprovedBrowserMetadataColors(file: ProductionSource) {
   const declarations = [...file.source.matchAll(browserMetadataDeclaration)];
   const viewportRange =
     file.path === "src/app/layout.tsx"
       ? bracedRange(file.source, "export const viewport")
       : undefined;
+  const manifestProperties =
+    file.path === "src/app/manifest.ts" ? manifestMetadataPropertyRanges(file) : [];
 
   for (const declaration of declarations) {
     const field = declaration[1] as keyof typeof approvedBrowserMetadataColors;
@@ -156,6 +241,18 @@ function withoutApprovedBrowserMetadataColors(file: ProductionSource) {
       expect(declaration.index, `${file.path}: ${field} must stay inside Viewport metadata`).toBeLessThan(
         viewportRange.end,
       );
+    }
+    if (file.path === "src/app/manifest.ts") {
+      const property = manifestProperties.find(
+        ({ end, field: propertyField, start }) =>
+          propertyField === field &&
+          (declaration.index ?? -1) >= start &&
+          (declaration.index ?? -1) < end,
+      );
+      expect(
+        property,
+        `${file.path}: ${field} must be a direct property of manifest's returned object`,
+      ).toBeDefined();
     }
     expect(value, `${file.path}: ${field} must equal its exact PRD token`).toBe(
       approvedBrowserMetadataColors[field],
@@ -209,6 +306,19 @@ describe("CRM semantic theme contract", () => {
       /#[\da-f]{3,8}\b|rgba?\s*\(/i,
     );
 
+    const manifest = {
+      path: "src/app/manifest.ts",
+      source: `export default function manifest() {
+  return {
+    theme_color: "#0B172A",
+    background_color: "#F8FAFC",
+  };
+}`,
+    } satisfies ProductionSource;
+    expect(withoutApprovedBrowserMetadataColors(manifest)).not.toMatch(
+      /#[\da-f]{3,8}\b|rgba?\s*\(/i,
+    );
+
     for (const file of [
       {
         path: "src/components/rogue.tsx",
@@ -222,6 +332,29 @@ describe("CRM semantic theme contract", () => {
         path: "src/app/layout.tsx",
         source:
           'export const viewport = { background_color: "#F8FAFC" }; export default null;',
+      },
+      {
+        path: "src/app/manifest.ts",
+        source: `const rogue = { theme_color: "#0B172A" };
+export default function manifest() {
+  return { background_color: "#F8FAFC" };
+}`,
+      },
+      {
+        path: "src/app/manifest.ts",
+        source: `const note = 'theme_color: "#0B172A"';
+export default function manifest() {
+  return { background_color: "#F8FAFC" };
+}`,
+      },
+      {
+        path: "src/app/manifest.ts",
+        source: `export default function manifest() {
+  return {
+    appearance: { theme_color: "#0B172A" },
+    background_color: "#F8FAFC",
+  };
+}`,
       },
       {
         path: "src/app/manifest.ts",

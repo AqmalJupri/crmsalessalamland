@@ -1,9 +1,16 @@
 import { z } from "zod";
+import {
+  getProductSurfaceSpec,
+  type DeploymentEnvironment,
+  type ProductSurface,
+} from "@/config/product-surface";
 
 const truthy = new Set(["1", "true", "yes", "on"]);
 
 const runtimeSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  PRODUCT_SURFACE: z.enum(["crm", "tasha"]),
+  DEPLOYMENT_ENVIRONMENT: z.enum(["local", "ci", "staging", "production"]),
   DATABASE_URL: z.string().url(),
   APP_URL: z.string().url(),
   CRM_DEMO_MODE: z.string().optional(),
@@ -36,6 +43,14 @@ function assertCleanPublicUrl(url: URL, field: string, allowPath: boolean): void
   }
 }
 
+function hasExplicitPort(source: string): boolean {
+  const authority = source.match(/^[a-z][a-z\d+.-]*:\/\/([^/?#]+)/i)?.[1] ?? "";
+  const hostAndPort = authority.slice(authority.lastIndexOf("@") + 1);
+  return hostAndPort.startsWith("[")
+    ? /^\[[^\]]+\]:\d*$/.test(hostAndPort)
+    : /:\d*$/.test(hostAndPort);
+}
+
 function validateRuntimeConfiguration(data: ParsedRuntime, demoMode: boolean): void {
   const databaseUrl = new URL(data.DATABASE_URL);
   if (!new Set(["postgres:", "postgresql:"]).has(databaseUrl.protocol)) {
@@ -51,21 +66,40 @@ function validateRuntimeConfiguration(data: ParsedRuntime, demoMode: boolean): v
     invalidConfiguration("APP_URL must use HTTPS in production.");
   }
 
-  if (!demoMode) {
-    const issuer = new URL(data.OIDC_ISSUER!);
-    const redirect = new URL(data.OIDC_REDIRECT_URI!);
+  if (data.DEPLOYMENT_ENVIRONMENT === "production") {
+    if (data.NODE_ENV !== "production") {
+      invalidConfiguration("DEPLOYMENT_ENVIRONMENT=production requires NODE_ENV=production.");
+    }
+    const surface = getProductSurfaceSpec(data.PRODUCT_SURFACE);
+    const canonicalOrigin = `https://${surface.canonicalHost}`;
+    if (appUrl.origin !== canonicalOrigin || hasExplicitPort(data.APP_URL)) {
+      invalidConfiguration(
+        `APP_URL must use the canonical ${canonicalOrigin} origin without an explicit port for PRODUCT_SURFACE=${surface.key}.`,
+      );
+    }
+  }
+
+  if (data.NODE_ENV === "production" && data.DEPLOYMENT_ENVIRONMENT === "local") {
+    invalidConfiguration("NODE_ENV=production forbids DEPLOYMENT_ENVIRONMENT=local.");
+  }
+
+  if (data.OIDC_ISSUER) {
+    const issuer = new URL(data.OIDC_ISSUER);
     if (!new Set(["http:", "https:"]).has(issuer.protocol)) {
       invalidConfiguration("OIDC_ISSUER must use HTTP or HTTPS.");
     }
-    if (!new Set(["http:", "https:"]).has(redirect.protocol)) {
-      invalidConfiguration("OIDC_REDIRECT_URI must use HTTP or HTTPS.");
-    }
     assertCleanPublicUrl(issuer, "OIDC_ISSUER", true);
-    assertCleanPublicUrl(redirect, "OIDC_REDIRECT_URI", true);
-
     if (data.NODE_ENV === "production" && issuer.protocol !== "https:") {
       invalidConfiguration("OIDC_ISSUER must use HTTPS in production.");
     }
+  }
+
+  if (data.OIDC_REDIRECT_URI) {
+    const redirect = new URL(data.OIDC_REDIRECT_URI);
+    if (!new Set(["http:", "https:"]).has(redirect.protocol)) {
+      invalidConfiguration("OIDC_REDIRECT_URI must use HTTP or HTTPS.");
+    }
+    assertCleanPublicUrl(redirect, "OIDC_REDIRECT_URI", true);
     if (data.NODE_ENV === "production" && redirect.protocol !== "https:") {
       invalidConfiguration("OIDC_REDIRECT_URI must use HTTPS in production.");
     }
@@ -93,6 +127,8 @@ function validateRuntimeConfiguration(data: ParsedRuntime, demoMode: boolean): v
 
 export interface RuntimeConfig {
   nodeEnv: "development" | "test" | "production";
+  productSurface: ProductSurface;
+  deploymentEnvironment: DeploymentEnvironment;
   databaseUrl: string;
   appUrl: string;
   demoMode: boolean;
@@ -135,6 +171,8 @@ export function getRuntimeConfig(): RuntimeConfig {
 
   cached = {
     nodeEnv: parsed.data.NODE_ENV,
+    productSurface: parsed.data.PRODUCT_SURFACE,
+    deploymentEnvironment: parsed.data.DEPLOYMENT_ENVIRONMENT,
     databaseUrl: parsed.data.DATABASE_URL,
     appUrl: parsed.data.APP_URL,
     demoMode,

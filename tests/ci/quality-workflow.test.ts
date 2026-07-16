@@ -20,6 +20,19 @@ function workflowStep(name: string) {
   return qualityWorkflow.slice(start, next === -1 ? undefined : next);
 }
 
+function workflowJob(name: string) {
+  const marker = `  ${name}:\n`;
+  const start = qualityWorkflow.indexOf(marker);
+  expect(start, `workflow job ${name} must exist`).toBeGreaterThanOrEqual(0);
+
+  const remaining = qualityWorkflow.slice(start + marker.length);
+  const next = remaining.search(/^  [a-z][\w-]*:\s*$/m);
+  return qualityWorkflow.slice(
+    start,
+    next === -1 ? undefined : start + marker.length + next,
+  );
+}
+
 function requiredPort(source: string, pattern: RegExp, label: string) {
   const match = source.match(pattern);
   expect(match, `${label} must declare a port`).not.toBeNull();
@@ -50,5 +63,49 @@ describe("Quality workflow server lifecycle", () => {
 
     expect(smokeStep).toContain("setsid pnpm start");
     expect(smokeStep).toContain('kill -TERM -- "-$server_pid"');
+  });
+});
+
+describe("Quality workflow deployment artifacts", () => {
+  it("applies migrations once before the build matrix", () => {
+    const verifyJob = workflowJob("verify");
+    const buildJob = workflowJob("build");
+
+    expect(qualityWorkflow.match(/pnpm db:migrate/g) ?? []).toHaveLength(1);
+    expect(verifyJob).toMatch(/- name: Apply production migrations\s+run: pnpm db:migrate/);
+    expect(buildJob).toContain("needs: verify");
+  });
+
+  it("builds immutable CRM and Tasha artifacts from the same commit", () => {
+    const buildJob = workflowJob("build");
+
+    expect(buildJob.match(/- surface:/g) ?? []).toHaveLength(2);
+    expect(buildJob).toContain("- surface: crm");
+    expect(buildJob).toContain("- surface: tasha");
+    expect(buildJob).toContain('PRODUCT_SURFACE: ${{ matrix.surface }}');
+    expect(buildJob).toContain('DEPLOYMENT_ENVIRONMENT: "ci"');
+    expect(buildJob).toContain('APP_VERSION: ${{ github.sha }}');
+    expect(buildJob).toContain("run: pnpm build");
+    expect(buildJob).toContain("actions/upload-artifact@");
+    expect(buildJob).toContain('production-${{ matrix.surface }}-${{ github.sha }}');
+  });
+
+  it("keeps database ownership out of build jobs", () => {
+    const buildJob = workflowJob("build");
+
+    expect(buildJob).not.toMatch(
+      /DATABASE_URL|TEST_DATABASE_URL|\bservices:|postgres:|db:migrate|test:db/,
+    );
+  });
+
+  it("smokes the immutable CRM artifact without rebuilding it", () => {
+    const smokeJob = workflowJob("runtime-smoke");
+
+    expect(smokeJob).toContain("needs:");
+    expect(smokeJob).toContain("build");
+    expect(smokeJob).toContain("actions/download-artifact@");
+    expect(smokeJob).toContain('production-crm-${{ github.sha }}');
+    expect(smokeJob).not.toContain("pnpm build");
+    expect(smokeJob).not.toContain("pnpm db:migrate");
   });
 });

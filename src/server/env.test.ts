@@ -1,12 +1,50 @@
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getRuntimeConfig, resetRuntimeConfigForTests } from "./env";
 
 const originalEnvironment = { ...process.env };
 
+const canonicalHosts = {
+  crm: "crm.salamland.my",
+  tasha: "tasha.salamland.my",
+} as const;
+
+function readExampleEnvironment() {
+  return Object.fromEntries(
+    readFileSync(new URL("../../.env.example", import.meta.url), "utf8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"))
+      .map((line) => {
+        const separator = line.indexOf("=");
+        return [line.slice(0, separator), line.slice(separator + 1)];
+      }),
+  );
+}
+
+function useProductionEnvironment(surface: keyof typeof canonicalHosts = "crm") {
+  const origin = `https://${canonicalHosts[surface]}`;
+  process.env = {
+    ...process.env,
+    NODE_ENV: "production",
+    PRODUCT_SURFACE: surface,
+    DEPLOYMENT_ENVIRONMENT: "production",
+    CRM_DEMO_MODE: "false",
+    APP_URL: origin,
+    AUTH_HASH_KEY: "production-auth-hash-key-at-least-32-characters",
+    OIDC_ISSUER: "https://identity.example.test/tenant",
+    OIDC_CLIENT_ID: `${surface}-web`,
+    OIDC_CLIENT_SECRET: "production-client-secret-at-least-16",
+    OIDC_REDIRECT_URI: `${origin}/api/v1/auth/oidc/callback`,
+  };
+}
+
 beforeEach(() => {
   process.env = {
     ...originalEnvironment,
     NODE_ENV: "test",
+    PRODUCT_SURFACE: "crm",
+    DEPLOYMENT_ENVIRONMENT: "ci",
     DATABASE_URL: "postgresql://crm:crm@127.0.0.1:5432/crm_salam_test_env",
     APP_URL: "http://127.0.0.1:3000",
     CRM_DEMO_MODE: "true",
@@ -18,6 +56,119 @@ beforeEach(() => {
   delete process.env.OIDC_CLIENT_SECRET;
   delete process.env.OIDC_REDIRECT_URI;
   resetRuntimeConfigForTests();
+});
+
+describe("product deployment configuration", () => {
+  it.each(["crm", "tasha"] as const)("parses the %s product surface", (surface) => {
+    process.env.PRODUCT_SURFACE = surface;
+
+    expect(getRuntimeConfig()).toMatchObject({ productSurface: surface });
+  });
+
+  it.each(["local", "ci", "staging"] as const)(
+    "parses the %s deployment environment",
+    (deploymentEnvironment) => {
+      process.env.DEPLOYMENT_ENVIRONMENT = deploymentEnvironment;
+
+      expect(getRuntimeConfig()).toMatchObject({ deploymentEnvironment });
+    },
+  );
+
+  it("rejects an invalid product surface", () => {
+    process.env.PRODUCT_SURFACE = "backoffice";
+
+    expect(() => getRuntimeConfig()).toThrow(/PRODUCT_SURFACE/);
+  });
+
+  it("rejects an invalid deployment environment", () => {
+    process.env.DEPLOYMENT_ENVIRONMENT = "preview";
+
+    expect(() => getRuntimeConfig()).toThrow(/DEPLOYMENT_ENVIRONMENT/);
+  });
+
+  it.each(["PRODUCT_SURFACE", "DEPLOYMENT_ENVIRONMENT"] as const)(
+    "requires explicit %s in production",
+    (field) => {
+      useProductionEnvironment();
+      delete process.env[field];
+
+      expect(() => getRuntimeConfig()).toThrow(new RegExp(field));
+    },
+  );
+
+  it("requires NODE_ENV=production for a production deployment", () => {
+    process.env.DEPLOYMENT_ENVIRONMENT = "production";
+    process.env.APP_URL = "https://crm.salamland.my";
+
+    expect(() => getRuntimeConfig()).toThrow(/DEPLOYMENT_ENVIRONMENT.*NODE_ENV.*production/i);
+  });
+
+  it("forbids a local deployment when NODE_ENV=production", () => {
+    useProductionEnvironment();
+    process.env.DEPLOYMENT_ENVIRONMENT = "local";
+
+    expect(() => getRuntimeConfig()).toThrow(/NODE_ENV.*production.*DEPLOYMENT_ENVIRONMENT.*local/i);
+  });
+
+  it.each(["crm", "tasha"] as const)(
+    "accepts the exact canonical production origin for %s",
+    (surface) => {
+      useProductionEnvironment(surface);
+
+      expect(getRuntimeConfig()).toMatchObject({
+        nodeEnv: "production",
+        productSurface: surface,
+        deploymentEnvironment: "production",
+        appUrl: `https://${canonicalHosts[surface]}`,
+      });
+    },
+  );
+
+  it.each([
+    [
+      "another surface host",
+      "https://tasha.salamland.my",
+      "https://tasha.salamland.my/api/v1/auth/oidc/callback",
+    ],
+    [
+      "an explicit canonical port",
+      "https://crm.salamland.my:443",
+      "https://crm.salamland.my:443/api/v1/auth/oidc/callback",
+    ],
+    [
+      "an empty explicit canonical port",
+      "https://crm.salamland.my:",
+      "https://crm.salamland.my:/api/v1/auth/oidc/callback",
+    ],
+  ])("rejects %s for the CRM production origin", (_label, appUrl, redirectUri) => {
+    useProductionEnvironment("crm");
+    process.env.APP_URL = appUrl;
+    process.env.OIDC_REDIRECT_URI = redirectUri;
+
+    expect(() => getRuntimeConfig()).toThrow(/APP_URL.*canonical.*crm\.salamland\.my/i);
+  });
+
+  it("enforces redirect-origin coherence when optional OIDC settings are present", () => {
+    process.env.DEPLOYMENT_ENVIRONMENT = "local";
+    process.env.OIDC_REDIRECT_URI =
+      "http://other.example.test/api/v1/auth/oidc/callback";
+
+    expect(() => getRuntimeConfig()).toThrow(/OIDC_REDIRECT_URI.*origin/i);
+  });
+
+  it("keeps the local example environment internally coherent", () => {
+    process.env = {
+      ...process.env,
+      ...readExampleEnvironment(),
+      NODE_ENV: "development",
+    };
+
+    expect(getRuntimeConfig()).toMatchObject({
+      productSurface: "crm",
+      deploymentEnvironment: "local",
+      appUrl: "http://localhost:3000",
+    });
+  });
 });
 
 afterEach(() => {

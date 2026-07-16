@@ -46,15 +46,39 @@ function sha256(bytes: Buffer) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function productionSources(directory: string): string[] {
+type ProductionSource = {
+  path: string;
+  source: string;
+};
+
+function productionSources(directory: string): ProductionSource[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = join(directory, entry.name);
-    if (entry.isDirectory()) return productionSources(path);
-    if (entry.name.includes(".test.")) return [];
+    if (entry.isDirectory()) {
+      if (entry.name === "__tests__") return [];
+      return productionSources(path);
+    }
+    if (/\.(?:test|spec)\./.test(entry.name)) return [];
     if (![".css", ".ts", ".tsx"].includes(extname(entry.name))) return [];
-    return [readFileSync(path, "utf8")];
+    return [
+      {
+        path: path.slice(repositoryRoot.length),
+        source: readFileSync(path, "utf8"),
+      },
+    ];
   });
 }
+
+const remoteFontRequestPatterns = [
+  /fonts\.(?:googleapis|gstatic)\.com/i,
+  /next\/font\/google/i,
+  /@import\s+(?:url\()?\s*["']?(?:https?:)?\/\//i,
+  /url\(\s*["']?(?:https?:)?\/\//i,
+  /new\s+FontFace\s*\([^,]+,\s*["'`]url\(\s*(?:https?:)?\/\//i,
+  /WebFont\.load\s*\(/i,
+  /<link\b(?=[^>]*\brel=["']stylesheet["'])(?=[^>]*\bhref=["'](?:https?:)?\/\/)[^>]*>/i,
+  /<link\b(?=[^>]*\bas=["']font["'])(?=[^>]*\bhref=["'](?:https?:)?\/\/)[^>]*>/i,
+] as const;
 
 describe("Self-hosted Inter assets", () => {
   it("matches the four immutable official WOFF2 files", () => {
@@ -111,11 +135,34 @@ describe("Self-hosted Inter assets", () => {
   });
 
   it("uses local fonts without Google or runtime font requests", () => {
-    const source = productionSources(`${repositoryRoot}src`).join("\n");
+    const sources = productionSources(`${repositoryRoot}src`);
+    expect(sources.map(({ path }) => path)).toEqual(
+      expect.arrayContaining([
+        "src/app/layout.tsx",
+        "src/proxy.ts",
+        "src/styles/product.css",
+      ]),
+    );
 
-    expect(source).not.toMatch(/fonts\.(?:googleapis|gstatic)\.com/i);
-    expect(source).not.toMatch(/next\/font\/google/i);
-    expect(themeSource).not.toMatch(/@import\s+url/i);
-    expect(themeSource).not.toMatch(/url\(["']?https?:/i);
+    for (const file of sources) {
+      for (const pattern of remoteFontRequestPatterns) {
+        expect(file.source, `${file.path} must not request a remote font`).not.toMatch(pattern);
+      }
+    }
+
+    for (const remoteFontSource of [
+      '@import url("https://fonts.example.test/inter.css");',
+      '@font-face { src: url("https://fonts.example.test/inter.woff2"); }',
+      'import { Inter } from "next/font/google";',
+      'new FontFace("Inter", "url(https://fonts.example.test/inter.woff2)")',
+      'WebFont.load({ google: { families: ["Inter"] } });',
+      '<link rel="stylesheet" href="https://fonts.example.test/inter.css" />',
+      '<link rel="preload" as="font" href="//fonts.example.test/inter.woff2" />',
+    ]) {
+      expect(
+        remoteFontRequestPatterns.some((pattern) => pattern.test(remoteFontSource)),
+        remoteFontSource,
+      ).toBe(true);
+    }
   });
 });

@@ -91,6 +91,7 @@ a {
 
 .crm-task-row__marker[data-priority="high"] {
   background: var(--crm-brand-attention);
+  color: var(--crm-warning-text);
 }
 
 .crm-task-row__copy {
@@ -181,6 +182,9 @@ a {
 }
 
 .crm-record-link {
+  display: inline-flex;
+  min-height: var(--crm-control-sm);
+  align-items: center;
   border: 0;
   padding: 0;
   background: transparent;
@@ -402,8 +406,8 @@ a {
 }
 
 .crm-tab[aria-selected="true"] {
-  background: var(--crm-sidebar);
-  color: var(--crm-sidebar-text);
+  background: var(--crm-action);
+  color: var(--crm-on-action);
 }
 
 .crm-module-grid {
@@ -485,8 +489,8 @@ a {
   width: 2.25rem;
   height: 2.25rem;
   border-radius: var(--crm-radius-sm);
-  background: var(--crm-sidebar);
-  color: var(--crm-brand-attention);
+  background: var(--crm-brand-attention);
+  color: var(--crm-warning-text);
   font-weight: 700;
 }
 

@@ -27,9 +27,6 @@
   --crm-success-border: #86efac;
   --crm-danger-border: #fecaca;
   --crm-warning-border: #fde68a;
-  --crm-info: #1d4ed8;
-  --crm-info-surface: #eff6ff;
-  --crm-info-border: #bfdbfe;
   --crm-sidebar-border: rgba(203, 213, 225, 0.24);
   --crm-sidebar-hover: rgba(248, 250, 252, 0.1);
   --crm-sidebar-subtle: rgba(248, 250, 252, 0.06);
@@ -466,9 +463,9 @@
 }
 
 .crm-badge--info {
-  border-color: var(--crm-info-border);
-  background: var(--crm-info-surface);
-  color: var(--crm-info);
+  border-color: var(--crm-divider);
+  background: var(--crm-surface-subtle);
+  color: var(--crm-text);
 }
 
 /* Cards */
@@ -684,8 +681,8 @@
   justify-content: center;
   border-radius: 8px;
   border: 1px solid var(--crm-sidebar-border);
-  background: var(--crm-sidebar-raised);
-  color: var(--crm-brand-attention);
+  background: var(--crm-brand-attention);
+  color: var(--crm-warning-text);
   font-size: var(--crm-text-sm);
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -864,8 +861,8 @@ button.crm-workspace-switcher {
 }
 
 .crm-sidebar__nav-link[aria-current="page"] {
-  background: var(--crm-sidebar-raised);
-  color: var(--crm-sidebar-text);
+  background: var(--crm-action);
+  color: var(--crm-on-action);
 }
 
 .crm-sidebar__nav-link[aria-disabled="true"] {
@@ -1498,6 +1495,7 @@ a.crm-pipeline-item:hover {
   .crm-input,
   .crm-select,
   .crm-field-control,
+  .crm-record-link,
   .crm-tab {
     min-height: 44px;
   }

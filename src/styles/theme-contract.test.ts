@@ -1,10 +1,34 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const stylesRoot = fileURLToPath(new URL("./", import.meta.url));
+const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const themeSource = readFileSync(`${stylesRoot}theme.css`, "utf8");
 const productSource = readFileSync(`${stylesRoot}product.css`, "utf8");
+
+type ProductionSource = {
+  path: string;
+  source: string;
+};
+
+const approvedBrowserMetadataColors = {
+  themeColor: "#0B172A",
+  theme_color: "#0B172A",
+  background_color: "#F8FAFC",
+} as const;
+
+const approvedBrowserMetadataFiles = {
+  themeColor: ["src/app/layout.tsx", "src/app/manifest.ts"],
+  theme_color: ["src/app/layout.tsx", "src/app/manifest.ts"],
+  background_color: ["src/app/manifest.ts"],
+} as const;
+
+const browserMetadataDeclaration = new RegExp(
+  `\\b(${Object.keys(approvedBrowserMetadataColors).join("|")})\\s*:\\s*["'](#[\\dA-Fa-f]{6})["']`,
+  "g",
+);
 
 const primaryRoles = {
   "--crm-canvas": "#f8fafc",
@@ -70,10 +94,77 @@ function atRule(source: string, header: string) {
   throw new Error(`${header} must close its block`);
 }
 
-function selectorsUsing(source: string, token: string) {
+function rulesUsing(source: string, token: string) {
   return [...source.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
     .filter((match) => match[2]?.includes(`var(${token})`))
-    .map((match) => (match[1] ?? "").trim());
+    .map((match) => ({
+      body: match[2] ?? "",
+      selector: (match[1] ?? "").trim(),
+    }));
+}
+
+function productionSources(directory: string): ProductionSource[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "__tests__") return [];
+      return productionSources(path);
+    }
+    if (/\.(?:test|spec)\./.test(entry.name)) return [];
+    if (![".css", ".ts", ".tsx"].includes(extname(entry.name))) return [];
+    return [
+      {
+        path: relative(repositoryRoot, path).replaceAll("\\", "/"),
+        source: readFileSync(path, "utf8"),
+      },
+    ];
+  });
+}
+
+function bracedRange(source: string, marker: string) {
+  const start = source.indexOf(marker);
+  expect(start, `${marker} must exist`).toBeGreaterThanOrEqual(0);
+  const openingBrace = source.indexOf("{", start);
+  expect(openingBrace, `${marker} must open a block`).toBeGreaterThan(start);
+
+  let depth = 0;
+  for (let index = openingBrace; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    if (source[index] === "}") depth -= 1;
+    if (depth === 0) return { start: openingBrace, end: index };
+  }
+
+  throw new Error(`${marker} must close its block`);
+}
+
+function withoutApprovedBrowserMetadataColors(file: ProductionSource) {
+  const declarations = [...file.source.matchAll(browserMetadataDeclaration)];
+  const viewportRange =
+    file.path === "src/app/layout.tsx"
+      ? bracedRange(file.source, "export const viewport")
+      : undefined;
+
+  for (const declaration of declarations) {
+    const field = declaration[1] as keyof typeof approvedBrowserMetadataColors;
+    const value = declaration[2] ?? "";
+    const allowedFiles: readonly string[] = approvedBrowserMetadataFiles[field];
+    expect(allowedFiles, `${file.path}: ${field} is metadata-only`).toContain(file.path);
+    if (viewportRange) {
+      expect(declaration.index, `${file.path}: ${field} must stay inside Viewport metadata`).toBeGreaterThan(
+        viewportRange.start,
+      );
+      expect(declaration.index, `${file.path}: ${field} must stay inside Viewport metadata`).toBeLessThan(
+        viewportRange.end,
+      );
+    }
+    expect(value, `${file.path}: ${field} must equal its exact PRD token`).toBe(
+      approvedBrowserMetadataColors[field],
+    );
+  }
+
+  return file.source.replace(browserMetadataDeclaration, (declaration, _field, value) =>
+    declaration.replace(value, "approved-browser-metadata-token"),
+  );
 }
 
 describe("CRM semantic theme contract", () => {
@@ -87,12 +178,58 @@ describe("CRM semantic theme contract", () => {
   });
 
   it("keeps all color literals in the root token authority", () => {
-    const implementationCss = `${themeSource.replace(root.full, "")}\n${productSource}`;
-
-    expect(implementationCss).not.toMatch(/#[\da-f]{3,8}\b|rgba?\s*\(/i);
-    expect(`${themeSource}\n${productSource}`).not.toMatch(
-      /--crm-(?:amber|green|field|ink|line)(?:\b|-)/,
+    const sources = productionSources(`${repositoryRoot}src`);
+    expect(sources.map(({ path }) => path)).toEqual(
+      expect.arrayContaining([
+        "src/app/layout.tsx",
+        "src/proxy.ts",
+        "src/styles/product.css",
+      ]),
     );
+
+    for (const file of sources) {
+      const sourceWithoutAuthority =
+        file.path === "src/styles/theme.css"
+          ? file.source.replace(root.full, "")
+          : withoutApprovedBrowserMetadataColors(file);
+
+      expect(sourceWithoutAuthority, file.path).not.toMatch(/#[\da-f]{3,8}\b|rgba?\s*\(/i);
+      expect(file.source, file.path).not.toMatch(
+        /--crm-(?:amber|green|field|ink|line)(?:\b|-)/,
+      );
+    }
+  });
+
+  it("keeps browser metadata color exceptions exact and out of style contexts", () => {
+    const layout = productionSources(`${repositoryRoot}src`).find(
+      ({ path }) => path === "src/app/layout.tsx",
+    );
+    expect(layout).toBeDefined();
+    expect(withoutApprovedBrowserMetadataColors(layout as ProductionSource)).not.toMatch(
+      /#[\da-f]{3,8}\b|rgba?\s*\(/i,
+    );
+
+    for (const file of [
+      {
+        path: "src/components/rogue.tsx",
+        source: 'const rogue = <div style={{ themeColor: "#0B172A" }} />;',
+      },
+      {
+        path: "src/styles/rogue.css",
+        source: '.rogue { themeColor: "#0B172A"; }',
+      },
+      {
+        path: "src/app/layout.tsx",
+        source:
+          'export const viewport = { background_color: "#F8FAFC" }; export default null;',
+      },
+      {
+        path: "src/app/manifest.ts",
+        source: 'export default { theme_color: "#0b172a" };',
+      },
+    ] satisfies ProductionSource[]) {
+      expect(() => withoutApprovedBrowserMetadataColors(file), file.path).toThrow();
+    }
   });
 
   it("uses action roles for primary controls and limits brand attention by purpose", () => {
@@ -103,16 +240,53 @@ describe("CRM semantic theme contract", () => {
     expect(primary).toMatch(/color:\s*var\(--crm-on-action\)/);
     expect(primaryHover).toMatch(/background:\s*var\(--crm-action-hover\)/);
 
-    const attentionSelectors = [
-      ...selectorsUsing(themeSource.replace(root.full, ""), "--crm-brand-attention"),
-      ...selectorsUsing(productSource, "--crm-brand-attention"),
+    const attentionRules = [
+      ...rulesUsing(themeSource.replace(root.full, ""), "--crm-brand-attention"),
+      ...rulesUsing(productSource, "--crm-brand-attention"),
     ];
-    expect(attentionSelectors.length).toBeGreaterThan(0);
-    for (const selector of attentionSelectors) {
+    expect(attentionRules.length).toBeGreaterThan(0);
+    for (const { body, selector } of attentionRules) {
       expect(selector, "brand attention is reserved for brand or warning affordances").toMatch(
         /brand|warning|priority|login-card__mark/,
       );
+      expect(body, `${selector} must use attention as its background`).toMatch(
+        /background:\s*var\(--crm-brand-attention\)/,
+      );
+      expect(body, `${selector} must pair attention with its dark foreground`).toMatch(
+        /color:\s*var\(--crm-warning-text\)/,
+      );
     }
+  });
+
+  it("binds action blue to selection and keeps informational badges neutral", () => {
+    const selectedTab = cssRule(productSource, '.crm-tab[aria-selected="true"]');
+    const currentNavigation = cssRule(
+      themeSource,
+      '.crm-sidebar__nav-link[aria-current="page"]',
+    );
+    const informationalBadge = cssRule(themeSource, ".crm-badge--info");
+
+    for (const rule of [selectedTab, currentNavigation]) {
+      expect(rule).toMatch(/background:\s*var\(--crm-action\)/);
+      expect(rule).toMatch(/color:\s*var\(--crm-on-action\)/);
+    }
+
+    expect(informationalBadge).toMatch(/border-color:\s*var\(--crm-divider\)/);
+    expect(informationalBadge).toMatch(/background:\s*var\(--crm-surface-subtle\)/);
+    expect(informationalBadge).toMatch(/color:\s*var\(--crm-text\)/);
+    expect(informationalBadge).not.toMatch(/--crm-(?:action|focus|info)(?:\b|-)/);
+    for (const token of ["--crm-info", "--crm-info-surface", "--crm-info-border"]) {
+      expect(tokens.has(token), `${token} must not create a second blue role`).toBe(false);
+    }
+  });
+
+  it("gives the record button a compact desktop height and a 44px coarse target", () => {
+    const recordLink = cssRule(productSource, ".crm-record-link");
+    const coarsePointer = atRule(themeSource, "@media (pointer: coarse)");
+
+    expect(recordLink).toMatch(/display:\s*inline-flex/);
+    expect(recordLink).toMatch(/min-height:\s*var\(--crm-control-sm\)/);
+    expect(coarsePointer).toContain(".crm-record-link");
   });
 
   it("uses compact controls, an accessible coarse-pointer target, and bounded radii", () => {

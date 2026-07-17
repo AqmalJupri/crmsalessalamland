@@ -4,14 +4,14 @@
 
 **Goal:** Build the source-neutral, checksum-idempotent migration control plane required to import Salam CRM JSON, Tasha SQLite, Niagawan CSV, and Barakah Sheet snapshots without guessing mappings, losing lineage, or permitting dual writable authority.
 
-**Architecture:** Add the forward-compatible `0002_migration_platform.sql` control-plane migration, the narrowly scoped `0003_reconciliation_bytewise_order.sql` locale-independence correction, and a separate Drizzle migration schema. The control plane registers source/domain authority scopes and immutable transform versions, records artifact checksums, stages protected row evidence, quarantines ambiguous/invalid rows, applies approved rows through canonical transactional writers, records source-to-target lineage, reconciles typed metrics, and permits one-way signed authority transitions. Source adapters remain separate sub-projects and consume these contracts.
+**Architecture:** Add the forward-compatible `0002_migration_platform.sql` control-plane migration, the narrowly scoped `0003_reconciliation_bytewise_order.sql` locale-independence correction, the `0004_membership_user_identity_guard.sql` immutable-provenance guard, the `0005_reconciliation_typed_result_truth.sql` database truth constraint, and a separate Drizzle migration schema. The control plane registers source/domain authority scopes and immutable transform versions, records artifact checksums, stages protected row evidence, quarantines ambiguous/invalid rows, applies approved rows through canonical transactional writers, records source-to-target lineage, reconciles typed metrics, and permits one-way signed authority transitions. Source adapters remain separate sub-projects and consume these contracts.
 
 **Tech Stack:** PostgreSQL 16.14, Drizzle ORM 0.45.2, TypeScript 6.0.3, Zod 4.4.3, Node.js streams/crypto, Vitest 4.1.10, and the existing checksum-locked migration runner.
 
 ## Global Constraints
 
 - Use only synthetic fixtures in this plan. Real JSON, SQLite, CSV, Sheet exports, customer identifiers, amounts, tokens, and source object paths stay outside Git.
-- `0002` is additive and checksum-frozen. Do not rename, drop, reinterpret, or edit a `0001`/`0002` column, constraint, or migration byte. Any correction is a separately reviewed forward migration.
+- Every applied migration is checksum-frozen. Do not rename, drop, reinterpret, or edit an earlier column, constraint, function contract, or migration byte. Any correction is a separately reviewed forward migration.
 - A source artifact is immutable and addressed by SHA-256 plus protected object reference. General JSON columns may contain redacted metadata only, never raw PII payloads.
 - Every registered source in PRD 1.8 is business-unit scoped. `business_unit_id` is non-null on every business-unit-owned control-plane row, so composite tenant foreign keys cannot be bypassed through PostgreSQL `MATCH SIMPLE` null behavior. The sole organisation-wide exception is the authority-transition group header, whose complete child set binds every affected business unit and domain.
 - The exact same source checksum plus transform version plus execution mode is a replay and returns the original batch. A live batch is a distinct, lineage-bound promotion of a completed dry run for the same source/transform; reprocessing with a different transform requires explicit repair lineage and reason.
@@ -824,6 +824,27 @@ export async function signReconciliationRun(
 - [ ] Independently review the function replacement against `0002` so no validation, immutability, sign-off, table, or trigger contract is weakened.
 - [ ] Commit: `fix(migration): make reconciliation ordering bytewise`
 
+## Task 9B: Make actor provenance and typed reconciliation truth immutable
+
+**Files:**
+
+- Create: `db/migrations/0004_membership_user_identity_guard.sql`
+- Create: `db/migrations/0005_reconciliation_typed_result_truth.sql`
+- Modify: `src/server/db/migration-manifest.ts`
+- Modify: `src/server/db/migration-manifest.test.ts`
+- Modify: `tests/integration/migration-platform-schema.test.ts`
+- Modify: `tests/integration/migration-source-registration.test.ts`
+- Modify: `tests/production/runtime-smoke.mjs`
+
+- [ ] Add a RED direct-SQL regression proving `memberships.user_id` cannot be reassigned. Membership IDs are permanent person-bound identities; transfers create a new membership instead of rewriting approval, apply, session, audit, or sign-off provenance.
+- [ ] Add `0004_membership_user_identity_guard.sql` as a narrow `BEFORE UPDATE OF user_id` trigger using SQLSTATE `23514`; retain status, validity-window, and role administration workflows.
+- [ ] Add RED direct-SQL regressions proving typed reconciliation truth is derived in both directions: unequal COUNT/amount/checksum values cannot claim `passed=true`, and equal values cannot claim `passed=false`.
+- [ ] Add `0005_reconciliation_typed_result_truth.sql` as a validated additive CHECK constraint over `COUNT`, `AMOUNT`, `FINANCE_BALANCE`, and `CHECKSUM`. Existing and future rows must pass before the migration ledger advances.
+- [ ] Register and checksum-lock both migrations, update runtime ledger evidence, and prove upgrade from the exact `0001`-`0003` prefix applies only `0004` and `0005` without changing earlier ledger timestamps.
+- [ ] Update the verifier-race test that previously reassigned `memberships.user_id`: the database must now reject that mutation itself, while capability/status/validity races remain service recheck coverage.
+- [ ] Independently review both forward migrations and rerun every migration/import/reconciliation integration suite.
+- [ ] Commit: `fix(migration): lock provenance and reconciliation truth`
+
 ## Task 10: Add safe non-production inspection commands and synthetic contracts
 
 **Files:**
@@ -865,7 +886,7 @@ export async function signReconciliationRun(
 - Modify only other files when evidence reveals a defect in a file owned by Tasks 1-10.
 
 - [ ] Parse and assert the database name first, then reset and create only the isolated local database `crm_salam_codex_migration_platform`. Set both `DATABASE_URL` and `TEST_DATABASE_URL` to `postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_migration_platform`; refuse any host other than loopback or database name that differs, and fail deployment preflight unless PostgreSQL reports `server_encoding = 'UTF8'`.
-- [ ] Run `pnpm db:migrate` twice and query `schema_migrations`; expect exactly the three reviewed filename/checksum rows with unchanged timestamps after the second run.
+- [ ] Run `pnpm db:migrate` twice and query `schema_migrations`; expect exactly the five reviewed filename/checksum rows with unchanged timestamps after the second run.
 - [ ] Run focused unit and integration suites:
 
 ```bash
@@ -910,7 +931,7 @@ node scripts/ci/run-next-runtime-smoke.mjs \
   --log /tmp/crm-migration-runtime.log
 ```
 
-Expected: runtime smoke passes and readiness returns `200` only while the database ledger exactly matches `0001`, `0002`, and `0003`.
+Expected: runtime smoke passes and readiness returns `200` only while the database ledger exactly matches `0001` through `0005`.
 - [ ] Extend `tests/ci/quality-workflow.test.ts` to require the UI-owned portable `run-next-runtime-smoke.mjs`, matching start/probe ports, explicit liveness/readiness success branches, and migration/runtime step ordering. Run `tests/ci/runtime-process.test.ts` on macOS locally and Linux CI; it must prove the Node detached process group and grandchild are terminated on success, startup failure, smoke failure, timeout, `SIGINT`, and `SIGTERM`. Expected: PASS and no failed smoke command can be masked by cleanup.
 - [ ] Scan the full diff and newly introduced Git objects for source data, PII, credentials, database URLs with secrets, and unsafe archives.
 - [ ] Request independent code review. Resolve every Critical or Important finding with a failing regression test before changing code.

@@ -15,6 +15,8 @@ vi.mock("next/navigation", () => ({
 
 import { ApplicationShell, type ShellViewer } from "./application-shell";
 
+const activeSessionReferenceTime = Date.parse("2026-07-17T11:00:00.000Z");
+
 const businessUnitAccess: ShellViewer["businessUnitAccess"] = [
   {
     id: "00000000-0000-4000-8000-000000000101",
@@ -76,6 +78,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -180,6 +183,7 @@ describe("ApplicationShell", () => {
   });
 
   it("renders one page title and exposes the actual viewer session from the user menu", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(activeSessionReferenceTime);
     const user = userEvent.setup();
     render(createElement(ApplicationShell, props()));
 

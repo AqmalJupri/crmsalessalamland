@@ -1,6 +1,9 @@
+import type { Metadata } from "next";
 import { SurfaceHome } from "@/components/crm/surface-home";
 import { requireScopedPageViewer } from "@/server/auth/page-access";
 import { getRuntimeConfig } from "@/server/env";
+
+export const metadata: Metadata = { title: "Utama" };
 
 export default async function DashboardPage({
   searchParams,

@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UserMenu } from "./user-menu";
 
+const activeSessionReferenceTime = Date.parse("2026-07-17T11:00:00.000Z");
+
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
 });
@@ -14,11 +16,13 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("UserMenu", () => {
   it("shows the real display name and actual session expiry", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(activeSessionReferenceTime);
     const user = userEvent.setup();
     render(createElement(UserMenu, {
       displayName: "Aqmal Jupri",

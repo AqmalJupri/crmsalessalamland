@@ -1,8 +1,11 @@
+import type { Metadata } from "next";
 import { OperationState } from "@/components/ui";
 import { createDemoModuleMetrics, OperationalModule, parseModuleMetricQuery, type DemoModuleMetric } from "@/components/crm/operational-module";
 import { demoBusinessUnits } from "@/lib/demo-crm";
 import { CRM_MODULE_ACCESS } from "@/server/auth/module-access";
 import { canRenderDemoFixtures, requireScopedPageViewer } from "@/server/auth/page-access";
+
+export const metadata: Metadata = { title: "Inventori" };
 
 const rows = [
   { ...demoBusinessUnits.salam, id: "l1", lot: "A-118", project: "Fasa A", state: "Pegangan", expires: "16 Jul, 3:10 PTG" },

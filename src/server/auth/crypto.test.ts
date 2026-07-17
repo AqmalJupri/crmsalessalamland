@@ -18,6 +18,8 @@ beforeEach(() => {
   process.env = {
     ...originalEnvironment,
     NODE_ENV: "test",
+    PRODUCT_SURFACE: "crm",
+    DEPLOYMENT_ENVIRONMENT: "ci",
     DATABASE_URL: "postgresql://crm:crm@127.0.0.1:5432/crm_salam_test_crypto",
     APP_URL: "http://127.0.0.1:3000",
     CRM_DEMO_MODE: "true",

@@ -168,11 +168,6 @@ describe("UI visual evidence contract", () => {
   });
 
   it("registers exactly the reviewed Linux PNGs by digest and viewport width", () => {
-    // Bootstrap-only gate: remove this branch as soon as the reviewed Linux artifact is applied.
-    if (!existsSync(provenancePath)) {
-      expect(existsSync(visualSpecPath)).toBe(true);
-      return;
-    }
     const raw = readRequired(provenancePath);
     const provenance = JSON.parse(raw) as VisualProvenance;
     const expected = expectedAssets();

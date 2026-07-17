@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 
@@ -76,10 +76,6 @@ const surfaceScenes = {
 
 function assertReviewedBaselineAuthority(): void {
   if (captureMode) return;
-  if (!existsSync(provenancePath)) {
-    test.skip(true, "Reviewed Linux visual baselines have not been committed yet.");
-    return;
-  }
   const provenance = JSON.parse(readFileSync(provenancePath, "utf8")) as {
     review?: { status?: string };
   };

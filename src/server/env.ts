@@ -43,14 +43,6 @@ function assertCleanPublicUrl(url: URL, field: string, allowPath: boolean): void
   }
 }
 
-function hasExplicitPort(source: string): boolean {
-  const authority = source.match(/^[a-z][a-z\d+.-]*:\/\/([^/?#]+)/i)?.[1] ?? "";
-  const hostAndPort = authority.slice(authority.lastIndexOf("@") + 1);
-  return hostAndPort.startsWith("[")
-    ? /^\[[^\]]+\]:\d*$/.test(hostAndPort)
-    : /:\d*$/.test(hostAndPort);
-}
-
 function validateRuntimeConfiguration(data: ParsedRuntime, demoMode: boolean): void {
   const databaseUrl = new URL(data.DATABASE_URL);
   if (!new Set(["postgres:", "postgresql:"]).has(databaseUrl.protocol)) {
@@ -72,7 +64,8 @@ function validateRuntimeConfiguration(data: ParsedRuntime, demoMode: boolean): v
     }
     const surface = getProductSurfaceSpec(data.PRODUCT_SURFACE);
     const canonicalOrigin = `https://${surface.canonicalHost}`;
-    if (appUrl.origin !== canonicalOrigin || hasExplicitPort(data.APP_URL)) {
+    const allowedSpellings = new Set([canonicalOrigin, `${canonicalOrigin}/`]);
+    if (!allowedSpellings.has(data.APP_URL)) {
       invalidConfiguration(
         `APP_URL must use the canonical ${canonicalOrigin} origin without an explicit port for PRODUCT_SURFACE=${surface.key}.`,
       );

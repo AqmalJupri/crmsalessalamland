@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
+  checks:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -103,7 +103,7 @@ jobs:
           OIDC_REDIRECT_URI: http://localhost:3000/api/v1/auth/oidc/callback
 
   build:
-    needs: verify
+    needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -157,7 +157,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/production-artifact"
           tar -czf \
             "$RUNNER_TEMP/production-artifact/${{ matrix.surface }}-${{ github.sha }}.tar.gz" \
-            .next public package.json pnpm-lock.yaml next.config.ts
+            .next public package.json pnpm-lock.yaml pnpm-workspace.yaml next.config.ts
 
       - name: Upload production artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -170,9 +170,19 @@ jobs:
           overwrite: false
 
   runtime-smoke:
-    needs: [verify, build]
+    needs: [checks, build]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - surface: crm
+            app_url: https://crm-ci.example.test
+            oidc_client_id: crm-ci
+          - surface: tasha
+            app_url: https://tasha-ci.example.test
+            oidc_client_id: tasha-ci
     services:
       postgres:
         image: postgres:16.14-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
@@ -189,16 +199,16 @@ jobs:
           --health-retries 10
     env:
       NEXT_TELEMETRY_DISABLED: "1"
-      PRODUCT_SURFACE: crm
+      PRODUCT_SURFACE: ${{ matrix.surface }}
       DEPLOYMENT_ENVIRONMENT: ci
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/crm_salam_test_ci
-      APP_URL: https://crm-ci.example.test
+      APP_URL: ${{ matrix.app_url }}
       APP_VERSION: ${{ github.sha }}
       AUTH_HASH_KEY: ci-only-auth-hash-key-at-least-32-characters
       OIDC_ISSUER: https://identity.example.test
-      OIDC_CLIENT_ID: crm-ci
+      OIDC_CLIENT_ID: ${{ matrix.oidc_client_id }}
       OIDC_CLIENT_SECRET: ci-only-oidc-secret-at-least-16-characters
-      OIDC_REDIRECT_URI: https://crm-ci.example.test/api/v1/auth/oidc/callback
+      OIDC_REDIRECT_URI: ${{ matrix.app_url }}/api/v1/auth/oidc/callback
       CRM_DEMO_MODE: "false"
     steps:
       - name: Checkout
@@ -218,7 +228,7 @@ jobs:
           node-version: 22.22.0
           cache: pnpm
 
-      - name: Install dependencies
+      - name: Install probe dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Download migrated database
@@ -234,20 +244,32 @@ jobs:
             --username=postgres --dbname=crm_salam_test_ci \
             < "$RUNNER_TEMP/migrated-db/crm_salam_test_ci.dump"
 
-      - name: Download CRM production artifact
+      - name: Download production artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: production-crm-${{ github.sha }}
+          name: production-${{ matrix.surface }}-${{ github.sha }}
           path: ${{ runner.temp }}/production-artifact
 
-      - name: Extract CRM production artifact
-        run: tar -xzf "$RUNNER_TEMP/production-artifact/crm-${{ github.sha }}.tar.gz"
+      - name: Extract production artifact
+        run: |
+          runtime_dir="$RUNNER_TEMP/runtime-${{ matrix.surface }}"
+          mkdir "$runtime_dir"
+          tar -xzf \
+            "$RUNNER_TEMP/production-artifact/${{ matrix.surface }}-${{ github.sha }}.tar.gz" \
+            -C "$runtime_dir"
+
+      - name: Install artifact production dependencies
+        run: >-
+          pnpm --dir "$RUNNER_TEMP/runtime-${{ matrix.surface }}"
+          install --prod --frozen-lockfile
 
       - name: Smoke production runtime and security headers
         env:
           PORT: "3100"
         run: |
-          setsid pnpm start >"$RUNNER_TEMP/crm-production.log" 2>&1 &
+          cd "$RUNNER_TEMP/runtime-${{ matrix.surface }}"
+          runtime_log="$RUNNER_TEMP/${{ matrix.surface }}-production.log"
+          setsid pnpm start >"$runtime_log" 2>&1 &
           server_pid=$!
           cleanup() {
             kill -TERM -- "-$server_pid" 2>/dev/null || true
@@ -259,12 +281,29 @@ jobs:
               break
             fi
             if ! kill -0 "$server_pid" 2>/dev/null; then
-              cat "$RUNNER_TEMP/crm-production.log"
+              cat "$runtime_log"
               exit 1
             fi
             sleep 1
           done
-          PRODUCTION_SMOKE_URL=http://127.0.0.1:3100 pnpm test:runtime || {
-            cat "$RUNNER_TEMP/crm-production.log"
+          PRODUCTION_SMOKE_URL=http://127.0.0.1:3100 \
+            pnpm --dir "$GITHUB_WORKSPACE" test:runtime || {
+            cat "$runtime_log"
             exit 1
           }
+
+  verify:
+    needs: [checks, build, runtime-smoke]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Enforce successful quality gates
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          RUNTIME_SMOKE_RESULT: ${{ needs.runtime-smoke.result }}
+        run: |
+          test "$CHECKS_RESULT" = "success"
+          test "$BUILD_RESULT" = "success"
+          test "$RUNTIME_SMOKE_RESULT" = "success"

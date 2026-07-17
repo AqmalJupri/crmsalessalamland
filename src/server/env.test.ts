@@ -124,6 +124,18 @@ describe("product deployment configuration", () => {
     },
   );
 
+  it.each(["crm", "tasha"] as const)(
+    "accepts one trailing slash on the canonical production origin for %s",
+    (surface) => {
+      useProductionEnvironment(surface);
+      process.env.APP_URL = `https://${canonicalHosts[surface]}/`;
+
+      expect(getRuntimeConfig()).toMatchObject({
+        appUrl: `https://${canonicalHosts[surface]}/`,
+      });
+    },
+  );
+
   it.each([
     [
       "another surface host",
@@ -139,6 +151,16 @@ describe("product deployment configuration", () => {
       "an empty explicit canonical port",
       "https://crm.salamland.my:",
       "https://crm.salamland.my:/api/v1/auth/oidc/callback",
+    ],
+    [
+      "a slashless WHATWG-normalized URL",
+      "https:crm.salamland.my:443",
+      "https://crm.salamland.my/api/v1/auth/oidc/callback",
+    ],
+    [
+      "a backslash WHATWG-normalized URL",
+      String.raw`https:\\crm.salamland.my:443`,
+      "https://crm.salamland.my/api/v1/auth/oidc/callback",
     ],
   ])("rejects %s for the CRM production origin", (_label, appUrl, redirectUri) => {
     useProductionEnvironment("crm");

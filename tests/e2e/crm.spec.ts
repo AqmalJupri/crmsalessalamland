@@ -2,6 +2,11 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import { runWithCleanup } from "../production/runtime-evidence.mjs";
 
+test.skip(
+  process.env.E2E_PRODUCT_SURFACE !== "crm",
+  "Legacy CRM coverage runs only on the CRM product surface.",
+);
+
 async function expectNoHorizontalOverflow(page: import("@playwright/test").Page): Promise<void> {
   const dimensions = await page.evaluate(() => ({
     viewport: document.documentElement.clientWidth,
@@ -125,6 +130,7 @@ test("private offline navigation exposes only the minimal unavailable response",
       lead.phone,
       lead.productInterest,
       "Aqmal Jupri",
+      "Pengguna Demo",
       requestedPath,
       "customer=rekod-sulit-ui8b",
       "rekod-sulit-ui8b",

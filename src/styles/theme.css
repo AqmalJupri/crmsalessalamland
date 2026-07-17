@@ -1484,7 +1484,7 @@ button.crm-workspace-switcher {
 
 .crm-pipeline__empty {
   padding: var(--crm-space-5) var(--crm-space-3);
-  color: var(--crm-muted);
+  color: var(--crm-text);
   font-size: var(--crm-text-xs);
   text-align: center;
 }

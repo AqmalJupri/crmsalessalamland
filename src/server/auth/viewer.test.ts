@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -44,6 +45,8 @@ vi.mock("@/server/env", () => ({
 
 import { getViewer, requireApiViewerForBusinessUnit } from "./viewer";
 
+const demoViewerSource = readFileSync(new URL("./viewer.ts", import.meta.url), "utf8");
+
 describe("getViewer request memoization", () => {
   beforeEach(() => {
     mocks.requestState.id = "request-a";
@@ -62,6 +65,17 @@ describe("getViewer request memoization", () => {
 
     await expect(getViewer()).resolves.toMatchObject({ demo: true, sessionExpiresAt: null });
     expect(mocks.getRuntimeConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses an explicitly synthetic demo identity", async () => {
+    await expect(getViewer()).resolves.toMatchObject({
+      demo: true,
+      displayName: "Pengguna Demo",
+    });
+  });
+
+  it("rejects the previous real-looking identity from browser-reachable demo source", () => {
+    expect(demoViewerSource).not.toContain("Aqmal Jupri");
   });
 });
 

@@ -18,7 +18,7 @@ export interface MetricScope {
   dateBasis: string;
   periodLabel: string;
   timezone: "Asia/Kuala_Lumpur";
-  asOf: string;
+  asOf: string | null;
   freshness: "fresh" | "stale" | "unknown";
   attributionModel: string | null;
   definitionHref: string;
@@ -39,13 +39,13 @@ export function createMetricScope(input: {
   capability: string;
   dateBasis: string;
   periodLabel: string;
-  asOf: string;
+  asOf: string | null;
   freshness: MetricScope["freshness"];
   attributionModel: string | null;
   definitionHref: string;
   drilldownPath: string;
 }): MetricScope {
-  if (!Number.isFinite(Date.parse(input.asOf))) {
+  if (input.asOf !== null && !Number.isFinite(Date.parse(input.asOf))) {
     throw new Error("Metric as-of timestamp is invalid.");
   }
   const units = input.scope.kind === "ALL"
@@ -130,10 +130,14 @@ export function MetricCard({
         <span>
           {scope.dateBasis} · {{ fresh: "Semasa", stale: "Lewat", unknown: "Tidak diketahui" }[scope.freshness]}
         </span>
-        <span>
-          <time dateTime={scope.asOf}>{metricTimestampFormatter.format(new Date(scope.asOf))}</time>
-          {scope.attributionModel ? ` · ${scope.attributionModel}` : ""}
-        </span>
+        {scope.asOf !== null ? (
+          <span>
+            <time dateTime={scope.asOf}>{metricTimestampFormatter.format(new Date(scope.asOf))}</time>
+            {scope.attributionModel ? ` · ${scope.attributionModel}` : ""}
+          </span>
+        ) : scope.attributionModel ? (
+          <span>{scope.attributionModel}</span>
+        ) : null}
         <a href={scope.definitionHref} aria-label={`Lihat definisi ${label}`}>Definisi</a>
       </div>
     </article>

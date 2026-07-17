@@ -144,4 +144,14 @@ describe("product navigation contract", () => {
     expect(isProductPathAvailable("crm", "/unknown")).toBe(false);
     expect(isProductPathAvailable("crm", "")).toBe(false);
   });
+
+  it("keeps settings and integration labels out of Tasha without probing CRM routes", () => {
+    const labels = getProductNavigationSections("tasha")
+      .flatMap((section) => section.items)
+      .map((item) => item.label);
+
+    expect(labels).not.toContain("Tetapan");
+    expect(labels).not.toContain("Integrasi");
+    expect(isProductPathAvailable("tasha", "/settings")).toBe(false);
+  });
 });

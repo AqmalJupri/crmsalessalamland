@@ -62,7 +62,7 @@ export interface Viewer {
 
 const demoViewer: Viewer = {
   userId: "00000000-0000-4000-8000-000000000001",
-  displayName: "Aqmal Jupri",
+  displayName: "Pengguna Demo",
   sessionExpiresAt: null,
   organizationId: "00000000-0000-4000-8000-000000000010",
   businessUnitId: "00000000-0000-4000-8000-000000000101",

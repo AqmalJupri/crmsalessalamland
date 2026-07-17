@@ -118,6 +118,29 @@ describe("MetricScope", () => {
       .toBe("/leads?definition=lead-baharu&bu=all");
   });
 
+  it("renders an unknown timestamp without inventing an as-of date", () => {
+    const scope = createMetricScope({
+      scope: allScope,
+      capability: "lead.read",
+      dateBasis: "Masa pemeriksaan",
+      periodLabel: "Semasa",
+      asOf: null,
+      freshness: "unknown",
+      attributionModel: null,
+      definitionHref: "/settings?definition=unknown",
+      drilldownPath: "/settings?metric=unknown",
+    });
+    const { container } = render(
+      createElement(MetricCard, { label: "Status tidak diketahui", value: "1", scope }),
+    );
+
+    expect(screen.getByText("Masa pemeriksaan · Tidak diketahui")).toBeTruthy();
+    expect(document.querySelector("time")).toBeNull();
+    const scopeDetails = container.querySelector(".crm-metric__scope");
+    expect(scopeDetails?.textContent?.match(/Tidak diketahui/g)).toHaveLength(1);
+    expect(scopeDetails?.children).toHaveLength(3);
+  });
+
   it("rejects an invalid KPI as-of timestamp", () => {
     expect(() => createMetricScope({
       scope: allScope,

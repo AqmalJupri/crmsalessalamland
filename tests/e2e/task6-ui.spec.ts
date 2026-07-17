@@ -1,6 +1,11 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
+test.skip(
+  process.env.E2E_PRODUCT_SURFACE !== "crm",
+  "Legacy CRM coverage runs only on the CRM product surface.",
+);
+
 test.use({ serviceWorkers: "block" });
 
 async function expectNoCriticalOrSeriousAxeViolations(page: Page): Promise<void> {

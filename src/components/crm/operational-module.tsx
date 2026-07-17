@@ -31,6 +31,8 @@ export function createDemoModuleMetrics(input: {
   modulePath: string;
   dateBasis: string;
   periodLabel: string;
+  asOf?: string | null;
+  freshness?: MetricScope["freshness"];
   rows: readonly ModuleRow[];
   metrics: readonly DemoModuleMetric[];
 }): ModuleMetric[] {
@@ -61,8 +63,8 @@ export function createDemoModuleMetrics(input: {
         capability: input.capability,
         dateBasis: input.dateBasis,
         periodLabel: input.periodLabel,
-        asOf: DEMO_METRIC_AS_OF,
-        freshness: "stale",
+        asOf: input.asOf === undefined ? DEMO_METRIC_AS_OF : input.asOf,
+        freshness: input.freshness ?? "stale",
         attributionModel: metric.attributionModel ?? null,
         definitionHref: `${input.modulePath}?definition=${metric.key}`,
         drilldownPath: `${input.modulePath}?metric=${metric.key}`,

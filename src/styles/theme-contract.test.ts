@@ -435,6 +435,13 @@ export default function manifest() {
     );
   });
 
+  it("keeps compact pipeline empty copy readable on the subtle stage surface", () => {
+    const pipelineEmpty = cssRule(themeSource, ".crm-pipeline__empty");
+
+    expect(pipelineEmpty).toMatch(/color:\s*var\(--crm-text\)/);
+    expect(pipelineEmpty).not.toMatch(/color:\s*var\(--crm-muted\)/);
+  });
+
   it("gives the record button a compact desktop height and a 44px coarse target", () => {
     const recordLink = cssRule(productSource, ".crm-record-link");
     const coarsePointer = atRule(themeSource, "@media (pointer: coarse)");

@@ -95,12 +95,35 @@ jobs:
       - name: Verify database invariants
         run: pnpm test:db
 
-      - name: Run demo UI browser and accessibility tests
-        run: pnpm test:e2e
-        env:
-          CRM_DEMO_MODE: "true"
-          APP_URL: http://localhost:3000
-          OIDC_REDIRECT_URI: http://localhost:3000/api/v1/auth/oidc/callback
+      - name: Prepare synthetic browser database
+        run: |
+          docker exec "${{ job.services.postgres.id }}" \
+            psql --username=postgres --dbname=postgres --set=ON_ERROR_STOP=1 \
+            --command="CREATE ROLE crm LOGIN PASSWORD 'crm_local_only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"
+          docker exec "${{ job.services.postgres.id }}" \
+            createdb --username=postgres --owner=crm crm_salam_codex_ui
+          docker exec -i "${{ job.services.postgres.id }}" \
+            pg_restore --no-owner --no-privileges --role=crm \
+            --username=postgres --dbname=crm_salam_codex_ui \
+            < "$RUNNER_TEMP/migrated-db/crm_salam_test_ci.dump"
+
+      - name: Run isolated CRM and Tasha browser evidence
+        run: |
+          unset OIDC_ISSUER OIDC_CLIENT_ID OIDC_CLIENT_SECRET OIDC_REDIRECT_URI
+          pnpm test:e2e
+
+      - name: Upload failed synthetic Playwright evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: synthetic-playwright-failure-${{ github.sha }}
+          path: |
+            .playwright/crm
+            .playwright/tasha
+          if-no-files-found: ignore
+          retention-days: 1
+          compression-level: 6
+          overwrite: false
 
   build:
     needs: checks
@@ -268,29 +291,7 @@ jobs:
           PORT: "3100"
         run: |
           cd "$RUNNER_TEMP/runtime-${{ matrix.surface }}"
-          runtime_log="$RUNNER_TEMP/${{ matrix.surface }}-production.log"
-          setsid pnpm start >"$runtime_log" 2>&1 &
-          server_pid=$!
-          cleanup() {
-            kill -TERM -- "-$server_pid" 2>/dev/null || true
-            wait "$server_pid" 2>/dev/null || true
-          }
-          trap cleanup EXIT
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:3100/api/health/live >/dev/null; then
-              break
-            fi
-            if ! kill -0 "$server_pid" 2>/dev/null; then
-              cat "$runtime_log"
-              exit 1
-            fi
-            sleep 1
-          done
-          PRODUCTION_SMOKE_URL=http://127.0.0.1:3100 \
-            pnpm --dir "$GITHUB_WORKSPACE" test:runtime || {
-            cat "$runtime_log"
-            exit 1
-          }
+          node "$GITHUB_WORKSPACE/scripts/ci/run-next-runtime-smoke.mjs"
 
   verify:
     needs: [checks, build, runtime-smoke]

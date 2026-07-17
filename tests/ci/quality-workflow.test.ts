@@ -1,16 +1,80 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import type { PlaywrightTestConfig } from "@playwright/test";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const qualityWorkflow = readFileSync(
   `${repositoryRoot}.github/workflows/quality.yml`,
   "utf8",
 );
-const playwrightConfig = readFileSync(
-  `${repositoryRoot}playwright.config.ts`,
-  "utf8",
-);
+const packageJson = JSON.parse(
+  readFileSync(`${repositoryRoot}package.json`, "utf8"),
+) as {
+  scripts: Record<string, string>;
+  devDependencies: Record<string, string>;
+};
+
+const expectedE2eScripts = {
+  "test:e2e": "pnpm test:e2e:crm && pnpm test:e2e:tasha",
+  "test:e2e:crm": "pnpm clean:next && DATABASE_URL=postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_ui APP_URL=http://127.0.0.1:3201 AUTH_HASH_KEY=ui-e2e-auth-hash-key-0123456789abcdef CRM_DEMO_MODE=true DEPLOYMENT_ENVIRONMENT=local PRODUCT_SURFACE=crm E2E_PRODUCT_SURFACE=crm E2E_PORT=3201 playwright test",
+  "test:e2e:tasha": "pnpm clean:next && DATABASE_URL=postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_ui APP_URL=http://127.0.0.1:3202 AUTH_HASH_KEY=ui-e2e-auth-hash-key-0123456789abcdef CRM_DEMO_MODE=true DEPLOYMENT_ENVIRONMENT=local PRODUCT_SURFACE=tasha E2E_PRODUCT_SURFACE=tasha E2E_PORT=3202 playwright test",
+} as const;
+
+const expectedProjects = [
+  { name: "mobile-chromium-320x800", width: 320, height: 800, isMobile: true, hasTouch: true },
+  { name: "mobile-chromium-375x812", width: 375, height: 812, isMobile: true, hasTouch: true },
+  { name: "mobile-chromium-390x844", width: 390, height: 844, isMobile: true, hasTouch: true },
+  { name: "desktop-chromium-768x1024", width: 768, height: 1024, isMobile: false, hasTouch: false },
+  { name: "desktop-chromium-1024x768", width: 1024, height: 768, isMobile: false, hasTouch: false },
+  { name: "desktop-chromium-1280x800", width: 1280, height: 800, isMobile: false, hasTouch: false },
+  { name: "desktop-chromium-1440x900", width: 1440, height: 900, isMobile: false, hasTouch: false },
+] as const;
+
+const playwrightEnvironmentKeys = [
+  "APP_URL",
+  "E2E_PORT",
+  "E2E_PRODUCT_SURFACE",
+  "PRODUCT_SURFACE",
+] as const;
+
+async function loadPlaywrightConfig(overrides: Partial<Record<(typeof playwrightEnvironmentKeys)[number], string | undefined>>): Promise<PlaywrightTestConfig> {
+  const previous = Object.fromEntries(
+    playwrightEnvironmentKeys.map((key) => [key, process.env[key]]),
+  );
+
+  for (const key of playwrightEnvironmentKeys) {
+    const value = overrides[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  vi.resetModules();
+
+  try {
+    return (await import("../../playwright.config")).default;
+  } finally {
+    for (const key of playwrightEnvironmentKeys) {
+      const value = previous[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    vi.resetModules();
+  }
+}
+
+function surfaceConfig(surface: "crm" | "tasha") {
+  const port = surface === "crm" ? "3201" : "3202";
+  return loadPlaywrightConfig({
+    APP_URL: `http://127.0.0.1:${port}`,
+    E2E_PORT: port,
+    E2E_PRODUCT_SURFACE: surface,
+    PRODUCT_SURFACE: surface,
+  });
+}
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 const expectedSurfaceBindings = [
   {
@@ -24,14 +88,6 @@ const expectedSurfaceBindings = [
     oidc_client_id: "tasha-ci",
   },
 ];
-
-function workflowStep(name: string) {
-  const start = qualityWorkflow.indexOf(`- name: ${name}`);
-  expect(start, `workflow step ${name} must exist`).toBeGreaterThanOrEqual(0);
-
-  const next = qualityWorkflow.indexOf("\n      - name:", start + 1);
-  return qualityWorkflow.slice(start, next === -1 ? undefined : next);
-}
 
 function workflowJob(name: string) {
   const marker = `  ${name}:\n`;
@@ -116,6 +172,104 @@ function expectSurfaceBindings(job: string) {
   return rows;
 }
 
+describe("Dual-surface Playwright contract", () => {
+  it("pins the reviewed browser runtime and deterministic surface commands", () => {
+    expect(packageJson.devDependencies["@playwright/test"]).toBe("1.61.1");
+    expect(packageJson.scripts).toMatchObject(expectedE2eScripts);
+  });
+
+  it.each([
+    ["surface", { E2E_PORT: "3201", PRODUCT_SURFACE: "crm", APP_URL: "http://127.0.0.1:3201" }],
+    ["port", { E2E_PRODUCT_SURFACE: "crm", PRODUCT_SURFACE: "crm", APP_URL: "http://127.0.0.1:3201" }],
+  ] as const)("rejects a missing required E2E %s binding", async (_label, environment) => {
+    await expect(loadPlaywrightConfig(environment)).rejects.toThrow(/E2E_(?:PRODUCT_SURFACE|PORT)/);
+  });
+
+  it.each([
+    [
+      "surface mismatch",
+      {
+        APP_URL: "http://127.0.0.1:3201",
+        E2E_PORT: "3201",
+        E2E_PRODUCT_SURFACE: "crm",
+        PRODUCT_SURFACE: "tasha",
+      },
+    ],
+    [
+      "surface port mismatch",
+      {
+        APP_URL: "http://127.0.0.1:3202",
+        E2E_PORT: "3202",
+        E2E_PRODUCT_SURFACE: "crm",
+        PRODUCT_SURFACE: "crm",
+      },
+    ],
+    [
+      "application URL mismatch",
+      {
+        APP_URL: "http://127.0.0.1:3999",
+        E2E_PORT: "3201",
+        E2E_PRODUCT_SURFACE: "crm",
+        PRODUCT_SURFACE: "crm",
+      },
+    ],
+  ] as const)("rejects a %s instead of trusting host state", async (_label, environment) => {
+    await expect(loadPlaywrightConfig(environment)).rejects.toThrow(/surface|port|APP_URL/i);
+  });
+
+  it.each(["crm", "tasha"] as const)(
+    "defines the exact seven %s Chromium viewports and isolated artifact paths",
+    async (surface) => {
+      const config = await surfaceConfig(surface);
+      const port = surface === "crm" ? 3201 : 3202;
+      const projects = (config.projects ?? []).map((project) => {
+        const use = project.use as {
+          browserName?: string;
+          hasTouch?: boolean;
+          isMobile?: boolean;
+          viewport?: { width: number; height: number } | null;
+        };
+        return {
+          name: project.name,
+          width: use.viewport?.width,
+          height: use.viewport?.height,
+          isMobile: use.isMobile ?? false,
+          hasTouch: use.hasTouch ?? false,
+          browserName: use.browserName,
+        };
+      });
+
+      expect(projects).toEqual(
+        expectedProjects.map((project) => ({ ...project, browserName: "chromium" })),
+      );
+      expect(config.use?.baseURL).toBe(`http://127.0.0.1:${port}`);
+      expect(config.outputDir).toBe(`.playwright/${surface}/test-results`);
+      expect(config.snapshotPathTemplate).toBe(
+        `tests/e2e/__snapshots__/${surface}/{testFilePath}/{projectName}/{arg}{ext}`,
+      );
+      expect(config.preserveOutput).toBe("failures-only");
+
+      const webServer = Array.isArray(config.webServer)
+        ? config.webServer[0]
+        : config.webServer;
+      expect(webServer).toMatchObject({
+        command: `pnpm exec next dev --hostname 127.0.0.1 --port ${port}`,
+        url: `http://127.0.0.1:${port}/api/health/live`,
+        reuseExistingServer: false,
+      });
+
+      const reporters = Array.isArray(config.reporter) ? config.reporter : [];
+      const htmlReporter = reporters.find(
+        (reporter) => Array.isArray(reporter) && reporter[0] === "html",
+      );
+      expect(htmlReporter?.[1]).toMatchObject({
+        open: "never",
+        outputFolder: `.playwright/${surface}/report`,
+      });
+    },
+  );
+});
+
 describe("Quality workflow mutation resistance", () => {
   it.each([
     ["block", "env:\n  DATABASE_URL: postgresql://forbidden.example.test/crm"],
@@ -150,29 +304,92 @@ describe("Quality workflow mutation resistance", () => {
 });
 
 describe("Quality workflow server lifecycle", () => {
-  it("isolates the production smoke server from Playwright's web server", () => {
-    const smokeStep = workflowStep("Smoke production runtime and security headers");
+  it("isolates the production smoke server from both Playwright servers", () => {
+    const smokeJob = workflowJob("runtime-smoke");
+    const smokeStep = jobStep(smokeJob, "Smoke production runtime and security headers");
     const serverPort = requiredPort(smokeStep, /\bPORT:\s*["']?(\d+)/, "smoke server");
-    const probePort = requiredPort(
-      smokeStep,
-      /PRODUCTION_SMOKE_URL=http:\/\/127\.0\.0\.1:(\d+)/,
-      "runtime probe",
-    );
-    const playwrightPort = requiredPort(
-      playwrightConfig,
-      /webServer:[\s\S]*?url:\s*["']http:\/\/localhost:(\d+)\//,
-      "Playwright web server",
-    );
 
-    expect(serverPort).toBe(probePort);
-    expect(serverPort).not.toBe(playwrightPort);
+    expect(serverPort).toBe(3100);
+    expect(serverPort).not.toBe(3201);
+    expect(serverPort).not.toBe(3202);
   });
 
-  it("terminates the complete production smoke process group", () => {
-    const smokeStep = workflowStep("Smoke production runtime and security headers");
+  it("delegates the complete production process group to the portable Node owner", () => {
+    const smokeJob = workflowJob("runtime-smoke");
+    const smokeStep = jobStep(smokeJob, "Smoke production runtime and security headers");
 
-    expect(smokeStep).toContain("setsid pnpm start");
-    expect(smokeStep).toContain('kill -TERM -- "-$server_pid"');
+    expect(smokeStep).toContain(
+      'node "$GITHUB_WORKSPACE/scripts/ci/run-next-runtime-smoke.mjs"',
+    );
+    expect(smokeStep).not.toMatch(/\bsetsid\b|\bcurl\b|kill\s+-TERM|pnpm\s+start/);
+  });
+});
+
+describe("Quality workflow browser evidence", () => {
+  it("provisions the exact synthetic browser role and database from the migrated snapshot", () => {
+    const checksJob = workflowJob("checks");
+    const prepareStep = jobStep(checksJob, "Prepare synthetic browser database");
+    const browserStep = jobStep(
+      checksJob,
+      "Run isolated CRM and Tasha browser evidence",
+    );
+
+    expect(prepareStep).toContain(
+      "CREATE ROLE crm LOGIN PASSWORD 'crm_local_only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION",
+    );
+    expect(prepareStep).toContain(
+      "createdb --username=postgres --owner=crm crm_salam_codex_ui",
+    );
+    expect(prepareStep).toContain(
+      '"$RUNNER_TEMP/migrated-db/crm_salam_test_ci.dump"',
+    );
+    expect(prepareStep).toMatch(
+      /pg_restore[\s\S]*--no-owner --no-privileges --role=crm[\s\S]*--dbname=crm_salam_codex_ui/,
+    );
+    expect(prepareStep).not.toMatch(/dropdb|crm_salam_test_ci\s*;/i);
+    expect(checksJob.indexOf("Prepare synthetic browser database")).toBeLessThan(
+      checksJob.indexOf("Run isolated CRM and Tasha browser evidence"),
+    );
+    expect(browserStep).toContain("pnpm test:e2e");
+  });
+
+  it("runs the exact CRM then Tasha package contract without workflow surface overrides", () => {
+    const checksJob = workflowJob("checks");
+    const browserStep = jobStep(
+      checksJob,
+      "Run isolated CRM and Tasha browser evidence",
+    );
+
+    expect(browserStep).toContain(
+      "unset OIDC_ISSUER OIDC_CLIENT_ID OIDC_CLIENT_SECRET OIDC_REDIRECT_URI",
+    );
+    expect(browserStep).toMatch(
+      /unset OIDC_ISSUER OIDC_CLIENT_ID OIDC_CLIENT_SECRET OIDC_REDIRECT_URI\s+pnpm test:e2e/,
+    );
+    expect(browserStep).not.toMatch(/\n\s+env:/);
+    expect(browserStep).not.toMatch(
+      /E2E_PRODUCT_SURFACE|E2E_PORT|PRODUCT_SURFACE|APP_URL/,
+    );
+    expect(packageJson.scripts["test:e2e"]).toBe(
+      "pnpm test:e2e:crm && pnpm test:e2e:tasha",
+    );
+  });
+
+  it("uploads only failed synthetic surface-namespaced evidence for one day", () => {
+    const checksJob = workflowJob("checks");
+    const uploadStep = jobStep(
+      checksJob,
+      "Upload failed synthetic Playwright evidence",
+    );
+
+    expect(uploadStep).toContain("if: failure()");
+    expect(uploadStep).toContain("actions/upload-artifact@");
+    expect(uploadStep).toContain("name: synthetic-playwright-failure-${{ github.sha }}");
+    expect(uploadStep).toContain(".playwright/crm");
+    expect(uploadStep).toContain(".playwright/tasha");
+    expect(uploadStep).toContain("if-no-files-found: ignore");
+    expect(uploadStep).toContain("retention-days: 1");
+    expect(uploadStep).not.toMatch(/retention-days:\s*(?:[2-9]|\d{2,})/);
   });
 });
 
@@ -254,11 +471,11 @@ describe("Quality workflow deployment artifacts", () => {
     expect(smokeStep).toContain(
       'cd "$RUNNER_TEMP/runtime-${{ matrix.surface }}"',
     );
-    expect(smokeStep).toContain("setsid pnpm start");
-    expect(smokeStep.indexOf("cd ")).toBeLessThan(smokeStep.indexOf("setsid pnpm start"));
     expect(smokeStep).toContain(
-      'pnpm --dir "$GITHUB_WORKSPACE" test:runtime',
+      'node "$GITHUB_WORKSPACE/scripts/ci/run-next-runtime-smoke.mjs"',
     );
+    expect(smokeStep.indexOf("cd ")).toBeLessThan(smokeStep.indexOf("node "));
+    expect(smokeStep).not.toMatch(/\bsetsid\b|pnpm\s+--dir[^\n]*test:runtime/);
   });
 
   it("publishes one terminal verify result that depends on every quality gate", () => {

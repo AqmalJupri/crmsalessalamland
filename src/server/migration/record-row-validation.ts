@@ -11,12 +11,13 @@ import {
   digestsEqual,
 } from "./artifact-checksum";
 import type { MigrationActor } from "./contracts";
+import { openQuarantineItem } from "./quarantine";
 import {
-  assertRedactedMigrationMetadata,
-  openQuarantineItem,
   type NormalizedEvidenceVerifier,
   type VerifiedNormalizedEvidence,
-} from "./quarantine";
+  verifyNormalizedEvidenceSnapshot,
+} from "./normalized-evidence";
+import { snapshotRedactedMigrationMetadata } from "./redacted-metadata";
 import {
   lockAndValidateMigrationSourceAuthority,
   requireActiveMigrationTenant,
@@ -54,8 +55,43 @@ interface ValidationCommand {
 interface RowContext {
   batchId: string;
   migrationSourceId: string;
+  batchEnvelope: {
+    version: number;
+    transformVersionId: string;
+    validatedDryRunBatchId: string | null;
+    repairOfBatchId: string | null;
+    protectedArtifactRef: string;
+    sourceSha256: Uint8Array;
+    sizeBytes: bigint;
+    capturedAt: Date;
+    cutoffAt: Date;
+    schemaVersion: string;
+    dryRun: boolean;
+    operatorReason: string | null;
+  };
   rawEvidenceRef: string;
   rowSha256: Uint8Array;
+}
+
+function batchEnvelopeMatches(
+  current: RowContext["batchEnvelope"],
+  expected: RowContext["batchEnvelope"],
+): boolean {
+  return (
+    Number.isSafeInteger(current.version) &&
+    current.version >= expected.version &&
+    current.transformVersionId === expected.transformVersionId &&
+    current.validatedDryRunBatchId === expected.validatedDryRunBatchId &&
+    current.repairOfBatchId === expected.repairOfBatchId &&
+    current.protectedArtifactRef === expected.protectedArtifactRef &&
+    digestsEqual(current.sourceSha256, expected.sourceSha256) &&
+    current.sizeBytes === expected.sizeBytes &&
+    current.capturedAt.getTime() === expected.capturedAt.getTime() &&
+    current.cutoffAt.getTime() === expected.cutoffAt.getTime() &&
+    current.schemaVersion === expected.schemaVersion &&
+    current.dryRun === expected.dryRun &&
+    current.operatorReason === expected.operatorReason
+  );
 }
 
 function canonicalUuid(value: unknown, field: string): string {
@@ -80,10 +116,6 @@ function invalidDecision(message: string): never {
   throw new ApiError(422, "ROW_VALIDATION_DECISION_INVALID", message);
 }
 
-function cloneMetadata(value: Readonly<Record<string, unknown>>): Record<string, unknown> {
-  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
-}
-
 function validateDecision(input: unknown): RowValidationDecision {
   if (!input || typeof input !== "object") {
     invalidDecision("The row validation decision is invalid.");
@@ -97,7 +129,10 @@ function validateDecision(input: unknown): RowValidationDecision {
   ) {
     invalidDecision("outcome must be a supported validation decision.");
   }
-  assertRedactedMigrationMetadata(decision.redactedMetadata, "redactedMetadata");
+  const redactedMetadata = snapshotRedactedMigrationMetadata(
+    decision.redactedMetadata,
+    "redactedMetadata",
+  );
   if (decision.outcome === "VALID") {
     if (
       decision.normalizedEvidenceRef === null ||
@@ -127,7 +162,7 @@ function validateDecision(input: unknown): RowValidationDecision {
         ? null
         : new Uint8Array(decision.normalizedSha256),
     errorCode: decision.errorCode,
-    redactedMetadata: cloneMetadata(decision.redactedMetadata),
+    redactedMetadata,
   };
 }
 
@@ -199,7 +234,22 @@ async function readRowContext(
       locator.migrationSourceId,
     );
     const [batch] = await transaction
-      .select({ id: importBatches.id, status: importBatches.status })
+      .select({
+        id: importBatches.id,
+        status: importBatches.status,
+        version: importBatches.version,
+        transformVersionId: importBatches.transformVersionId,
+        validatedDryRunBatchId: importBatches.validatedDryRunBatchId,
+        repairOfBatchId: importBatches.repairOfBatchId,
+        protectedArtifactRef: importBatches.protectedArtifactRef,
+        sourceSha256: importBatches.sourceSha256,
+        sizeBytes: importBatches.sizeBytes,
+        capturedAt: importBatches.capturedAt,
+        cutoffAt: importBatches.cutoffAt,
+        schemaVersion: importBatches.schemaVersion,
+        dryRun: importBatches.dryRun,
+        operatorReason: importBatches.operatorReason,
+      })
       .from(importBatches)
       .where(
         and(
@@ -252,6 +302,20 @@ async function readRowContext(
     return {
       batchId: batch.id,
       migrationSourceId: locator.migrationSourceId,
+      batchEnvelope: {
+        version: batch.version,
+        transformVersionId: batch.transformVersionId,
+        validatedDryRunBatchId: batch.validatedDryRunBatchId,
+        repairOfBatchId: batch.repairOfBatchId,
+        protectedArtifactRef: batch.protectedArtifactRef,
+        sourceSha256: new Uint8Array(batch.sourceSha256),
+        sizeBytes: batch.sizeBytes,
+        capturedAt: new Date(batch.capturedAt.getTime()),
+        cutoffAt: new Date(batch.cutoffAt.getTime()),
+        schemaVersion: batch.schemaVersion,
+        dryRun: batch.dryRun,
+        operatorReason: batch.operatorReason,
+      },
       rawEvidenceRef: row.rawEvidenceRef,
       rowSha256: new Uint8Array(row.rowSha256),
     };
@@ -263,47 +327,24 @@ async function verifyNormalizedEvidence(
   verifier: NormalizedEvidenceVerifier,
 ): Promise<VerifiedNormalizedEvidence | null> {
   if (decision.outcome !== "VALID") return null;
-  let untrusted: unknown;
-  try {
-    untrusted = await verifier.verify(
-      decision.normalizedEvidenceRef!,
-      new Uint8Array(decision.normalizedSha256!),
-    );
-  } catch {
-    throw new ApiError(
-      422,
-      "NORMALIZED_EVIDENCE_VERIFICATION_FAILED",
-      "Normalized row evidence could not be verified.",
-    );
+  if (decision.normalizedEvidenceRef === null || decision.normalizedSha256 === null) {
+    invalidDecision("A valid row requires normalized evidence.");
   }
-  if (!untrusted || typeof untrusted !== "object") {
-    throw new ApiError(
-      422,
-      "NORMALIZED_EVIDENCE_BINDING_INVALID",
-      "Verified normalized evidence did not bind the reviewed decision.",
-    );
-  }
-  const verified = untrusted as VerifiedNormalizedEvidence;
-  if (
-    typeof verified.ref !== "string" ||
-    !(verified.sha256 instanceof Uint8Array) ||
-    verified.ref !== decision.normalizedEvidenceRef ||
-    verified.sha256.byteLength !== 32 ||
-    decision.normalizedSha256 === null ||
-    !digestsEqual(verified.sha256, decision.normalizedSha256)
-  ) {
-    throw new ApiError(
-      422,
-      "NORMALIZED_EVIDENCE_BINDING_INVALID",
-      "Verified normalized evidence did not bind the reviewed decision.",
-    );
-  }
-  return { ref: verified.ref, sha256: new Uint8Array(verified.sha256) };
+  return verifyNormalizedEvidenceSnapshot(
+    verifier,
+    decision.normalizedEvidenceRef,
+    decision.normalizedSha256,
+  );
 }
 
 function nextCounter(value: number, delta: -1 | 1): number {
   const result = value + delta;
-  if (!Number.isSafeInteger(value) || value < 0 || result < 0) {
+  if (
+    !Number.isSafeInteger(value) ||
+    value < 0 ||
+    !Number.isSafeInteger(result) ||
+    result < 0
+  ) {
     throw new ApiError(409, "IMPORT_BATCH_COUNTER_CONFLICT", "Batch counters are stale.");
   }
   return result;
@@ -336,6 +377,18 @@ async function writeDecision(
         .select({
           id: importBatches.id,
           status: importBatches.status,
+          version: importBatches.version,
+          transformVersionId: importBatches.transformVersionId,
+          validatedDryRunBatchId: importBatches.validatedDryRunBatchId,
+          repairOfBatchId: importBatches.repairOfBatchId,
+          protectedArtifactRef: importBatches.protectedArtifactRef,
+          sourceSha256: importBatches.sourceSha256,
+          sizeBytes: importBatches.sizeBytes,
+          capturedAt: importBatches.capturedAt,
+          cutoffAt: importBatches.cutoffAt,
+          schemaVersion: importBatches.schemaVersion,
+          dryRun: importBatches.dryRun,
+          operatorReason: importBatches.operatorReason,
           stagedRowCount: importBatches.stagedRowCount,
           validRowCount: importBatches.validRowCount,
           rejectedRowCount: importBatches.rejectedRowCount,
@@ -355,6 +408,31 @@ async function writeDecision(
       if (!batch) throw new ApiError(404, "IMPORT_BATCH_NOT_FOUND", "Import batch not found.");
       if (batch.status !== "STAGED") {
         throw new ApiError(409, "IMPORT_BATCH_TERMINAL", "Only staged batches can be validated.");
+      }
+      if (
+        !batchEnvelopeMatches(
+          {
+            version: batch.version,
+            transformVersionId: batch.transformVersionId,
+            validatedDryRunBatchId: batch.validatedDryRunBatchId,
+            repairOfBatchId: batch.repairOfBatchId,
+            protectedArtifactRef: batch.protectedArtifactRef,
+            sourceSha256: batch.sourceSha256,
+            sizeBytes: batch.sizeBytes,
+            capturedAt: batch.capturedAt,
+            cutoffAt: batch.cutoffAt,
+            schemaVersion: batch.schemaVersion,
+            dryRun: batch.dryRun,
+            operatorReason: batch.operatorReason,
+          },
+          context.batchEnvelope,
+        )
+      ) {
+        throw new ApiError(
+          409,
+          "IMPORT_BATCH_CHANGED_DURING_VERIFICATION",
+          "The import batch acquisition envelope changed during evidence verification.",
+        );
       }
       const [row] = await transaction
         .select({

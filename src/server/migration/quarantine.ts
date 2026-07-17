@@ -16,6 +16,16 @@ import {
 } from "./artifact-checksum";
 import type { MigrationActor } from "./contracts";
 import {
+  type NormalizedEvidenceVerifier,
+  type VerifiedNormalizedEvidence,
+  verifyNormalizedEvidenceSnapshot,
+} from "./normalized-evidence";
+import {
+  canonicalRedactedMigrationMetadata,
+  migrationTextLooksSensitive,
+  snapshotRedactedMigrationMetadata,
+} from "./redacted-metadata";
+import {
   lockAndValidateMigrationSourceAuthority,
   requireActiveMigrationTenant,
   requireMigrationActorCapability,
@@ -26,10 +36,6 @@ const VALIDATE_CAPABILITY = "migration.validate";
 const REVIEW_CAPABILITY = "migration.review_quarantine";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const REASON_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,126}$/;
-const MAX_METADATA_BYTES = 8_192;
-const MAX_METADATA_DEPTH = 5;
-const MAX_METADATA_COLLECTION = 128;
-const MAX_METADATA_STRING = 512;
 
 type Database = ReturnType<typeof getDatabase>;
 
@@ -50,17 +56,7 @@ export interface ResolveQuarantineInput {
   expectedRowVersion: number;
 }
 
-export interface VerifiedNormalizedEvidence {
-  ref: string;
-  sha256: Uint8Array;
-}
-
-export interface NormalizedEvidenceVerifier {
-  verify(
-    ref: string,
-    expectedSha256: Uint8Array | null,
-  ): Promise<VerifiedNormalizedEvidence>;
-}
+export type { NormalizedEvidenceVerifier, VerifiedNormalizedEvidence } from "./normalized-evidence";
 
 interface OpenCommand {
   actor: MigrationActor;
@@ -136,115 +132,7 @@ function safeCounterChange(value: number, delta: -1 | 1): number {
   return result;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
-function metadataFailure(): never {
-  throw new ApiError(
-    422,
-    "MIGRATION_METADATA_NOT_REDACTED",
-    "Migration metadata must contain only bounded redacted codes.",
-  );
-}
-
-function stringLooksSensitive(value: string): boolean {
-  const trimmed = value.trim();
-  if (value.length > MAX_METADATA_STRING || /[\u0000-\u001f\u007f]/.test(value)) return true;
-  if (/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(value)) return true;
-  if (/(?:^|\D)\+?\d[\d\s().-]{7,}\d(?:\D|$)/.test(value)) return true;
-  if (/\bBearer\s+[A-Za-z0-9._~+/=-]+\b/i.test(value)) return true;
-  if (/\b(?:password|passwd|secret|token|api[_-]?key|authorization|cookie|credential)\s*[:=]/i.test(value)) {
-    return true;
-  }
-  if (/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/.test(value)) {
-    return true;
-  }
-  if (
-    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-    (trimmed.startsWith("[") && trimmed.endsWith("]"))
-  ) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (parsed !== null && typeof parsed === "object") return true;
-    } catch {
-      return true;
-    }
-  }
-  return false;
-}
-
-function keyLooksSensitive(key: string): boolean {
-  const canonicalKey = key.replace(/([a-z0-9])([A-Z])/g, "$1_$2");
-  return /(?:^|[_-])(?:email|phone|mobile|telephone|name|address|nric|passport|password|passwd|secret|token|api[_-]?key|authorization|cookie|credential|payload|raw|customer|record)(?:$|[_-])/i.test(
-    canonicalKey,
-  );
-}
-
-function inspectRedactedValue(value: unknown, depth: number): void {
-  if (depth > MAX_METADATA_DEPTH) metadataFailure();
-  if (value === null || typeof value === "boolean") return;
-  if (typeof value === "number") {
-    if (!Number.isFinite(value) || !Number.isSafeInteger(value)) metadataFailure();
-    return;
-  }
-  if (typeof value === "string") {
-    if (stringLooksSensitive(value)) metadataFailure();
-    return;
-  }
-  if (Array.isArray(value)) {
-    if (value.length > MAX_METADATA_COLLECTION) metadataFailure();
-    for (const entry of value) inspectRedactedValue(entry, depth + 1);
-    return;
-  }
-  if (!isPlainObject(value)) metadataFailure();
-  const entries = Object.entries(value);
-  if (entries.length > MAX_METADATA_COLLECTION) metadataFailure();
-  for (const [key, entry] of entries) {
-    if (
-      key.length < 1 ||
-      key.length > 64 ||
-      !/^[A-Za-z][A-Za-z0-9_.:-]*$/.test(key) ||
-      keyLooksSensitive(key)
-    ) {
-      metadataFailure();
-    }
-    inspectRedactedValue(entry, depth + 1);
-  }
-}
-
-export function assertRedactedMigrationMetadata(
-  value: unknown,
-  field: string,
-): asserts value is Readonly<Record<string, unknown>> {
-  void field;
-  if (!isPlainObject(value)) metadataFailure();
-  inspectRedactedValue(value, 0);
-  let encoded: string;
-  try {
-    encoded = JSON.stringify(value);
-  } catch {
-    metadataFailure();
-  }
-  if (Buffer.byteLength(encoded, "utf8") > MAX_METADATA_BYTES) metadataFailure();
-}
-
-function cloneMetadata(value: Readonly<Record<string, unknown>>): Record<string, unknown> {
-  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (isPlainObject(value)) {
-    return `{${Object.keys(value)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
+export { assertRedactedMigrationMetadata } from "./redacted-metadata";
 
 function validateOpenCommand(
   actorInput: MigrationActor,
@@ -261,13 +149,16 @@ function validateOpenCommand(
       "reasonCode must be a bounded canonical reason code.",
     );
   }
-  assertRedactedMigrationMetadata(input.redactedMetadata, "redactedMetadata");
+  const redactedMetadata = snapshotRedactedMigrationMetadata(
+    input.redactedMetadata,
+    "redactedMetadata",
+  );
   return {
     actor,
     importRowId: canonicalUuid(input.importRowId, "importRowId"),
     expectedRowVersion: positiveVersion(input.expectedRowVersion, "expectedRowVersion"),
     reasonCode: input.reasonCode,
-    redactedMetadata: cloneMetadata(input.redactedMetadata),
+    redactedMetadata,
   };
 }
 
@@ -281,7 +172,7 @@ function validateResolutionReason(value: unknown): string {
     value !== value.trim() ||
     value.length < 1 ||
     value.length > 2_000 ||
-    stringLooksSensitive(value)
+    migrationTextLooksSensitive(value)
   ) {
     resolutionInvalid("resolutionReason must be bounded, non-empty, and redacted.");
   }
@@ -477,7 +368,10 @@ export async function openQuarantineItem(
             "The open quarantine item is not backed by a quarantined row summary.",
           );
         }
-        if (canonicalJson(sameReason.reasonMetadata) !== canonicalJson(command.redactedMetadata)) {
+        if (
+          canonicalRedactedMigrationMetadata(sameReason.reasonMetadata) !==
+          canonicalRedactedMigrationMetadata(command.redactedMetadata)
+        ) {
           throw new ApiError(
             409,
             "QUARANTINE_IDEMPOTENCY_CONFLICT",
@@ -796,44 +690,18 @@ async function verifyCorrectedEvidence(
   verifier: NormalizedEvidenceVerifier,
 ): Promise<VerifiedNormalizedEvidence | null> {
   if (command.correctedNormalizedEvidenceRef === null) return null;
-  let untrusted: unknown;
-  try {
-    untrusted = await verifier.verify(
-      command.correctedNormalizedEvidenceRef,
-      command.expectedNormalizedSha256 === null
-        ? null
-        : new Uint8Array(command.expectedNormalizedSha256),
-    );
-  } catch {
-    throw new ApiError(
-      422,
-      "NORMALIZED_EVIDENCE_VERIFICATION_FAILED",
-      "Corrected normalized evidence could not be verified.",
-    );
-  }
-  if (!untrusted || typeof untrusted !== "object") {
+  if (command.expectedNormalizedSha256 === null) {
     throw new ApiError(
       422,
       "NORMALIZED_EVIDENCE_BINDING_INVALID",
       "Verified normalized evidence did not bind the reviewed correction.",
     );
   }
-  const verified = untrusted as VerifiedNormalizedEvidence;
-  if (
-    typeof verified.ref !== "string" ||
-    !(verified.sha256 instanceof Uint8Array) ||
-    verified.sha256.byteLength !== 32 ||
-    verified.ref !== command.correctedNormalizedEvidenceRef ||
-    command.expectedNormalizedSha256 === null ||
-    !digestsEqual(verified.sha256, command.expectedNormalizedSha256)
-  ) {
-    throw new ApiError(
-      422,
-      "NORMALIZED_EVIDENCE_BINDING_INVALID",
-      "Verified normalized evidence did not bind the reviewed correction.",
-    );
-  }
-  return { ref: verified.ref, sha256: new Uint8Array(verified.sha256) };
+  return verifyNormalizedEvidenceSnapshot(
+    verifier,
+    command.correctedNormalizedEvidenceRef,
+    command.expectedNormalizedSha256,
+  );
 }
 
 function normalizedEvidenceEqual(

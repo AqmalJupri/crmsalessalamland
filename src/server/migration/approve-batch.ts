@@ -11,6 +11,7 @@ import { importBatches, importRows } from "@/server/db/migration-schema";
 import { auditEvents, memberships, outboxEvents } from "@/server/db/schema";
 import { ApiError } from "@/server/http/errors";
 import type { MigrationActor } from "./contracts";
+import { migrationTextLooksSensitive } from "./redacted-metadata";
 import {
   lockAndValidateMigrationSourceAuthority,
   requireActiveMigrationTenant,
@@ -77,7 +78,7 @@ function validateCommand(
   if (
     approvalReason.length < 1 ||
     approvalReason.length > 2_000 ||
-    /[\u0000-\u001f\u007f]/.test(approvalReason)
+    migrationTextLooksSensitive(approvalReason)
   ) {
     throw new ApiError(
       422,

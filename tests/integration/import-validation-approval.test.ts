@@ -8,6 +8,7 @@ import type { MigrationActor } from "@/server/migration/contracts";
 import { approveImportBatch } from "@/server/migration/approve-batch";
 import { completeDryRun } from "@/server/migration/complete-dry-run";
 import {
+  openQuarantineItem,
   resolveQuarantineItem,
   type NormalizedEvidenceVerifier,
 } from "@/server/migration/quarantine";
@@ -1089,5 +1090,984 @@ describe("maker-checker batch approval", () => {
       from import_batches where id = ${fixture.batchId}
     `;
     expect(stored).toEqual({ status: "VALIDATED", approver: null });
+  });
+});
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve(value: T): void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+async function waitUntilBlockedCountBy(
+  blockerPid: number,
+  expectedCount: number,
+): Promise<void> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    const [row] = await sql<{ blocked_count: string }[]>`
+      select count(*)::text as blocked_count
+      from pg_stat_activity activity
+      where activity.datname = ${expectedDatabaseName}
+        and activity.pid <> pg_backend_pid()
+        and ${blockerPid} = any(pg_blocking_pids(activity.pid))
+    `;
+    if (Number(row?.blocked_count ?? "0") >= expectedCount) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Expected ${expectedCount} backends to block behind PID ${blockerPid}.`);
+}
+
+async function waitUntilBlockedBackendCount(expectedCount: number): Promise<void> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    const [row] = await sql<{ blocked_count: string }[]>`
+      select count(*)::text as blocked_count
+      from pg_stat_activity activity
+      where activity.datname = ${expectedDatabaseName}
+        and activity.pid <> pg_backend_pid()
+        and cardinality(pg_blocking_pids(activity.pid)) > 0
+    `;
+    if (Number(row?.blocked_count ?? "0") >= expectedCount) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Expected ${expectedCount} blocked database backends.`);
+}
+
+async function withRejectedOutboxEvent<T>(
+  eventType: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (!/^crm\.migration\.[a-z_]+$/.test(eventType)) {
+    throw new Error("Synthetic event type is not canonical.");
+  }
+  await sql.unsafe(`
+    create function crm_test_reject_selected_validation_outbox() returns trigger
+    language plpgsql as $$
+    begin
+      raise exception 'synthetic validation outbox failure';
+    end;
+    $$;
+    create trigger crm_test_reject_selected_validation_outbox_trigger
+    before insert on outbox_events
+    for each row when (new.event_type = '${eventType}')
+    execute function crm_test_reject_selected_validation_outbox();
+  `);
+  try {
+    return await operation();
+  } finally {
+    await sql.unsafe(`
+      drop trigger if exists crm_test_reject_selected_validation_outbox_trigger
+        on outbox_events;
+      drop function if exists crm_test_reject_selected_validation_outbox();
+    `);
+  }
+}
+
+async function invokeNormalizedBoundary(
+  path: "DIRECT" | "QUARANTINE",
+  fixture: Fixture,
+  ref: string,
+  digest: Uint8Array,
+  result: unknown,
+): Promise<void> {
+  const verifier = {
+    async verify() {
+      return result;
+    },
+  } as NormalizedEvidenceVerifier;
+  if (path === "DIRECT") {
+    await recordImportRowValidation(
+      fixture.validatorActor,
+      {
+        importRowId: fixture.rowIds[0]!,
+        expectedRowVersion: 1,
+        decision: {
+          outcome: "VALID",
+          normalizedEvidenceRef: ref,
+          normalizedSha256: digest,
+          errorCode: null,
+          redactedMetadata: {},
+        },
+      },
+      verifier,
+    );
+    return;
+  }
+
+  await recordImportRowValidation(
+    fixture.validatorActor,
+    {
+      importRowId: fixture.rowIds[0]!,
+      expectedRowVersion: 1,
+      decision: {
+        outcome: "QUARANTINED",
+        normalizedEvidenceRef: null,
+        normalizedSha256: null,
+        errorCode: "BOUNDARY_REVIEW_REQUIRED",
+        redactedMetadata: { ruleCode: "BOUNDARY_REVIEW_REQUIRED" },
+      },
+    },
+    { async verify() { throw new Error("unused"); } },
+  );
+  const [item] = await sql<{ id: string; item_version: string; row_version: string }[]>`
+    select item.id, item.version as item_version, row_record.version as row_version
+    from quarantine_items item join import_rows row_record on row_record.id = item.import_row_id
+    where item.import_row_id = ${fixture.rowIds[0]!} and item.status = 'OPEN'
+  `;
+  if (!item) throw new Error("Expected a synthetic open quarantine item.");
+  await resolveQuarantineItem(
+    fixture.validatorActor,
+    {
+      quarantineItemId: item.id,
+      disposition: "APPROVE_ROW",
+      resolutionReason: "Reviewed normalized boundary",
+      correctedNormalizedEvidenceRef: ref,
+      expectedNormalizedSha256: digest,
+      expectedItemVersion: Number(item.item_version),
+      expectedRowVersion: Number(item.row_version),
+    },
+    verifier,
+  );
+}
+
+async function expectSanitizedBoundaryRejection(operation: Promise<void>): Promise<void> {
+  let caught: unknown;
+  try {
+    await operation;
+  } catch (error: unknown) {
+    caught = error;
+  }
+  expect(caught).toMatchObject({
+    code: "NORMALIZED_EVIDENCE_BINDING_INVALID",
+    status: 422,
+  });
+  expect(String(caught)).not.toContain("leak@example.test");
+  expect(String(caught)).not.toContain("SUBSTITUTED_SECRET");
+}
+
+async function validationEffects(batchId: string, rowId: string) {
+  const [stored] = await sql<{
+    status: string;
+    outcome: string;
+    normalized_ref: string | null;
+    staged: string;
+    valid: string;
+    row_audits: number;
+    row_outbox: number;
+    batch_audits: number;
+    batch_outbox: number;
+  }[]>`
+    select batch.status, row_record.outcome,
+           row_record.normalized_evidence_ref as normalized_ref,
+           batch.staged_row_count as staged, batch.valid_row_count as valid,
+           (select count(*)::int from audit_events where target_id = ${rowId}
+             and action = 'MIGRATION_IMPORT_ROW_VALIDATED') as row_audits,
+           (select count(*)::int from outbox_events where aggregate_id = ${rowId}
+             and event_type = 'crm.migration.import_row_validated') as row_outbox,
+           (select count(*)::int from audit_events where target_id = ${batchId}
+             and action in ('MIGRATION_IMPORT_BATCH_VALIDATED', 'MIGRATION_DRY_RUN_COMPLETED'))
+             as batch_audits,
+           (select count(*)::int from outbox_events where aggregate_id = ${batchId}
+             and event_type in ('crm.migration.import_batch_validated',
+               'crm.migration.dry_run_completed')) as batch_outbox
+    from import_batches batch join import_rows row_record on row_record.batch_id = batch.id
+    where batch.id = ${batchId} and row_record.id = ${rowId}
+  `;
+  return stored;
+}
+
+describe("review correction: hostile normalized-evidence results", () => {
+  it.each(["DIRECT", "QUARANTINE"] as const)(
+    "%s rejects changing accessors before post-check ref/digest substitution",
+    async (path) => {
+      const fixture = await seedFixture();
+      const expectedRef = protectedRef("expected-boundary");
+      const substitutedRef = protectedRef("SUBSTITUTED_SECRET");
+      const expectedDigest = sha256("expected-boundary");
+      const substitutedDigest = sha256("substituted-boundary");
+      let refReads = 0;
+      let digestReads = 0;
+      const result = {};
+      Object.defineProperties(result, {
+        ref: {
+          enumerable: true,
+          get() {
+            refReads += 1;
+            return refReads <= 2 ? expectedRef : substitutedRef;
+          },
+        },
+        sha256: {
+          enumerable: true,
+          get() {
+            digestReads += 1;
+            return digestReads <= 3 ? expectedDigest : substitutedDigest;
+          },
+        },
+      });
+      await expectSanitizedBoundaryRejection(
+        invokeNormalizedBoundary(path, fixture, expectedRef, expectedDigest, result),
+      );
+      const stored = await validationEffects(fixture.batchId, fixture.rowIds[0]!);
+      expect(stored).toMatchObject({ normalized_ref: null, valid: "0" });
+    },
+  );
+
+  it.each(["DIRECT", "QUARANTINE"] as const)(
+    "%s rejects inherited accessors",
+    async (path) => {
+      const fixture = await seedFixture();
+      const ref = protectedRef("inherited-boundary");
+      const digest = sha256("inherited-boundary");
+      const prototype = Object.create(null) as Record<string, unknown>;
+      Object.defineProperties(prototype, {
+        ref: { get: () => ref },
+        sha256: { get: () => digest },
+      });
+      const result = Object.create(prototype) as unknown;
+      await expectSanitizedBoundaryRejection(
+        invokeNormalizedBoundary(path, fixture, ref, digest, result),
+      );
+    },
+  );
+
+  it.each(["DIRECT", "QUARANTINE"] as const)(
+    "%s sanitizes throwing result getters",
+    async (path) => {
+      const fixture = await seedFixture();
+      const ref = protectedRef("throwing-boundary");
+      const digest = sha256("throwing-boundary");
+      const result = {};
+      Object.defineProperty(result, "ref", {
+        enumerable: true,
+        get() {
+          throw new Error("leak@example.test");
+        },
+      });
+      Object.defineProperty(result, "sha256", { enumerable: true, value: digest });
+      await expectSanitizedBoundaryRejection(
+        invokeNormalizedBoundary(path, fixture, ref, digest, result),
+      );
+    },
+  );
+
+  it.each(["DIRECT", "QUARANTINE"] as const)(
+    "%s rejects Proxy result traps without invoking them",
+    async (path) => {
+      const fixture = await seedFixture();
+      const ref = protectedRef("proxy-boundary");
+      const digest = sha256("proxy-boundary");
+      let trapCalls = 0;
+      const result = new Proxy(
+        { ref, sha256: digest },
+        {
+          getOwnPropertyDescriptor() {
+            trapCalls += 1;
+            throw new Error("leak@example.test");
+          },
+        },
+      );
+      await expectSanitizedBoundaryRejection(
+        invokeNormalizedBoundary(path, fixture, ref, digest, result),
+      );
+      expect(trapCalls).toBe(0);
+    },
+  );
+});
+
+function hostileMetadata(kind: "TOP_LEVEL" | "NESTED" | "THROWING"): Record<string, unknown> {
+  if (kind === "NESTED") {
+    let reads = 0;
+    const nested = {};
+    Object.defineProperty(nested, "detail", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return reads === 1 ? "SAFE_CODE" : "leak@example.test";
+      },
+    });
+    return { nested };
+  }
+  const metadata = {};
+  let reads = 0;
+  Object.defineProperty(metadata, "detail", {
+    enumerable: true,
+    get() {
+      if (kind === "THROWING") throw new Error("leak@example.test");
+      reads += 1;
+      return reads === 1 ? "SAFE_CODE" : "leak@example.test";
+    },
+  });
+  return metadata;
+}
+
+describe("review correction: canonical redacted metadata snapshots", () => {
+  it.each([
+    ["TASK7", "TOP_LEVEL"],
+    ["TASK7", "NESTED"],
+    ["TASK7", "THROWING"],
+    ["TASK6", "TOP_LEVEL"],
+    ["TASK6", "NESTED"],
+    ["TASK6", "THROWING"],
+  ] as const)("%s rejects %s getter metadata without leaking", async (path, kind) => {
+    const fixture = await seedFixture();
+    let caught: unknown;
+    try {
+      if (path === "TASK7") {
+        await recordImportRowValidation(
+          fixture.validatorActor,
+          {
+            importRowId: fixture.rowIds[0]!,
+            expectedRowVersion: 1,
+            decision: {
+              outcome: "REJECTED",
+              normalizedEvidenceRef: null,
+              normalizedSha256: null,
+              errorCode: "HOSTILE_METADATA",
+              redactedMetadata: hostileMetadata(kind),
+            },
+          },
+          { async verify() { throw new Error("unused"); } },
+        );
+      } else {
+        await openQuarantineItem(fixture.validatorActor, {
+          importRowId: fixture.rowIds[0]!,
+          expectedRowVersion: 1,
+          reasonCode: "HOSTILE_METADATA",
+          redactedMetadata: hostileMetadata(kind),
+        });
+      }
+    } catch (error: unknown) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({ code: "MIGRATION_METADATA_NOT_REDACTED", status: 422 });
+    expect(String(caught)).not.toContain("leak@example.test");
+    const [stored] = await sql<{ outcome: string; leaked: boolean; items: number }[]>`
+      select row_record.outcome,
+             exists (
+               select 1 from audit_events where organization_id = ${fixture.organizationId}
+                 and change_summary::text like '%leak@example.test%'
+               union all
+               select 1 from outbox_events where organization_id = ${fixture.organizationId}
+                 and payload::text like '%leak@example.test%'
+             ) as leaked,
+             (select count(*)::int from quarantine_items
+               where import_row_id = row_record.id) as items
+      from import_rows row_record where row_record.id = ${fixture.rowIds[0]!}
+    `;
+    expect(stored).toEqual({ outcome: "STAGED", leaked: false, items: 0 });
+  });
+
+  it.each(["CYCLE", "EXTRA_ARRAY_PROPERTY", "PROXY"] as const)(
+    "rejects %s metadata structures without evaluating traps",
+    async (kind) => {
+      const fixture = await seedFixture();
+      let trapCalls = 0;
+      let metadata: Record<string, unknown>;
+      if (kind === "CYCLE") {
+        metadata = {};
+        metadata.self = metadata;
+      } else if (kind === "EXTRA_ARRAY_PROPERTY") {
+        const values = ["SAFE_CODE"] as string[] & { extra?: string };
+        values.extra = "leak@example.test";
+        metadata = { values };
+      } else {
+        metadata = new Proxy(
+          { detail: "SAFE_CODE" },
+          {
+            ownKeys() {
+              trapCalls += 1;
+              throw new Error("leak@example.test");
+            },
+          },
+        );
+      }
+      await expect(
+        recordImportRowValidation(
+          fixture.validatorActor,
+          {
+            importRowId: fixture.rowIds[0]!,
+            expectedRowVersion: 1,
+            decision: {
+              outcome: "REJECTED",
+              normalizedEvidenceRef: null,
+              normalizedSha256: null,
+              errorCode: "HOSTILE_STRUCTURE",
+              redactedMetadata: metadata,
+            },
+          },
+          { async verify() { throw new Error("unused"); } },
+        ),
+      ).rejects.toMatchObject({ code: "MIGRATION_METADATA_NOT_REDACTED", status: 422 });
+      if (kind === "PROXY") expect(trapCalls).toBe(0);
+    },
+  );
+
+  it.each(["TASK7", "TASK6"] as const)(
+    "%s rejects sensitive metadata keys across every permitted separator",
+    async (path) => {
+      const fixture = await seedFixture();
+      for (const sensitiveKey of [
+        "person.name",
+        "address:line1",
+        "customer_email",
+        "phone-number",
+        "customerEmail",
+      ]) {
+        const operation =
+          path === "TASK7"
+            ? recordImportRowValidation(
+                fixture.validatorActor,
+                {
+                  importRowId: fixture.rowIds[0]!,
+                  expectedRowVersion: 1,
+                  decision: {
+                    outcome: "REJECTED",
+                    normalizedEvidenceRef: null,
+                    normalizedSha256: null,
+                    errorCode: "SENSITIVE_KEY_BYPASS",
+                    redactedMetadata: { [sensitiveKey]: "SAFE_CODE" },
+                  },
+                },
+                { async verify() { throw new Error("unused"); } },
+              )
+            : openQuarantineItem(fixture.validatorActor, {
+                importRowId: fixture.rowIds[0]!,
+                expectedRowVersion: 1,
+                reasonCode: "SENSITIVE_KEY_BYPASS",
+                redactedMetadata: { [sensitiveKey]: "SAFE_CODE" },
+              });
+        await expect(operation).rejects.toMatchObject({
+          code: "MIGRATION_METADATA_NOT_REDACTED",
+          status: 422,
+        });
+      }
+      expect(await validationEffects(fixture.batchId, fixture.rowIds[0]!)).toMatchObject({
+        outcome: "STAGED",
+        row_audits: 0,
+        row_outbox: 0,
+      });
+    },
+  );
+
+  it.each(["TASK7", "TASK6"] as const)(
+    "%s rejects embedded JSON and prose PII inside generic metadata values",
+    async (path) => {
+      const fixture = await seedFixture();
+      for (const [errorCode, value] of [
+        ["EMBEDDED_RECORD_BYPASS", 'record={"customer":"Alice Example"}'],
+        ["PROSE_VALUE_BYPASS", "Alice Example"],
+      ] as const) {
+        const operation =
+          path === "TASK7"
+            ? recordImportRowValidation(
+                fixture.validatorActor,
+                {
+                  importRowId: fixture.rowIds[0]!,
+                  expectedRowVersion: 1,
+                  decision: {
+                    outcome: "REJECTED",
+                    normalizedEvidenceRef: null,
+                    normalizedSha256: null,
+                    errorCode,
+                    redactedMetadata: { detail: value },
+                  },
+                },
+                { async verify() { throw new Error("unused"); } },
+              )
+            : openQuarantineItem(fixture.validatorActor, {
+                importRowId: fixture.rowIds[0]!,
+                expectedRowVersion: 1,
+                reasonCode: errorCode,
+                redactedMetadata: { detail: value },
+              });
+        await expect(operation).rejects.toMatchObject({
+          code: "MIGRATION_METADATA_NOT_REDACTED",
+          status: 422,
+        });
+      }
+      expect(await validationEffects(fixture.batchId, fixture.rowIds[0]!)).toMatchObject({
+        outcome: "STAGED",
+        row_audits: 0,
+        row_outbox: 0,
+      });
+    },
+  );
+});
+
+describe("review correction: external-verifier acquisition envelope", () => {
+  it("rejects a schema/version envelope change during verifier I/O with no validation effects", async () => {
+    const fixture = await seedFixture();
+    const ref = protectedRef("schema-barrier");
+    const bytes = Buffer.from("schema-barrier");
+    await expect(
+      recordImportRowValidation(
+        fixture.validatorActor,
+        {
+          importRowId: fixture.rowIds[0]!,
+          expectedRowVersion: 1,
+          decision: {
+            outcome: "VALID",
+            normalizedEvidenceRef: ref,
+            normalizedSha256: sha256(bytes),
+            errorCode: null,
+            redactedMetadata: {},
+          },
+        },
+        {
+          async verify() {
+            await sql`
+              update import_batches set schema_version = 'sales.v2'
+              where id = ${fixture.batchId}
+            `;
+            return { ref, sha256: sha256(bytes) };
+          },
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: "IMPORT_BATCH_CHANGED_DURING_VERIFICATION",
+      status: 409,
+    });
+    expect(await validationEffects(fixture.batchId, fixture.rowIds[0]!)).toEqual({
+      status: "STAGED",
+      outcome: "STAGED",
+      normalized_ref: null,
+      staged: "1",
+      valid: "0",
+      row_audits: 0,
+      row_outbox: 0,
+      batch_audits: 0,
+      batch_outbox: 0,
+    });
+  });
+});
+
+describe("review correction: sensitive approval reasons and safe counters", () => {
+  it.each([
+    "reviewer@example.test",
+    "+60 12-345 6789",
+    "token=secret-value",
+    '{"customer":"full-record"}',
+    'record={"customer":"Alice Example"}',
+  ])("rejects sensitive approval reason %s with no effects", async (reason) => {
+    const fixture = await seedFixture(["VALID"], false);
+    const validated = await validateFixture(fixture);
+    await expect(
+      approveImportBatch(fixture.approverActor, {
+        batchId: fixture.batchId,
+        expectedBatchVersion: validated.version,
+        approvalMode: "FULL",
+        approvalReason: reason,
+      }),
+    ).rejects.toMatchObject({ code: "IMPORT_BATCH_APPROVAL_REASON_REQUIRED", status: 422 });
+    const [stored] = await sql<{
+      status: string;
+      reason: string | null;
+      audits: number;
+      outbox: number;
+    }[]>`
+      select batch.status, batch.approval_reason as reason,
+             (select count(*)::int from audit_events where target_id = batch.id
+               and action = 'MIGRATION_IMPORT_BATCH_APPROVED') as audits,
+             (select count(*)::int from outbox_events where aggregate_id = batch.id
+               and event_type = 'crm.migration.import_batch_approved') as outbox
+      from import_batches batch where batch.id = ${fixture.batchId}
+    `;
+    expect(stored).toEqual({ status: "VALIDATED", reason: null, audits: 0, outbox: 0 });
+  });
+
+  it("rejects MAX_SAFE + 1 counter arithmetic atomically", async () => {
+    const fixture = await seedFixture();
+    await sql`
+      update import_batches
+      set total_row_count = 9007199254740992,
+          valid_row_count = 9007199254740991,
+          staged_row_count = 1
+      where id = ${fixture.batchId}
+    `;
+    const ref = protectedRef("unsafe-counter");
+    const bytes = Buffer.from("unsafe-counter");
+    await expect(
+      recordImportRowValidation(
+        fixture.validatorActor,
+        {
+          importRowId: fixture.rowIds[0]!,
+          expectedRowVersion: 1,
+          decision: {
+            outcome: "VALID",
+            normalizedEvidenceRef: ref,
+            normalizedSha256: sha256(bytes),
+            errorCode: null,
+            redactedMetadata: {},
+          },
+        },
+        normalizedVerifier(ref, bytes),
+      ),
+    ).rejects.toMatchObject({ code: "IMPORT_BATCH_COUNTER_CONFLICT", status: 409 });
+    const [stored] = await sql<{
+      outcome: string;
+      staged: string;
+      valid: string;
+      audits: number;
+      outbox: number;
+    }[]>`
+      select row_record.outcome, batch.staged_row_count as staged,
+             batch.valid_row_count as valid,
+             (select count(*)::int from audit_events where target_id = row_record.id
+               and action = 'MIGRATION_IMPORT_ROW_VALIDATED') as audits,
+             (select count(*)::int from outbox_events where aggregate_id = row_record.id
+               and event_type = 'crm.migration.import_row_validated') as outbox
+      from import_rows row_record join import_batches batch on batch.id = row_record.batch_id
+      where row_record.id = ${fixture.rowIds[0]!}
+    `;
+    expect(stored).toEqual({
+      outcome: "STAGED",
+      staged: "1",
+      valid: "9007199254740991",
+      audits: 0,
+      outbox: 0,
+    });
+  });
+});
+
+describe("review correction: atomicity and serialization evidence", () => {
+  it("rolls back row validation when its outbox effect fails", async () => {
+    const fixture = await seedFixture();
+    const initialBatchVersion = await batchVersion(fixture.batchId);
+    await withRejectedOutboxEvent("crm.migration.import_row_validated", async () => {
+      await expect(
+        recordImportRowValidation(
+          fixture.validatorActor,
+          {
+            importRowId: fixture.rowIds[0]!,
+            expectedRowVersion: 1,
+            decision: {
+              outcome: "REJECTED",
+              normalizedEvidenceRef: null,
+              normalizedSha256: null,
+              errorCode: "SYNTHETIC_EFFECT_FAILURE",
+              redactedMetadata: { ruleCode: "SYNTHETIC_EFFECT_FAILURE" },
+            },
+          },
+          { async verify() { throw new Error("unused"); } },
+        ),
+      ).rejects.toMatchObject({ code: "IMPORT_ROW_VALIDATION_FAILED", status: 500 });
+    });
+    const [stored] = await sql<{
+      status: string;
+      batch_version: string;
+      outcome: string;
+      row_version: string;
+      staged: string;
+      rejected: string;
+      audits: number;
+      outbox: number;
+    }[]>`
+      select batch.status, batch.version as batch_version, row_record.outcome,
+             row_record.version as row_version, batch.staged_row_count as staged,
+             batch.rejected_row_count as rejected,
+             (select count(*)::int from audit_events where target_id = row_record.id
+               and action = 'MIGRATION_IMPORT_ROW_VALIDATED') as audits,
+             (select count(*)::int from outbox_events where aggregate_id = row_record.id
+               and event_type = 'crm.migration.import_row_validated') as outbox
+      from import_batches batch join import_rows row_record on row_record.batch_id = batch.id
+      where batch.id = ${fixture.batchId} and row_record.id = ${fixture.rowIds[0]!}
+    `;
+    expect(stored).toEqual({
+      status: "STAGED",
+      batch_version: String(initialBatchVersion),
+      outcome: "STAGED",
+      row_version: "1",
+      staged: "1",
+      rejected: "0",
+      audits: 0,
+      outbox: 0,
+    });
+  });
+
+  it("rolls back batch validation when its outbox effect fails", async () => {
+    const fixture = await seedFixture(["VALID"]);
+    const initialBatchVersion = await batchVersion(fixture.batchId);
+    await withRejectedOutboxEvent("crm.migration.import_batch_validated", async () => {
+      await expect(
+        validateImportBatch(fixture.validatorActor, {
+          batchId: fixture.batchId,
+          expectedBatchVersion: initialBatchVersion,
+        }),
+      ).rejects.toMatchObject({ code: "IMPORT_BATCH_VALIDATION_FAILED", status: 500 });
+    });
+    const [stored] = await sql<{
+      status: string;
+      version: string;
+      validator: string | null;
+      validated_at: Date | null;
+      audits: number;
+      outbox: number;
+    }[]>`
+      select batch.status, batch.version, batch.validated_by_membership_id as validator,
+             batch.validated_at,
+             (select count(*)::int from audit_events where target_id = batch.id
+               and action = 'MIGRATION_IMPORT_BATCH_VALIDATED') as audits,
+             (select count(*)::int from outbox_events where aggregate_id = batch.id
+               and event_type = 'crm.migration.import_batch_validated') as outbox
+      from import_batches batch where batch.id = ${fixture.batchId}
+    `;
+    expect(stored).toEqual({
+      status: "STAGED",
+      version: String(initialBatchVersion),
+      validator: null,
+      validated_at: null,
+      audits: 0,
+      outbox: 0,
+    });
+  });
+
+  it("rolls back dry-run completion when its outbox effect fails", async () => {
+    const fixture = await seedFixture(["VALID"]);
+    const validated = await validateFixture(fixture);
+    await withRejectedOutboxEvent("crm.migration.dry_run_completed", async () => {
+      await expect(
+        completeDryRun(fixture.validatorActor, {
+          batchId: fixture.batchId,
+          expectedValidatedBatchVersion: validated.version,
+        }),
+      ).rejects.toMatchObject({ code: "DRY_RUN_COMPLETION_FAILED", status: 500 });
+    });
+    const [stored] = await sql<{
+      status: string;
+      version: string;
+      dry_audits: number;
+      dry_outbox: number;
+    }[]>`
+      select batch.status, batch.version,
+             (select count(*)::int from audit_events where target_id = batch.id
+               and action = 'MIGRATION_DRY_RUN_COMPLETED') as dry_audits,
+             (select count(*)::int from outbox_events where aggregate_id = batch.id
+               and event_type = 'crm.migration.dry_run_completed') as dry_outbox
+      from import_batches batch where batch.id = ${fixture.batchId}
+    `;
+    expect(stored).toEqual({
+      status: "VALIDATED",
+      version: String(validated.version),
+      dry_audits: 0,
+      dry_outbox: 0,
+    });
+  });
+
+  it("allows distinct staged rows that reviewed the same batch envelope to commit", async () => {
+    const fixture = await seedFixture(["STAGED", "STAGED"]);
+    const refs = [protectedRef("parallel-row-a"), protectedRef("parallel-row-b")];
+    const digests = [sha256("parallel-row-a"), sha256("parallel-row-b")];
+    const bothVerifiersEntered = deferred<void>();
+    const releaseVerifiers = deferred<void>();
+    let enteredCount = 0;
+    const decisions = fixture.rowIds.map((rowId, index) =>
+      recordImportRowValidation(
+        fixture.validatorActor,
+        {
+          importRowId: rowId,
+          expectedRowVersion: 1,
+          decision: {
+            outcome: "VALID",
+            normalizedEvidenceRef: refs[index]!,
+            normalizedSha256: digests[index]!,
+            errorCode: null,
+            redactedMetadata: {},
+          },
+        },
+        {
+          async verify(ref) {
+            enteredCount += 1;
+            if (enteredCount === fixture.rowIds.length) {
+              bothVerifiersEntered.resolve(undefined);
+            }
+            await releaseVerifiers.promise;
+            return { ref, sha256: digests[index]! };
+          },
+        },
+      ),
+    );
+    await bothVerifiersEntered.promise;
+    releaseVerifiers.resolve(undefined);
+    const outcomes = await Promise.allSettled(decisions);
+    expect(outcomes).toEqual([
+      { status: "fulfilled", value: undefined },
+      { status: "fulfilled", value: undefined },
+    ]);
+    const [stored] = await sql<{
+      staged: string;
+      valid: string;
+      valid_rows: number;
+      audits: number;
+      outbox: number;
+    }[]>`
+      select batch.staged_row_count as staged, batch.valid_row_count as valid,
+             (select count(*)::int from import_rows where batch_id = batch.id
+               and outcome = 'VALID') as valid_rows,
+             (select count(*)::int from audit_events where correlation_id = batch.id
+               and action = 'MIGRATION_IMPORT_ROW_VALIDATED') as audits,
+             (select count(*)::int from outbox_events where correlation_id = batch.id
+               and event_type = 'crm.migration.import_row_validated') as outbox
+      from import_batches batch where batch.id = ${fixture.batchId}
+    `;
+    expect(stored).toEqual({ staged: "0", valid: "2", valid_rows: 2, audits: 2, outbox: 2 });
+  });
+
+  it("serializes concurrent decisions for the same staged row to one exact effect", async () => {
+    const fixture = await seedFixture();
+    const rowId = fixture.rowIds[0]!;
+    const normalizedRef = protectedRef("concurrent-row-decision");
+    const normalizedBytes = Buffer.from("concurrent-row-decision");
+    const decisions = await Promise.allSettled([
+      recordImportRowValidation(
+        fixture.validatorActor,
+        {
+          importRowId: rowId,
+          expectedRowVersion: 1,
+          decision: {
+            outcome: "VALID",
+            normalizedEvidenceRef: normalizedRef,
+            normalizedSha256: sha256(normalizedBytes),
+            errorCode: null,
+            redactedMetadata: {},
+          },
+        },
+        normalizedVerifier(normalizedRef, normalizedBytes),
+      ),
+      recordImportRowValidation(
+        fixture.validatorActor,
+        {
+          importRowId: rowId,
+          expectedRowVersion: 1,
+          decision: {
+            outcome: "REJECTED",
+            normalizedEvidenceRef: null,
+            normalizedSha256: null,
+            errorCode: "CONCURRENT_REJECTION",
+            redactedMetadata: { ruleCode: "CONCURRENT_REJECTION" },
+          },
+        },
+        { async verify() { throw new Error("unused"); } },
+      ),
+    ]);
+    expect(decisions.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = decisions.filter((result) => result.status === "rejected");
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]!.reason).toMatchObject({ status: 409 });
+    const [stored] = await sql<{
+      outcome: string;
+      staged: string;
+      valid: string;
+      rejected: string;
+      audits: number;
+      outbox: number;
+    }[]>`
+      select row_record.outcome, batch.staged_row_count as staged,
+             batch.valid_row_count as valid, batch.rejected_row_count as rejected,
+             (select count(*)::int from audit_events where target_id = row_record.id
+               and action = 'MIGRATION_IMPORT_ROW_VALIDATED') as audits,
+             (select count(*)::int from outbox_events where aggregate_id = row_record.id
+               and event_type = 'crm.migration.import_row_validated') as outbox
+      from import_rows row_record join import_batches batch on batch.id = row_record.batch_id
+      where row_record.id = ${rowId}
+    `;
+    expect(["VALID", "REJECTED"]).toContain(stored?.outcome);
+    expect(stored).toMatchObject({ staged: "0", audits: 1, outbox: 1 });
+    expect(Number(stored?.valid) + Number(stored?.rejected)).toBe(1);
+  });
+
+  it("deterministically lets a row decision serialize before batch validation", async () => {
+    const fixture = await seedFixture();
+    const rowId = fixture.rowIds[0]!;
+    const initialBatchVersion = await batchVersion(fixture.batchId);
+    const normalizedRef = protectedRef("decision-before-validation");
+    const normalizedDigest = sha256("decision-before-validation");
+    const verifierEntered = deferred<void>();
+    const releaseVerifier = deferred<void>();
+    const decision = recordImportRowValidation(
+      fixture.validatorActor,
+      {
+        importRowId: rowId,
+        expectedRowVersion: 1,
+        decision: {
+          outcome: "VALID",
+          normalizedEvidenceRef: normalizedRef,
+          normalizedSha256: normalizedDigest,
+          errorCode: null,
+          redactedMetadata: {},
+        },
+      },
+      {
+        async verify(ref) {
+          verifierEntered.resolve(undefined);
+          await releaseVerifier.promise;
+          return { ref, sha256: normalizedDigest };
+        },
+      },
+    );
+    await verifierEntered.promise;
+
+    const blocker = postgres(databaseUrl, { max: 1, prepare: false, onnotice: () => undefined });
+    let validation: Promise<unknown> | undefined;
+    try {
+      await blocker.begin(async (transaction) => {
+        const [pid] = await transaction<{ pid: number }[]>`select pg_backend_pid() as pid`;
+        await transaction`select id from import_batches where id = ${fixture.batchId} for update`;
+        releaseVerifier.resolve(undefined);
+        await waitUntilBlockedCountBy(pid!.pid, 1);
+        validation = validateImportBatch(fixture.validatorActor, {
+          batchId: fixture.batchId,
+          expectedBatchVersion: initialBatchVersion,
+        });
+        await waitUntilBlockedBackendCount(2);
+      });
+      await expect(decision).resolves.toBeUndefined();
+      await expect(validation).rejects.toMatchObject({
+        code: "IMPORT_BATCH_VERSION_CONFLICT",
+        status: 409,
+      });
+    } finally {
+      releaseVerifier.resolve(undefined);
+      await Promise.allSettled([decision, ...(validation ? [validation] : [])]);
+      await blocker.end();
+    }
+    const [stored] = await sql<{
+      status: string;
+      outcome: string;
+      staged: string;
+      valid: string;
+      row_audits: number;
+      row_outbox: number;
+      batch_audits: number;
+      batch_outbox: number;
+    }[]>`
+      select batch.status, row_record.outcome, batch.staged_row_count as staged,
+             batch.valid_row_count as valid,
+             (select count(*)::int from audit_events where target_id = row_record.id
+               and action = 'MIGRATION_IMPORT_ROW_VALIDATED') as row_audits,
+             (select count(*)::int from outbox_events where aggregate_id = row_record.id
+               and event_type = 'crm.migration.import_row_validated') as row_outbox,
+             (select count(*)::int from audit_events where target_id = batch.id
+               and action = 'MIGRATION_IMPORT_BATCH_VALIDATED') as batch_audits,
+             (select count(*)::int from outbox_events where aggregate_id = batch.id
+               and event_type = 'crm.migration.import_batch_validated') as batch_outbox
+      from import_batches batch join import_rows row_record on row_record.batch_id = batch.id
+      where batch.id = ${fixture.batchId} and row_record.id = ${rowId}
+    `;
+    expect(stored).toEqual({
+      status: "STAGED",
+      outcome: "VALID",
+      staged: "0",
+      valid: "1",
+      row_audits: 1,
+      row_outbox: 1,
+      batch_audits: 0,
+      batch_outbox: 0,
+    });
   });
 });

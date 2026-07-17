@@ -1,9 +1,53 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { runInNewContext } from "node:vm";
 import postgres from "postgres";
 
 const baseUrl = process.env.PRODUCTION_SMOKE_URL ?? "http://127.0.0.1:3000";
 const requestTimeoutMs = 10_000;
+const privateRobots = "noindex, nofollow, noarchive";
+const failClosedFallbackCsp =
+  "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'";
+const unavailableHtml =
+  '<!doctype html><html lang="ms"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow,noarchive"><title>Tidak tersedia</title></head><body><main><p>Aplikasi tidak tersedia di luar talian.</p></main></body></html>';
+const oldMetadataDescription = "CRM dan revenue operations Salam";
+const expectedMigrationLedger = [
+  {
+    filename: "0001_foundation.sql",
+    checksum: "169f78b45d72a1119969defafee5c2ab6934bb21682ebc53e90850e7651ea0de",
+  },
+  {
+    filename: "0002_migration_platform.sql",
+    checksum: "2e8425ae8f551fc5b8c96466f36e917df118a12a18c66e69ec68800e73ec0e73",
+  },
+];
+const navigationItems = [
+  ["/", "Utama", undefined],
+  ["/leads", "Lead", "lead.read"],
+  ["/pipeline", "Pipeline", "opportunity.read"],
+  ["/tasks", "Tugasan", "task.read"],
+  ["/orders", "Pesanan", "order.read"],
+  ["/inventory", "Inventori", "inventory.read"],
+  ["/finance", "Kewangan", "finance.read"],
+  ["/marketing", "Pemasaran", "marketing.read"],
+  ["/reports", "Laporan", "report.read"],
+  ["/team", "Pasukan", "team.read"],
+  ["/settings", "Tetapan", "settings.read"],
+];
+const surfaceContracts = {
+  crm: {
+    name: "Salam CRM",
+    otherName: "Tasha",
+    routes: navigationItems,
+  },
+  tasha: {
+    name: "Tasha",
+    otherName: "Salam CRM",
+    routes: navigationItems.filter(([path]) =>
+      ["/", "/inventory", "/orders", "/finance", "/tasks", "/reports"].includes(path),
+    ),
+  },
+};
 const databaseUrl = process.env.DATABASE_URL;
 const productSurface = process.env.PRODUCT_SURFACE;
 assert.ok(databaseUrl, "DATABASE_URL is required for the production runtime smoke.");
@@ -20,6 +64,7 @@ assert.match(
 );
 
 const sql = postgres(databaseUrl, { max: 1, prepare: false, onnotice: () => undefined });
+const surfaceContract = surfaceContracts[productSurface];
 const restrictedFixture = {
   organizationId: "10000000-0000-4000-8000-000000000010",
   businessUnitId: "10000000-0000-4000-8000-000000000101",
@@ -28,6 +73,134 @@ const restrictedFixture = {
   sessionId: "10000000-0000-4000-8000-000000000301",
   sessionToken: "production-runtime-restricted-viewer",
 };
+const authorizedFixture = {
+  organizationId: "20000000-0000-4000-8000-000000000020",
+  businessUnitId: "20000000-0000-4000-8000-000000000102",
+  userId: "20000000-0000-4000-8000-000000000002",
+  membershipId: "20000000-0000-4000-8000-000000000202",
+  roleId: "20000000-0000-4000-8000-000000000402",
+  sessionId: "20000000-0000-4000-8000-000000000302",
+  sessionToken: "production-runtime-authorized-shell-viewer",
+};
+const authorizedCapabilities = navigationItems.flatMap(([, , capability]) =>
+  capability ? [capability] : [],
+);
+
+async function removeAuthorizedFixture() {
+  await sql.begin(async (transaction) => {
+    await transaction`
+      delete from membership_roles
+      where organization_id = ${authorizedFixture.organizationId}
+    `;
+    await transaction`
+      delete from role_capabilities
+      where organization_id = ${authorizedFixture.organizationId}
+    `;
+    await transaction`delete from sessions where id = ${authorizedFixture.sessionId}`;
+    await transaction`delete from memberships where id = ${authorizedFixture.membershipId}`;
+    await transaction`delete from roles where id = ${authorizedFixture.roleId}`;
+    await transaction`delete from users where id = ${authorizedFixture.userId}`;
+    await transaction`delete from business_units where id = ${authorizedFixture.businessUnitId}`;
+    await transaction`delete from organizations where id = ${authorizedFixture.organizationId}`;
+    for (const capability of authorizedCapabilities) {
+      await transaction`
+        delete from capabilities
+        where key = ${capability}
+          and description = ${`Runtime shell proof for ${capability}`}
+          and not exists (
+            select 1 from role_capabilities where capability_key = ${capability}
+          )
+      `;
+    }
+  });
+}
+
+async function provisionAuthorizedFixture() {
+  await removeAuthorizedFixture();
+  const tokenHash = createHash("sha256").update(authorizedFixture.sessionToken).digest();
+  await sql.begin(async (transaction) => {
+    await transaction`
+      insert into organizations (id, code, name)
+      values (${authorizedFixture.organizationId}, 'runtime-shell', 'Runtime Shell')
+    `;
+    await transaction`
+      insert into business_units (id, organization_id, code, name)
+      values (
+        ${authorizedFixture.businessUnitId},
+        ${authorizedFixture.organizationId},
+        'salam-land',
+        'Salam Land'
+      )
+    `;
+    await transaction`
+      insert into users (id, auth_subject, display_name, user_type, status)
+      values (
+        ${authorizedFixture.userId},
+        'https://identity.example.test#runtime-shell',
+        'Runtime Shell',
+        'HUMAN',
+        'ACTIVE'
+      )
+    `;
+    await transaction`
+      insert into memberships (
+        id, organization_id, business_unit_id, user_id, status, valid_from
+      ) values (
+        ${authorizedFixture.membershipId},
+        ${authorizedFixture.organizationId},
+        ${authorizedFixture.businessUnitId},
+        ${authorizedFixture.userId},
+        'ACTIVE',
+        clock_timestamp() - interval '1 minute'
+      )
+    `;
+    await transaction`
+      insert into roles (id, organization_id, key, name)
+      values (
+        ${authorizedFixture.roleId},
+        ${authorizedFixture.organizationId},
+        'runtime-shell-viewer',
+        'Runtime Shell Viewer'
+      )
+    `;
+    for (const capability of authorizedCapabilities) {
+      await transaction`
+        insert into capabilities (key, description)
+        values (${capability}, ${`Runtime shell proof for ${capability}`})
+      `;
+      await transaction`
+        insert into role_capabilities (organization_id, role_id, capability_key)
+        values (
+          ${authorizedFixture.organizationId},
+          ${authorizedFixture.roleId},
+          ${capability}
+        )
+      `;
+    }
+    await transaction`
+      insert into membership_roles (organization_id, membership_id, role_id)
+      values (
+        ${authorizedFixture.organizationId},
+        ${authorizedFixture.membershipId},
+        ${authorizedFixture.roleId}
+      )
+    `;
+    await transaction`
+      insert into sessions (
+        id, organization_id, active_business_unit_id, user_id, token_hash, last_seen_at,
+        expires_at
+      ) values (
+        ${authorizedFixture.sessionId},
+        ${authorizedFixture.organizationId},
+        ${authorizedFixture.businessUnitId},
+        ${authorizedFixture.userId},
+        ${tokenHash},
+        clock_timestamp() - interval '1 hour',
+        clock_timestamp() + interval '1 hour'
+      )
+    `;
+  });
+}
 
 async function removeRestrictedFixture() {
   await sql.begin(async (transaction) => {
@@ -105,10 +278,52 @@ async function readRestrictedLastSeen() {
   return session.value;
 }
 
+function requirePrivateRobotsHeader(response) {
+  assert.equal(response.headers.get("x-robots-tag"), privateRobots);
+}
+
 function requireBaselineHeaders(response) {
+  requirePrivateRobotsHeader(response);
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   assert.equal(response.headers.get("x-frame-options"), "DENY");
   assert.match(response.headers.get("cache-control") ?? "", /no-store/i);
+}
+
+function attributeValue(tag, attribute) {
+  return tag.match(new RegExp(`\\b${attribute}=["']([^"']*)["']`, "i"))?.[1];
+}
+
+function metaContent(html, name) {
+  const tag = (html.match(/<meta\b[^>]*>/gi) ?? []).find(
+    (candidate) => attributeValue(candidate, "name")?.toLowerCase() === name.toLowerCase(),
+  );
+  assert.ok(tag, `HTML must contain ${name} metadata.`);
+  return attributeValue(tag, "content");
+}
+
+function visibleBodyText(html) {
+  return (html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1] ?? "")
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function requireSurfaceMetadata(html) {
+  const htmlTag = html.match(/<html\b[^>]*>/i)?.[0];
+  assert.ok(htmlTag, "HTML root element is required.");
+  assert.equal(attributeValue(htmlTag, "lang"), "ms");
+  assert.equal(metaContent(html, "color-scheme"), "light");
+  assert.equal(metaContent(html, "theme-color"), "#0B172A");
+  assert.equal(metaContent(html, "robots"), privateRobots);
+  assert.match(
+    html,
+    new RegExp(`<title>Log masuk · ${surfaceContract.name}<\\/title>`, "i"),
+  );
+  const visibleText = visibleBodyText(html);
+  assert.doesNotMatch(visibleText, new RegExp(oldMetadataDescription, "i"));
+  assert.doesNotMatch(visibleText, new RegExp(surfaceContract.otherName, "i"));
 }
 
 function requireSecurityHeaders(response) {
@@ -150,14 +365,182 @@ function fetchBounded(input, init = {}, timeoutMs = requestTimeoutMs) {
   });
 }
 
-async function verifyHtml(path, expectedStatus, headers) {
+async function verifyHtml(path, expectedStatus, headers, verifyMetadata = false) {
   const response = await fetchBounded(new URL(path, baseUrl), {
     redirect: "manual",
     ...(headers ? { headers } : {}),
   });
   assert.equal(response.status, expectedStatus, `${path} returned ${response.status}.`);
   const nonce = requireSecurityHeaders(response);
-  requireMatchingHtmlNonces(await response.text(), nonce);
+  const html = await response.text();
+  requireMatchingHtmlNonces(html, nonce);
+  if (verifyMetadata) requireSurfaceMetadata(html);
+  return html;
+}
+
+async function verifyManifest() {
+  const response = await fetchBounded(new URL("/manifest.webmanifest", baseUrl));
+  assert.equal(response.status, 200);
+  requirePrivateRobotsHeader(response);
+  assert.match(response.headers.get("content-type") ?? "", /^application\/manifest\+json\b/i);
+  const expected = {
+    name: surfaceContract.name,
+    short_name: surfaceContract.name,
+    lang: "ms",
+    start_url: "/",
+    scope: "/",
+    display: "standalone",
+    background_color: "#F8FAFC",
+    theme_color: "#0B172A",
+    icons: [
+      {
+        src: `/icons/${productSurface}-192.png`,
+        sizes: "192x192",
+        type: "image/png",
+        purpose: "any",
+      },
+      {
+        src: `/icons/${productSurface}-512.png`,
+        sizes: "512x512",
+        type: "image/png",
+        purpose: "any",
+      },
+      {
+        src: `/icons/${productSurface}-maskable-512.png`,
+        sizes: "512x512",
+        type: "image/png",
+        purpose: "maskable",
+      },
+    ],
+  };
+  const manifest = await response.json();
+  assert.deepEqual(manifest, expected);
+  const serialized = JSON.stringify(manifest);
+  assert.doesNotMatch(serialized, new RegExp(surfaceContract.otherName, "i"));
+  assert.doesNotMatch(serialized, new RegExp(`/icons/${productSurface === "crm" ? "tasha" : "crm"}-`, "i"));
+}
+
+async function verifyServiceWorker() {
+  const response = await fetchBounded(new URL("/sw.js", baseUrl));
+  assert.equal(response.status, 200);
+  requirePrivateRobotsHeader(response);
+  assert.match(response.headers.get("content-type") ?? "", /javascript/i);
+  const source = await response.text();
+  assert.doesNotMatch(source, /\bcaches\b|CacheStorage|cache\.(?:match|put)|caches\.open/);
+
+  let fetchListener;
+  let requested;
+  const worker = {
+    addEventListener(type, listener) {
+      if (type === "fetch") fetchListener = listener;
+    },
+    clients: { claim: () => undefined },
+    skipWaiting: () => undefined,
+  };
+  runInNewContext(source, {
+    Response,
+    self: worker,
+    fetch: (request, init) => {
+      requested = { request, init };
+      return Promise.reject(new TypeError("offline"));
+    },
+  });
+  assert.equal(typeof fetchListener, "function", "The fetched worker must install a fetch listener.");
+  let responsePromise;
+  const request = { mode: "navigate", url: `${baseUrl}/private/customer?record=runtime` };
+  fetchListener({
+    request,
+    respondWith(candidate) {
+      responsePromise = candidate;
+    },
+  });
+  assert.equal(requested?.request, request);
+  assert.deepEqual(Object.keys(requested?.init ?? {}), ["cache"]);
+  assert.equal(requested?.init?.cache, "no-store");
+  assert.ok(responsePromise, "The worker must respond to navigation requests.");
+  const fallback = await responsePromise;
+  assert.equal(fallback.status, 503);
+  assert.equal(fallback.statusText, "Service Unavailable");
+  assert.equal(fallback.headers.get("content-type"), "text/html; charset=utf-8");
+  assert.equal(fallback.headers.get("cache-control"), "no-store");
+  assert.equal(fallback.headers.get("x-robots-tag"), privateRobots);
+  assert.equal(fallback.headers.get("content-security-policy"), failClosedFallbackCsp);
+  assert.equal(await fallback.text(), unavailableHtml);
+}
+
+function decodeHtmlText(value) {
+  return value
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&#x27;|&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function verifyAuthorizedSurfaceShell() {
+  const response = await fetchBounded(new URL("/?bu=salam-land", baseUrl), {
+    headers: { Cookie: `crm_session=${authorizedFixture.sessionToken}` },
+    redirect: "manual",
+  });
+  assert.equal(response.status, 200);
+  const nonce = requireSecurityHeaders(response);
+  const html = await response.text();
+  requireMatchingHtmlNonces(html, nonce);
+  assert.doesNotMatch(html, new RegExp(surfaceContract.otherName, "i"));
+  assert.doesNotMatch(
+    html,
+    new RegExp(`/icons/${productSurface === "crm" ? "tasha" : "crm"}-`, "i"),
+  );
+
+  const navigationHtml = html.match(
+    /<nav\b[^>]*\baria-label=["']Navigasi utama["'][^>]*>[\s\S]*?<\/nav>/i,
+  )?.[0];
+  assert.ok(navigationHtml, "The authorized shell must render its primary navigation.");
+  const linksByPath = new Map();
+  for (const match of navigationHtml.matchAll(
+    /<a\b[^>]*\bhref=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
+  )) {
+    const href = match[1].replace(/&amp;/g, "&");
+    const pathname = new URL(href, baseUrl).pathname;
+    const label = decodeHtmlText(match[2]);
+    assert.ok(!linksByPath.has(pathname), `Navigation route ${pathname} must be unique.`);
+    linksByPath.set(pathname, label);
+  }
+  assert.deepEqual(
+    [...linksByPath.entries()].sort(([left], [right]) => left.localeCompare(right)),
+    surfaceContract.routes
+      .map(([path, label]) => [path, label])
+      .sort(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+async function verifyMigrationLedger() {
+  const rows = await sql`
+    select filename, checksum from schema_migrations order by filename
+  `;
+  assert.deepEqual(
+    Array.from(rows, ({ filename, checksum }) => ({ filename, checksum })),
+    expectedMigrationLedger,
+  );
+}
+
+async function verifyProductionStateGalleryUnavailableBeforeViewer() {
+  const lastSeenBefore = await readRestrictedLastSeen();
+  const response = await fetchBounded(new URL("/__ui-test__/states", baseUrl), {
+    headers: { Cookie: `crm_session=${restrictedFixture.sessionToken}` },
+    redirect: "manual",
+  });
+  assert.equal(response.status, 404);
+  const nonce = requireSecurityHeaders(response);
+  const html = await response.text();
+  assert.match(html, /Halaman tidak ditemui/);
+  requireMatchingHtmlNonces(html, nonce);
+  assert.equal(
+    await readRestrictedLastSeen(),
+    lastSeenBefore,
+    "The production-only state-gallery rejection must happen before viewer session access.",
+  );
 }
 
 async function verifyRscPrefetch(path) {
@@ -252,7 +635,7 @@ async function verifyMalformedPrefetchRejected(path) {
 }
 
 try {
-  await verifyHtml("/login", 200);
+  await verifyHtml("/login", 200, undefined, true);
   await verifyHtml("/does-not-exist", 404);
   await verifyHtml("/login", 200, { "next-router-prefetch": "0" });
   const allowedModulePath = productSurface === "tasha" ? "/inventory" : "/leads";
@@ -261,6 +644,9 @@ try {
   await verifyMalformedPrefetchRejected("/login");
   await verifyMalformedPrefetchRejected("/api/internal/prefetch-contract/extra");
   await verifyHtml("/login", 200, { purpose: "prefetch" });
+  await verifyManifest();
+  await verifyServiceWorker();
+  await verifyMigrationLedger();
 
   const unauthenticatedModule = await fetchBounded(new URL("/finance", baseUrl), {
     redirect: "manual",
@@ -277,6 +663,7 @@ try {
   );
 
   await provisionRestrictedFixture();
+  await verifyProductionStateGalleryUnavailableBeforeViewer();
   if (productSurface === "tasha") {
     await verifyTashaRejectsCrmRouteBeforeViewer();
   }
@@ -290,8 +677,12 @@ try {
   assert.match(forbiddenHtml, /Akses ditolak/);
   requireMatchingHtmlNonces(forbiddenHtml, forbiddenNonce);
 
+  await provisionAuthorizedFixture();
+  await verifyAuthorizedSurfaceShell();
+
   const readiness = await fetchBounded(new URL("/api/health/ready", baseUrl));
   assert.equal(readiness.status, 200);
+  requirePrivateRobotsHeader(readiness);
   assert.match(readiness.headers.get("cache-control") ?? "", /no-store/i);
   assert.deepEqual(await readiness.json(), {
     status: "ok",
@@ -300,6 +691,7 @@ try {
 
   console.log("Production runtime smoke passed.");
 } finally {
+  await removeAuthorizedFixture().catch(() => undefined);
   await removeRestrictedFixture().catch(() => undefined);
   await sql.end();
 }

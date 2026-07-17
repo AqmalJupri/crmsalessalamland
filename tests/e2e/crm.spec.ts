@@ -11,6 +11,38 @@ async function expectNoHorizontalOverflow(page: import("@playwright/test").Page)
   );
 }
 
+async function createDistinctiveLead(
+  page: import("@playwright/test").Page,
+  lead: { name: string; phone: string; productInterest: string },
+): Promise<void> {
+  await page.getByRole("button", { name: "Lead baharu" }).click();
+  await page.getByLabel("Nama").fill(lead.name);
+  await page.getByLabel("Telefon").fill(lead.phone);
+  await page.getByLabel("Minat produk").fill(lead.productInterest);
+  await page.getByRole("button", { name: "Simpan" }).click();
+  await expect(page.getByRole("status")).toHaveText(`${lead.name} ditambah.`);
+  await expect(page.getByRole("button", { name: lead.name })).toHaveCount(1);
+}
+
+async function ensureControlledServiceWorker(
+  page: import("@playwright/test").Page,
+): Promise<boolean> {
+  await page.evaluate(async () => {
+    await navigator.serviceWorker.ready;
+  });
+  if (await page.evaluate(() => navigator.serviceWorker.controller !== null)) return false;
+
+  await page.reload();
+  await page.evaluate(async () => {
+    await navigator.serviceWorker.ready;
+  });
+  await expect.poll(
+    () => page.evaluate(() => navigator.serviceWorker.controller !== null),
+    { timeout: 10_000 },
+  ).toBe(true);
+  return true;
+}
+
 test("dashboard is concise and accessible", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Utama", level: 1 })).toBeVisible();
@@ -47,6 +79,74 @@ test("lead can be created once", async ({ page }) => {
   await expect(createdLeadDialog.getByText("Meta", { exact: true })).toBeVisible();
   await expect(createdLeadDialog.getByText("Nilai", { exact: true })).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
+});
+
+test("private offline navigation exposes only the minimal unavailable response", async ({
+  context,
+  page,
+}) => {
+  const lead = {
+    name: "Lead Sulit Offline UI8B",
+    phone: "0198765432",
+    productInterest: "Lot Sulit UI8B-404",
+  };
+  const requestedPath = "/leads?bu=salam-land&customer=rekod-sulit-ui8b";
+
+  await page.goto("/leads?bu=salam-land");
+  await createDistinctiveLead(page, lead);
+  const reloadedForControl = await ensureControlledServiceWorker(page);
+  if (reloadedForControl) await createDistinctiveLead(page, lead);
+  await expect(page.getByRole("button", { name: lead.name })).toHaveCount(1);
+  expect(await page.evaluate(async () => caches.keys())).toEqual([]);
+
+  try {
+    await context.setOffline(true);
+    const response = await page.goto(requestedPath, { waitUntil: "domcontentloaded" });
+    expect(response).not.toBeNull();
+    if (!response) throw new Error("Offline navigation did not return a response.");
+    expect(response.status()).toBe(503);
+    expect(response.fromServiceWorker()).toBe(true);
+    expect(response.headers()["content-type"]).toBe("text/html; charset=utf-8");
+    expect(response.headers()["cache-control"]).toBe("no-store");
+    expect(response.headers()["x-robots-tag"]).toBe("noindex, nofollow, noarchive");
+    expect(response.headers()["content-security-policy"]).toBe(
+      "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    );
+
+    await expect(page.locator("body")).toHaveText("Aplikasi tidak tersedia di luar talian.");
+    await expect(page.locator("script, style, link, form")).toHaveCount(0);
+    const fallbackHtml = await page.content();
+    expect(fallbackHtml).toContain(
+      '<meta name="robots" content="noindex,nofollow,noarchive">',
+    );
+    for (const forbidden of [
+      lead.name,
+      lead.phone,
+      lead.productInterest,
+      "Aqmal Jupri",
+      requestedPath,
+      "customer=rekod-sulit-ui8b",
+      "rekod-sulit-ui8b",
+      "Salam Land",
+      "Nur Aisyah",
+      "Nilai pipeline",
+      "Lead baharu",
+      "RM 505K",
+      "cache",
+      "cached",
+      "baris gilir",
+      "queue",
+      "cuba semula",
+      "retry",
+      "sync",
+      "segerak",
+    ]) {
+      expect(fallbackHtml.toLowerCase()).not.toContain(forbidden.toLowerCase());
+    }
+    expect(await page.evaluate(async () => caches.keys())).toEqual([]);
+  } finally {
+    await context.setOffline(false);
+  }
 });
 
 test("pipeline totals follow cards when an opportunity moves", async ({ page }) => {

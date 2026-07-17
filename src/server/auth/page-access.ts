@@ -2,6 +2,7 @@ import "server-only";
 
 import { forbidden, notFound, redirect } from "next/navigation";
 import type { ReactNode } from "react";
+import { isProductPathAvailable } from "@/config/product-navigation";
 import { getRuntimeConfig } from "@/server/env";
 import {
   BusinessScopeError,
@@ -33,6 +34,9 @@ export async function requireScopedPageViewer(
   returnToPath: string,
   searchParams: Readonly<Record<string, string | readonly string[] | undefined>> = {},
 ): Promise<{ viewer: Viewer; scope: BusinessUnitReadScope }> {
+  const surface = getRuntimeConfig().productSurface;
+  if (!isProductPathAvailable(surface, returnToPath)) notFound();
+
   let requestedCode: string | null;
   try {
     requestedCode = parseBusinessScopeQuery(rawBu);
@@ -59,7 +63,7 @@ export async function requireScopedPageViewer(
     const scope = resolveAuthorizedBusinessScope(
       viewer,
       requestedCode,
-      getRuntimeConfig().productSurface,
+      surface,
       capability,
     );
     if (requestedCode === null) {

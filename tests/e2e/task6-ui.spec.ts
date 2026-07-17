@@ -1,6 +1,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
+test.use({ serviceWorkers: "block" });
+
 async function expectNoCriticalOrSeriousAxeViolations(page: Page): Promise<void> {
   const results = await new AxeBuilder({ page }).analyze();
   expect(

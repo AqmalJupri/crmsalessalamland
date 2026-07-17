@@ -11,6 +11,11 @@ export const EXPECTED_MIGRATIONS = Object.freeze([
     checksum: "2e8425ae8f551fc5b8c96466f36e917df118a12a18c66e69ec68800e73ec0e73",
     byteLength: 100_661,
   }),
+  Object.freeze({
+    filename: "0003_reconciliation_bytewise_order.sql",
+    checksum: "46fb6ab301eb4362dc4c74c186a432e59bcf00736e78ab3d5d8ea8e7359885c4",
+    byteLength: 5_176,
+  }),
 ] as const);
 
 export interface MigrationLedgerRow extends Record<string, unknown> {

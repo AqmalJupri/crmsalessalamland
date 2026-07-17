@@ -40,6 +40,7 @@ export function BusinessUnitSwitcher({
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const optionRefs = useRef(new Map<string, HTMLButtonElement>());
+  const restoreFocusAfterCloseRef = useRef(false);
   const [open, setOpen] = useState(false);
   const [savingCode, setSavingCode] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -68,9 +69,15 @@ export function BusinessUnitSwitcher({
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [focusedCode, open]);
 
-  function closeAndFocus(): void {
-    setOpen(false);
+  useEffect(() => {
+    if (open || !restoreFocusAfterCloseRef.current) return;
+    restoreFocusAfterCloseRef.current = false;
     triggerRef.current?.focus();
+  }, [open]);
+
+  function closeAndFocus(): void {
+    restoreFocusAfterCloseRef.current = true;
+    setOpen(false);
   }
 
   function moveFocus(event: KeyboardEvent, offset: number): void {
@@ -192,6 +199,7 @@ export function BusinessUnitSwitcher({
               optionRefs.current.get(last.code)?.focus();
             } else if (event.key === "Escape") {
               event.preventDefault();
+              event.stopPropagation();
               closeAndFocus();
             } else if (event.key === "Tab") {
               closeForTab(event);

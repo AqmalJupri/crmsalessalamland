@@ -451,6 +451,32 @@ export default function manifest() {
     expect(coarsePointer).toContain(".crm-record-link");
   });
 
+  it("gives compact dashboard links a 44px coarse-pointer target", () => {
+    const coarsePointer = atRule(themeSource, "@media (pointer: coarse)");
+    const selectors = [
+      ".crm-text-link",
+      ".crm-card__title a",
+      ".crm-metric__value a",
+      ".crm-metric__scope a",
+    ];
+    const rules = [...coarsePointer.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+      body: match[2] ?? "",
+      selectors: (match[1] ?? "").split(",").map((selector) => selector.trim()),
+    }));
+
+    for (const selector of selectors) {
+      const selectorRules = rules.filter((rule) => rule.selectors.includes(selector));
+      expect(
+        selectorRules.some((rule) => /min-height:\s*44px/.test(rule.body)),
+        `${selector} must own a 44px minimum height rule`,
+      ).toBe(true);
+      expect(
+        selectorRules.some((rule) => /min-width:\s*44px/.test(rule.body)),
+        `${selector} must own a 44px minimum width rule`,
+      ).toBe(true);
+    }
+  });
+
   it("uses compact controls, an accessible coarse-pointer target, and bounded radii", () => {
     expect(tokens.get("--crm-control-sm")).toBe("2.25rem");
     expect(tokens.get("--crm-control")).toBe("2.375rem");

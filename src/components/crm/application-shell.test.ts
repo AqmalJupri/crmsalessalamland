@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { createElement } from "react";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -74,6 +74,10 @@ beforeEach(() => {
       dispatchEvent: vi.fn(),
     })),
   });
+  vi.stubGlobal(
+    "requestAnimationFrame",
+    (callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 0),
+  );
 });
 
 afterEach(() => {
@@ -129,6 +133,29 @@ describe("ApplicationShell", () => {
       "Barakah Emas",
     ]);
     expect(screen.queryByRole("option", { name: "Bumi Hayat Printing" })).toBeNull();
+  });
+
+  it("closes only the nested company list on the first Escape in the drawer", async () => {
+    const user = userEvent.setup();
+    render(createElement(ApplicationShell, props()));
+
+    await user.click(screen.getByRole("button", { name: "Buka menu navigasi" }));
+    const drawer = screen.getByRole("dialog", { name: "Navigasi utama" });
+    await waitFor(() => expect(document.activeElement).toBe(
+      within(drawer).getByRole("button", { name: "Tutup menu navigasi" }),
+    ));
+    const switcher = within(drawer).getByRole("button", { name: /Tukar syarikat/ });
+    await user.click(switcher);
+    const listbox = within(drawer).getByRole("listbox", { name: "Syarikat" });
+    expect(listbox).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(
+      within(listbox).getByRole("option", { name: "Salam Land" }),
+    ));
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.getByRole("dialog", { name: "Navigasi utama" })).toBeTruthy();
+    expect(within(drawer).queryByRole("listbox", { name: "Syarikat" })).toBeNull();
   });
 
   it.each(["bu=salam-land", "bu=bumi-hayat", "bu=all"])(

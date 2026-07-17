@@ -1746,12 +1746,25 @@ a.crm-pipeline-item:hover {
   .crm-business-unit-switcher__menu button,
   .crm-user-menu__trigger,
   .crm-user-menu__logout,
+  .crm-text-link,
+  .crm-card__title a,
+  .crm-metric__value a,
+  .crm-metric__scope a,
   .crm-input,
   .crm-select,
   .crm-field-control,
   .crm-record-link,
   .crm-tab {
     min-height: 44px;
+  }
+
+  .crm-text-link,
+  .crm-card__title a,
+  .crm-metric__value a,
+  .crm-metric__scope a {
+    display: inline-flex;
+    min-width: 44px;
+    align-items: center;
   }
 
   .crm-button--icon,

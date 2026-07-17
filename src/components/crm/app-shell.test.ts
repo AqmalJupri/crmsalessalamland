@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { createElement, type ComponentType } from "react";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { LayoutDashboard } from "lucide-react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -89,6 +89,23 @@ describe("AppShell mobile drawer", () => {
     await waitFor(() => expect(document.activeElement).toBe(menuButton));
     expect(screen.queryByRole("dialog", { name: "Navigasi utama" })).toBeNull();
     expect(container.querySelector(".crm-shell__workspace")?.hasAttribute("inert")).toBe(false);
+  });
+
+  it("leaves the drawer open when a nested control handles Escape", async () => {
+    const user = userEvent.setup();
+    renderShell();
+    await user.click(screen.getByRole("button", { name: "Buka menu navigasi" }));
+    const dialog = screen.getByRole("dialog", { name: "Navigasi utama" });
+    const escape = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Escape",
+    });
+    escape.preventDefault();
+
+    fireEvent(dialog, escape);
+
+    expect(screen.getByRole("dialog", { name: "Navigasi utama" })).toBeTruthy();
   });
 
   it("closes the mobile drawer when the route or business scope changes", async () => {

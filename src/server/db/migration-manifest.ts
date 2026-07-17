@@ -26,6 +26,11 @@ export const EXPECTED_MIGRATIONS = Object.freeze([
     checksum: "8fbf0ff4b506cc682b16b6d3fe4b59d69ee47040b95ed20542ff6983c496c381",
     byteLength: 679,
   }),
+  Object.freeze({
+    filename: "0006_reconciliation_finite_amounts.sql",
+    checksum: "c320a95155c63273f176d2d79df7f9c729285b9c0474e332207da8f4bf0c5541",
+    byteLength: 509,
+  }),
 ] as const);
 
 export interface MigrationLedgerRow extends Record<string, unknown> {

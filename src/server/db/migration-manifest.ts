@@ -1,11 +1,17 @@
 import { createHash } from "node:crypto";
 
-export const EXPECTED_MIGRATIONS = [
-  {
+export const EXPECTED_MIGRATIONS = Object.freeze([
+  Object.freeze({
     filename: "0001_foundation.sql",
     checksum: "169f78b45d72a1119969defafee5c2ab6934bb21682ebc53e90850e7651ea0de",
-  },
-] as const;
+    byteLength: 98_976,
+  }),
+  Object.freeze({
+    filename: "0002_migration_platform.sql",
+    checksum: "2e8425ae8f551fc5b8c96466f36e917df118a12a18c66e69ec68800e73ec0e73",
+    byteLength: 100_661,
+  }),
+] as const);
 
 export interface MigrationLedgerRow extends Record<string, unknown> {
   filename: string;
@@ -14,7 +20,7 @@ export interface MigrationLedgerRow extends Record<string, unknown> {
 
 const migrationFilenamePattern = /^\d{4}_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/;
 
-export function migrationChecksum(source: string): string {
+export function migrationChecksum(source: string | Buffer): string {
   return createHash("sha256").update(source).digest("hex");
 }
 
@@ -48,9 +54,14 @@ export function validateMigrationDirectoryEntries(entries: readonly string[]): s
   return expected;
 }
 
-export function assertMigrationSource(filename: string, source: string): string {
+export function assertMigrationSource(filename: string, source: string | Buffer): string {
   const expected = EXPECTED_MIGRATIONS.find((migration) => migration.filename === filename);
   if (!expected) throw new Error(`Migration ${filename} is absent from the reviewed manifest.`);
+
+  const byteLength = Buffer.byteLength(source);
+  if (byteLength !== expected.byteLength) {
+    throw new Error(`Migration ${filename} byte length differs from the reviewed manifest.`);
+  }
 
   const checksum = migrationChecksum(source);
   if (checksum !== expected.checksum) {

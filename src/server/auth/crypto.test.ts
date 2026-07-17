@@ -13,10 +13,19 @@ import {
 
 const originalEnvironment = { ...process.env };
 const authHashKey = "unit-auth-hash-key-at-least-32-characters";
+const isolatedEnvironment = { ...originalEnvironment };
+for (const key of [
+  "OIDC_ISSUER",
+  "OIDC_CLIENT_ID",
+  "OIDC_CLIENT_SECRET",
+  "OIDC_REDIRECT_URI",
+]) {
+  delete isolatedEnvironment[key];
+}
 
 beforeEach(() => {
   process.env = {
-    ...originalEnvironment,
+    ...isolatedEnvironment,
     NODE_ENV: "test",
     PRODUCT_SURFACE: "crm",
     DEPLOYMENT_ENVIRONMENT: "ci",

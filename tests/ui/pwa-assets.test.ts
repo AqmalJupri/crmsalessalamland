@@ -12,6 +12,12 @@ const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const privateRobots = "noindex, nofollow, noarchive";
 const offlineLine = "Aplikasi tidak tersedia di luar talian.";
 const maskableSafeZone = "centered artwork within 80% diameter circle";
+const oidcEnvironmentKeys = [
+  "OIDC_ISSUER",
+  "OIDC_CLIENT_ID",
+  "OIDC_CLIENT_SECRET",
+  "OIDC_REDIRECT_URI",
+] as const;
 
 const surfaces = {
   crm: { name: "Salam CRM", shortName: "Salam CRM", mark: "S" },
@@ -131,6 +137,7 @@ function setRuntimeSurface(surface: keyof typeof surfaces): void {
     AUTH_HASH_KEY: "test-auth-hash-key-that-is-at-least-32-characters",
   } as const;
 
+  for (const key of oidcEnvironmentKeys) vi.stubEnv(key, undefined);
   for (const [key, value] of Object.entries(environment)) vi.stubEnv(key, value);
   resetRuntimeConfigForTests();
 }

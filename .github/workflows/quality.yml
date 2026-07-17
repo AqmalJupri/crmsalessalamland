@@ -6,6 +6,13 @@ on:
     branches:
       - main
       - "codex/**"
+  workflow_dispatch:
+    inputs:
+      capture_visual_baselines:
+        description: Capture Linux visual baseline candidates for review
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -45,6 +52,7 @@ jobs:
       OIDC_CLIENT_ID: crm-ci
       OIDC_CLIENT_SECRET: ci-only-oidc-secret-at-least-16-characters
       OIDC_REDIRECT_URI: https://crm-ci.example.test/api/v1/auth/oidc/callback
+      VISUAL_CAPTURE_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.capture_visual_baselines }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -108,9 +116,31 @@ jobs:
             < "$RUNNER_TEMP/migrated-db/crm_salam_test_ci.dump"
 
       - name: Run isolated CRM and Tasha browser evidence
+        if: ${{ env.VISUAL_CAPTURE_REQUESTED != 'true' }}
         run: |
           unset OIDC_ISSUER OIDC_CLIENT_ID OIDC_CLIENT_SECRET OIDC_REDIRECT_URI
           pnpm test:e2e
+
+      - name: Capture reviewed Linux visual baselines
+        if: ${{ env.VISUAL_CAPTURE_REQUESTED == 'true' }}
+        env:
+          VISUAL_BASELINE_CAPTURE: reviewed-linux
+        run: |
+          unset OIDC_ISSUER OIDC_CLIENT_ID OIDC_CLIENT_SECRET OIDC_REDIRECT_URI
+          pnpm test:e2e:crm tests/e2e/ui-visual.spec.ts --update-snapshots
+          pnpm test:e2e:tasha tests/e2e/ui-visual.spec.ts --update-snapshots
+          pnpm exec tsx scripts/ci/write-visual-baseline-provenance.ts
+
+      - name: Upload Linux visual baseline candidates
+        if: ${{ env.VISUAL_CAPTURE_REQUESTED == 'true' && success() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: visual-baseline-candidates-${{ github.sha }}
+          path: tests/e2e/__snapshots__
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 6
+          overwrite: false
 
       - name: Upload failed synthetic Playwright evidence
         if: failure()

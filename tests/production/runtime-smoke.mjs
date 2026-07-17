@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { runInNewContext } from "node:vm";
 import postgres from "postgres";
+import {
+  readDocumentEvidence,
+  requireDocumentEvidence,
+  runWithCleanup,
+} from "./runtime-evidence.mjs";
 
 const baseUrl = process.env.PRODUCTION_SMOKE_URL ?? "http://127.0.0.1:3000";
 const requestTimeoutMs = 10_000;
@@ -289,41 +294,17 @@ function requireBaselineHeaders(response) {
   assert.match(response.headers.get("cache-control") ?? "", /no-store/i);
 }
 
-function attributeValue(tag, attribute) {
-  return tag.match(new RegExp(`\\b${attribute}=["']([^"']*)["']`, "i"))?.[1];
-}
-
-function metaContent(html, name) {
-  const tag = (html.match(/<meta\b[^>]*>/gi) ?? []).find(
-    (candidate) => attributeValue(candidate, "name")?.toLowerCase() === name.toLowerCase(),
-  );
-  assert.ok(tag, `HTML must contain ${name} metadata.`);
-  return attributeValue(tag, "content");
-}
-
-function visibleBodyText(html) {
-  return (html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1] ?? "")
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function requireSurfaceMetadata(html) {
-  const htmlTag = html.match(/<html\b[^>]*>/i)?.[0];
-  assert.ok(htmlTag, "HTML root element is required.");
-  assert.equal(attributeValue(htmlTag, "lang"), "ms");
-  assert.equal(metaContent(html, "color-scheme"), "light");
-  assert.equal(metaContent(html, "theme-color"), "#0B172A");
-  assert.equal(metaContent(html, "robots"), privateRobots);
-  assert.match(
-    html,
-    new RegExp(`<title>Log masuk · ${surfaceContract.name}<\\/title>`, "i"),
-  );
-  const visibleText = visibleBodyText(html);
-  assert.doesNotMatch(visibleText, new RegExp(oldMetadataDescription, "i"));
-  assert.doesNotMatch(visibleText, new RegExp(surfaceContract.otherName, "i"));
+  requireDocumentEvidence(html, {
+    language: "ms",
+    title: `Log masuk · ${surfaceContract.name}`,
+    metadata: {
+      "color-scheme": "light",
+      "theme-color": "#0B172A",
+      robots: privateRobots,
+    },
+    forbiddenBodyText: [oldMetadataDescription, surfaceContract.otherName],
+  });
 }
 
 function requireSecurityHeaders(response) {
@@ -487,7 +468,8 @@ async function verifyAuthorizedSurfaceShell() {
   const nonce = requireSecurityHeaders(response);
   const html = await response.text();
   requireMatchingHtmlNonces(html, nonce);
-  assert.doesNotMatch(html, new RegExp(surfaceContract.otherName, "i"));
+  const { bodyText } = readDocumentEvidence(html);
+  assert.doesNotMatch(bodyText, new RegExp(surfaceContract.otherName, "i"));
   assert.doesNotMatch(
     html,
     new RegExp(`/icons/${productSurface === "crm" ? "tasha" : "crm"}-`, "i"),
@@ -634,7 +616,7 @@ async function verifyMalformedPrefetchRejected(path) {
   });
 }
 
-try {
+await runWithCleanup(async () => {
   await verifyHtml("/login", 200, undefined, true);
   await verifyHtml("/does-not-exist", 404);
   await verifyHtml("/login", 200, { "next-router-prefetch": "0" });
@@ -689,9 +671,6 @@ try {
     dependencies: { configuration: "valid", database: "ready" },
   });
 
-  console.log("Production runtime smoke passed.");
-} finally {
-  await removeAuthorizedFixture().catch(() => undefined);
-  await removeRestrictedFixture().catch(() => undefined);
-  await sql.end();
-}
+}, [removeAuthorizedFixture, removeRestrictedFixture, () => sql.end()]);
+
+console.log("Production runtime smoke passed.");

@@ -12,6 +12,7 @@ export default defineConfig({
     include: [
       "src/**/*.test.ts",
       "tests/ci/**/*.test.ts",
+      "tests/production/**/*.test.mjs",
       "tests/ui/**/*.test.ts",
     ],
     coverage: {

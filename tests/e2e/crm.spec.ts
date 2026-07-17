@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { runWithCleanup } from "../production/runtime-evidence.mjs";
 
 async function expectNoHorizontalOverflow(page: import("@playwright/test").Page): Promise<void> {
   const dimensions = await page.evaluate(() => ({
@@ -99,7 +100,7 @@ test("private offline navigation exposes only the minimal unavailable response",
   await expect(page.getByRole("button", { name: lead.name })).toHaveCount(1);
   expect(await page.evaluate(async () => caches.keys())).toEqual([]);
 
-  try {
+  await runWithCleanup(async () => {
     await context.setOffline(true);
     const response = await page.goto(requestedPath, { waitUntil: "domcontentloaded" });
     expect(response).not.toBeNull();
@@ -144,9 +145,7 @@ test("private offline navigation exposes only the minimal unavailable response",
       expect(fallbackHtml.toLowerCase()).not.toContain(forbidden.toLowerCase());
     }
     expect(await page.evaluate(async () => caches.keys())).toEqual([]);
-  } finally {
-    await context.setOffline(false);
-  }
+  }, [() => context.setOffline(false)]);
 });
 
 test("pipeline totals follow cards when an opportunity moves", async ({ page }) => {

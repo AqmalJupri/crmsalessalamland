@@ -67,13 +67,18 @@ interface DatabaseForeignKey {
   columnNames: string[];
   foreignTableName: string;
   foreignColumnNames: string[];
+  onUpdate: string;
+  onDelete: string;
+  matchType: string;
+  deferrable: boolean;
+  initiallyDeferred: boolean;
 }
 
 interface DatabaseUniqueIndex {
   tableName: MigrationTableName;
   indexName: string;
   columnNames: string[];
-  partial: boolean;
+  predicate: string | null;
 }
 
 function normalizeSql(value: string): string {
@@ -82,6 +87,85 @@ function normalizeSql(value: string): string {
 
 function normalizeSqlType(value: string): string {
   return normalizeSql(value).replace(/,\s*/g, ",");
+}
+
+function hasRedundantOuterParentheses(value: string): boolean {
+  if (!value.startsWith("(") || !value.endsWith(")")) return false;
+
+  let depth = 0;
+  let quote: "'" | '"' | null = null;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote) {
+      if (character === quote) {
+        if (value[index + 1] === quote) index += 1;
+        else quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (character === "(") depth += 1;
+    if (character === ")") depth -= 1;
+    if (depth === 0 && index < value.length - 1) return false;
+  }
+  return depth === 0 && quote === null;
+}
+
+function sqlIdentifierMatches(value: string | undefined, expected: string): boolean {
+  if (value === undefined) return false;
+  if (value.startsWith('"')) return value === `"${expected}"`;
+  return value.toLowerCase() === expected;
+}
+
+function unwrapPredicate(value: string): string {
+  let unwrapped = value.trim();
+  while (hasRedundantOuterParentheses(unwrapped)) {
+    unwrapped = unwrapped.slice(1, -1).trim();
+  }
+  return unwrapped;
+}
+
+function normalizeIndexPredicate(indexName: string, value: string | null): string | null {
+  if (value === null) return null;
+
+  const identifier = '("[^"\\r\\n]+"|[A-Za-z_][A-Za-z0-9_$]*)';
+  const candidate = unwrapPredicate(value);
+
+  if (indexName === "import_rows_row_number_unique") {
+    const match = new RegExp(
+      `^(?:${identifier}\\s*\\.\\s*)?${identifier}\\s+is\\s+not\\s+null$`,
+      "i",
+    ).exec(candidate);
+    if (
+      match &&
+      (match[1] === undefined || sqlIdentifierMatches(match[1], "import_rows")) &&
+      sqlIdentifierMatches(match[2], "row_number")
+    ) {
+      return "row_number is not null";
+    }
+  }
+
+  if (indexName === "quarantine_items_open_unique") {
+    const match = new RegExp(
+      `^(?:${identifier}\\s*\\.\\s*)?${identifier}\\s*=\\s*('(?:[^']|'')*')\\s*(?:::\\s*${identifier})?$`,
+      "i",
+    ).exec(candidate);
+    const castType = match?.[4];
+    if (
+      match &&
+      (match[1] === undefined || sqlIdentifierMatches(match[1], "quarantine_items")) &&
+      sqlIdentifierMatches(match[2], "status") &&
+      match[3] === "'OPEN'" &&
+      (castType === undefined || (!castType.startsWith('"') && castType.toLowerCase() === "text"))
+    ) {
+      return "status = 'OPEN'";
+    }
+  }
+
+  return value.trim();
 }
 
 function canonicalDatabaseDefault(value: string | null): string | null {
@@ -134,6 +218,43 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await sqlClient.end();
+});
+
+describe("partial-index predicate normalization", () => {
+  it("keeps unknown casts semantically distinct", () => {
+    expect(
+      normalizeIndexPredicate("import_rows_row_number_unique", "pg_typeof('x'::text)"),
+    ).not.toBe(
+      normalizeIndexPredicate("import_rows_row_number_unique", "pg_typeof('x')"),
+    );
+  });
+
+  it("keeps quoted identifiers distinct from boolean keywords", () => {
+    expect(normalizeIndexPredicate("quarantine_items_open_unique", '"true"')).not.toBe(
+      normalizeIndexPredicate("quarantine_items_open_unique", "true"),
+    );
+  });
+
+  it("normalizes only harmless spellings of the two locked predicates", () => {
+    expect(
+      normalizeIndexPredicate(
+        "import_rows_row_number_unique",
+        '(("import_rows"."row_number" IS NOT NULL))',
+      ),
+    ).toBe("row_number is not null");
+    expect(
+      normalizeIndexPredicate(
+        "quarantine_items_open_unique",
+        "(status = 'OPEN'::text)",
+      ),
+    ).toBe("status = 'OPEN'");
+    expect(
+      normalizeIndexPredicate(
+        "quarantine_items_open_unique",
+        '"quarantine_items"."status" = \'OPEN\'',
+      ),
+    ).toBe("status = 'OPEN'");
+  });
 });
 
 describe("typed migration schema parity", () => {
@@ -269,7 +390,28 @@ describe("typed migration schema parity", () => {
             on attribute.attrelid = constraint_record.confrelid
            and attribute.attnum = key_column.attnum
           order by key_column.position
-        ) as "foreignColumnNames"
+        ) as "foreignColumnNames",
+        case constraint_record.confupdtype
+          when 'a' then 'no action'
+          when 'r' then 'restrict'
+          when 'c' then 'cascade'
+          when 'n' then 'set null'
+          when 'd' then 'set default'
+        end as "onUpdate",
+        case constraint_record.confdeltype
+          when 'a' then 'no action'
+          when 'r' then 'restrict'
+          when 'c' then 'cascade'
+          when 'n' then 'set null'
+          when 'd' then 'set default'
+        end as "onDelete",
+        case constraint_record.confmatchtype
+          when 's' then 'simple'
+          when 'f' then 'full'
+          when 'p' then 'partial'
+        end as "matchType",
+        constraint_record.condeferrable as deferrable,
+        constraint_record.condeferred as "initiallyDeferred"
       from pg_constraint constraint_record
       join pg_class relation on relation.oid = constraint_record.conrelid
       join pg_namespace namespace on namespace.oid = relation.relnamespace
@@ -290,6 +432,11 @@ describe("typed migration schema parity", () => {
             columnNames: reference.columns.map((column) => column.name),
             foreignTableName: getTableConfig(reference.foreignTable).name,
             foreignColumnNames: reference.foreignColumns.map((column) => column.name),
+            onUpdate: key.onUpdate ?? "no action",
+            onDelete: key.onDelete ?? "no action",
+            matchType: "simple",
+            deferrable: false,
+            initiallyDeferred: false,
           };
         }),
       )
@@ -313,7 +460,7 @@ describe("typed migration schema parity", () => {
            and attribute.attnum = key_column.attnum
           order by key_column.position
         ) as "columnNames",
-        index_record.indpred is not null as partial
+        pg_get_expr(index_record.indpred, index_record.indrelid) as predicate
       from pg_index index_record
       join pg_class relation on relation.oid = index_record.indrelid
       join pg_namespace namespace on namespace.oid = relation.relnamespace
@@ -337,13 +484,23 @@ describe("typed migration schema parity", () => {
             tableName: table.name,
             indexName: index.config.name ?? "",
             columnNames: index.config.columns.map(indexColumnName),
-            partial: index.config.where !== undefined,
+            predicate: normalizeIndexPredicate(
+              index.config.name ?? "",
+              index.config.where
+                ? dialect.sqlToQuery(index.config.where, "indexes").sql
+                : null,
+            ),
           })),
       )
       .sort((left, right) =>
         `${left.tableName}.${left.indexName}`.localeCompare(`${right.tableName}.${right.indexName}`),
       );
 
-    expect(drizzleUniqueIndexes).toEqual(databaseUniqueIndexes);
+    expect(drizzleUniqueIndexes).toEqual(
+      databaseUniqueIndexes.map((index) => ({
+        ...index,
+        predicate: normalizeIndexPredicate(index.indexName, index.predicate),
+      })),
+    );
   });
 });

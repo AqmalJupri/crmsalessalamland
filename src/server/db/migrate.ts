@@ -274,7 +274,7 @@ const entryPoint = process.argv[1];
 if (entryPoint && import.meta.url === pathToFileURL(resolve(entryPoint)).href) {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error("DATABASE_URL is required to run migrations.");
-  await runMigrations(databaseUrl).catch((error: unknown) => {
+  void runMigrations(databaseUrl).catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : "Migration execution failed.");
     process.exitCode = 1;
   });

@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { useMemo } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
   BarChart3,
   Boxes,
@@ -18,8 +18,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui";
+import type { PublicViewer } from "@/domain/auth/public-viewer";
 import {
   getProductNavigationSections,
+  getProductNavigationItem,
   getProductRouteTitle,
   type ProductNavigationHref,
 } from "@/config/product-navigation";
@@ -28,14 +30,9 @@ import {
   type ProductSurface,
 } from "@/config/product-surface";
 import { AppShell, type SidebarNavItem } from "./app-shell";
+import { BusinessUnitSwitcher } from "./business-unit-switcher";
 
-export interface ShellViewer {
-  displayName: string;
-  businessUnitId: string;
-  businessUnits: readonly { id: string; name: string; slug: string; code: string }[];
-  capabilities: readonly string[];
-  demo: boolean;
-}
+export type ShellViewer = PublicViewer;
 
 const navigationIcons = {
   "/": LayoutDashboard,
@@ -50,11 +47,6 @@ const navigationIcons = {
   "/team": UsersRound,
   "/settings": Settings,
 } as const satisfies Record<ProductNavigationHref, LucideIcon>;
-
-const crmDemoCounts = {
-  "/leads": 8,
-  "/tasks": 7,
-} as const satisfies Partial<Record<ProductNavigationHref, number>>;
 
 function routeRoot(pathname: string): string {
   if (pathname === "/") return "/";
@@ -71,11 +63,31 @@ export function ApplicationShell({
   viewer: ShellViewer;
 }) {
   const pathname = usePathname();
-  const router = useRouter();
+  const searchParams = useSearchParams();
+  const search = searchParams.toString();
   const activeHref = routeRoot(pathname);
-  const initialUnit =
-    viewer.businessUnits.find((unit) => unit.id === viewer.businessUnitId) ?? viewer.businessUnits[0]!;
-  const [selectedUnit, setSelectedUnit] = useState(initialUnit);
+  const surfaceUnits = surface === "tasha"
+    ? viewer.businessUnitAccess.filter((unit) => unit.code === "salam-land")
+    : viewer.businessUnitAccess;
+  const requestedCodes = searchParams.getAll("bu");
+  const fallbackUnit =
+    surfaceUnits.find((unit) => unit.id === viewer.businessUnitId) ?? surfaceUnits[0];
+  const requestedCode = requestedCodes.length === 1 ? requestedCodes[0]! : fallbackUnit?.code;
+  const selectedCode: string = requestedCode !== undefined && (
+    requestedCode === "all" || surfaceUnits.some((unit) => unit.code === requestedCode)
+  )
+    ? requestedCode
+    : fallbackUnit?.code ?? "all";
+  const selectedUnit = selectedCode === "all"
+    ? undefined
+    : surfaceUnits.find((unit) => unit.code === selectedCode);
+  const activeItem = getProductNavigationItem(pathname);
+  const activeCapability = activeItem && "capability" in activeItem
+    ? activeItem.capability
+    : undefined;
+  const switcherUnits = activeCapability
+    ? surfaceUnits.filter((unit) => unit.capabilities.includes(activeCapability))
+    : surfaceUnits;
 
   const surfaceSpec = getProductSurfaceSpec(surface);
   const title = getProductRouteTitle(surface, pathname);
@@ -87,46 +99,34 @@ export function ApplicationShell({
           .filter(
             (item) =>
               !("capability" in item) ||
-              viewer.capabilities.includes(item.capability),
+              (selectedCode === "all"
+                ? surfaceUnits.some((unit) => unit.capabilities.includes(item.capability))
+                : selectedUnit?.capabilities.includes(item.capability) === true),
           )
           .map((item): SidebarNavItem => ({
             label: item.label,
-            href: item.href,
+            href: `${item.href}?${new URLSearchParams({ bu: selectedCode })}`,
             icon: navigationIcons[item.href],
-            ...(surface === "crm" && viewer.demo && item.href in crmDemoCounts
-              ? { count: crmDemoCounts[item.href as keyof typeof crmDemoCounts] }
-              : {}),
             active: item.href === activeHref,
           })),
       }))
       .filter((section) => section.items.length > 0),
-    [activeHref, surface, viewer.capabilities, viewer.demo],
+    [activeHref, selectedCode, selectedUnit, surface, surfaceUnits],
   );
-
-  function cycleWorkspace(): void {
-    const currentIndex = viewer.businessUnits.findIndex((unit) => unit.id === selectedUnit.id);
-    const next = viewer.businessUnits[(currentIndex + 1) % viewer.businessUnits.length];
-    if (!next) return;
-    setSelectedUnit(next);
-    document.cookie = `crm_bu=${encodeURIComponent(next.id)}; Path=/; Max-Age=31536000; SameSite=Lax`;
-    router.refresh();
-  }
 
   return (
     <AppShell
       activeHref={activeHref}
+      routeKey={`${pathname}${search ? `?${search}` : ""}`}
       navigation={navWithActive}
       title={title}
       brand={{ name: surfaceSpec.productName, mark: surface === "crm" ? "S" : "T" }}
-      workspace={{
-        name: selectedUnit.name,
-        ...(viewer.businessUnits.length > 1
-          ? {
-              onClick: cycleWorkspace,
-              ariaLabel: `Tukar syarikat. Semasa: ${selectedUnit.name}`,
-            }
-          : {}),
-      }}
+      workspace={(
+        <BusinessUnitSwitcher
+          units={switcherUnits}
+          selectedCode={selectedCode}
+        />
+      )}
       user={{ name: viewer.displayName }}
       sidebarFooter={surface === "crm" ? (
         <Badge variant={viewer.demo ? "info" : "success"} icon={ShieldCheck}>

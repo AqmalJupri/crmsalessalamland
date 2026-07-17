@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   assertTrustedOrigin: vi.fn(),
-  requireApiViewer: vi.fn(),
+  requireApiViewerForBusinessUnit: vi.fn(),
   transitionLeadRecord: vi.fn(),
 }));
 
@@ -10,17 +10,21 @@ vi.mock("@/server/http/security", () => ({
   assertTrustedOrigin: mocks.assertTrustedOrigin,
 }));
 vi.mock("@/server/auth/viewer", () => ({
-  requireApiViewer: mocks.requireApiViewer,
+  requireApiViewerForBusinessUnit: mocks.requireApiViewerForBusinessUnit,
 }));
 vi.mock("@/server/leads/transition-lead", () => ({
   transitionLeadRecord: mocks.transitionLeadRecord,
 }));
 
-import { PATCH } from "./route";
+import { LEAD_TRANSITION_BODY_MAX_BYTES, PATCH } from "./route";
 
 const requestId = "0195f4f8-8e36-7dd1-8f14-c31f0edb30d6";
+const businessUnitId = "00000000-0000-4000-8000-000000000101";
 
-function request(idempotencyKey = "lead-transition-route-001"): Request {
+function request(
+  idempotencyKey = "lead-transition-route-001",
+  body = JSON.stringify({ businessUnitId, version: 1, stage: "assigned" }),
+): Request {
   return new Request("https://crm.example.test/api/v1/leads/bad-id", {
     method: "PATCH",
     headers: {
@@ -28,14 +32,14 @@ function request(idempotencyKey = "lead-transition-route-001"): Request {
       "idempotency-key": idempotencyKey,
       "x-request-id": requestId,
     },
-    body: JSON.stringify({ version: 1, stage: "assigned" }),
+    body,
   });
 }
 
 describe("PATCH /api/v1/leads/:id", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.requireApiViewer.mockResolvedValue({ businessUnitId: crypto.randomUUID() });
+    mocks.requireApiViewerForBusinessUnit.mockResolvedValue({ businessUnitId });
   });
 
   it("rejects a UUID-shaped string that is not a valid UUID before calling the service", async () => {
@@ -50,6 +54,7 @@ describe("PATCH /api/v1/leads/:id", () => {
       requestId,
     });
     expect(mocks.transitionLeadRecord).not.toHaveBeenCalled();
+    expect(mocks.requireApiViewerForBusinessUnit).not.toHaveBeenCalled();
   });
 
   it("passes a valid UUID and parsed transition to the service", async () => {
@@ -65,9 +70,13 @@ describe("PATCH /api/v1/leads/:id", () => {
     expect(mocks.transitionLeadRecord).toHaveBeenCalledWith(
       expect.anything(),
       leadId,
-      { version: 1, stage: "assigned" },
+      { businessUnitId, version: 1, stage: "assigned" },
       requestId,
       "lead-transition-route-001",
+    );
+    expect(mocks.requireApiViewerForBusinessUnit).toHaveBeenCalledWith(
+      "lead.update",
+      businessUnitId,
     );
   });
 
@@ -82,5 +91,31 @@ describe("PATCH /api/v1/leads/:id", () => {
       requestId,
     });
     expect(mocks.transitionLeadRecord).not.toHaveBeenCalled();
+  });
+
+  it("requires the explicit command business unit before authorisation", async () => {
+    const leadId = "10000000-0000-4000-8000-000000000001";
+    const response = await PATCH(
+      request("lead-transition-route-001", JSON.stringify({ version: 1, stage: "assigned" })),
+      { params: Promise.resolve({ id: leadId }) },
+    );
+    expect(response.status).toBe(422);
+    expect(mocks.requireApiViewerForBusinessUnit).not.toHaveBeenCalled();
+    expect(mocks.transitionLeadRecord).not.toHaveBeenCalled();
+  });
+
+  it("rejects a streamed body over the transition limit before unit authorisation", async () => {
+    const leadId = "10000000-0000-4000-8000-000000000001";
+    const response = await PATCH(
+      request("lead-transition-route-001", JSON.stringify({
+        businessUnitId,
+        version: 1,
+        stage: "assigned",
+        padding: "x".repeat(LEAD_TRANSITION_BODY_MAX_BYTES),
+      })),
+      { params: Promise.resolve({ id: leadId }) },
+    );
+    expect(response.status).toBe(413);
+    expect(mocks.requireApiViewerForBusinessUnit).not.toHaveBeenCalled();
   });
 });

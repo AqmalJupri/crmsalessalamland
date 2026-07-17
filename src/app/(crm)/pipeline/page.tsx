@@ -1,12 +1,49 @@
 import type { Metadata } from "next";
 import { PipelineWorkspace } from "@/components/crm/pipeline-workspace";
-import { opportunityStages } from "@/lib/demo-crm";
-import { canRenderDemoFixtures } from "@/server/auth/page-access";
+import { MetricDefinitionPanel } from "@/components/crm/metric";
+import { filterOpportunityStagesByUnitIds, isActiveDemoOpportunityStage, opportunityStages } from "@/lib/demo-crm";
+import { CRM_MODULE_ACCESS } from "@/server/auth/module-access";
+import { canRenderDemoFixtures, requireScopedPageViewer } from "@/server/auth/page-access";
+import { projectClientBusinessScope } from "@/domain/business-units/client-scope";
 
 export const metadata: Metadata = { title: "Pipeline" };
 
-export default function PipelinePage() {
+type PageSearchParams = Record<string, string | string[] | undefined>;
+
+export default async function PipelinePage({ searchParams }: { searchParams: Promise<PageSearchParams> }) {
+  const query = await searchParams;
+  const { scope } = await requireScopedPageViewer(
+    query.bu,
+    CRM_MODULE_ACCESS.pipeline.capability,
+    "/pipeline",
+    query,
+  );
+  const unitIds = scope.kind === "ALL" ? scope.unitIds : [scope.businessUnitId];
+  const activeOnly = query.metric === "active";
+  const stages = activeOnly
+    ? opportunityStages.filter(isActiveDemoOpportunityStage)
+    : opportunityStages;
+  const workspace = (
+    <PipelineWorkspace
+      scope={projectClientBusinessScope(scope)}
+      populationKey={activeOnly ? "active" : "all"}
+      initialStages={canRenderDemoFixtures()
+        ? filterOpportunityStagesByUnitIds(stages, unitIds)
+        : []}
+      activeFilterLabel={activeOnly ? "Pipeline aktif" : null}
+    />
+  );
+  if (query.definition !== "active") return workspace;
   return (
-    <PipelineWorkspace initialStages={canRenderDemoFixtures() ? opportunityStages : []} />
+    <div className="crm-page-stack">
+      <MetricDefinitionPanel definition={{
+        key: "active",
+        title: "Nilai pipeline",
+        formula: "Jumlah nilai peluang selain peringkat Menang.",
+        source: "Rekod peluang demo.",
+        dateBasis: "Tarikh peringkat",
+      }} />
+      {workspace}
+    </div>
   );
 }

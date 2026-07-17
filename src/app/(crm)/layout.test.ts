@@ -36,6 +36,32 @@ const viewer: Viewer = {
       code: "salam-land",
       slug: "salam-land",
     },
+    {
+      id: "00000000-0000-4000-8000-000000000102",
+      name: "Bumi Hayat",
+      code: "bumi-hayat",
+      slug: "bumi-hayat",
+    },
+  ],
+  businessUnitAccess: [
+    {
+      id: "00000000-0000-4000-8000-000000000101",
+      name: "Salam Land",
+      code: "salam-land",
+      slug: "salam-land",
+      membershipIds: ["00000000-0000-4000-8000-000000000201"],
+      capabilities: ["finance.read"],
+      capabilityRecordScopes: { "finance.read": ["BUSINESS_UNIT"] },
+    },
+    {
+      id: "00000000-0000-4000-8000-000000000102",
+      name: "Bumi Hayat",
+      code: "bumi-hayat",
+      slug: "bumi-hayat",
+      membershipIds: ["00000000-0000-4000-8000-000000000202"],
+      capabilities: ["task.read"],
+      capabilityRecordScopes: {},
+    },
   ],
   activeMembershipId: "00000000-0000-4000-8000-000000000201",
   membershipIds: ["00000000-0000-4000-8000-000000000201"],
@@ -65,7 +91,7 @@ describe("CRM parent layout", () => {
     );
   });
 
-  it("renders the application shell only after a viewer is authenticated", async () => {
+  it("passes only a Tasha Salam-safe capability projection to the client shell", async () => {
     mocks.headers.mockResolvedValue(
       new Headers({ "x-salam-request-path": "/finance" }),
     );
@@ -78,13 +104,50 @@ describe("CRM parent layout", () => {
         surface: "tasha",
         viewer: {
           businessUnitId: viewer.businessUnitId,
-          capabilities: viewer.capabilities,
+          businessUnitAccess: [
+            {
+              id: "00000000-0000-4000-8000-000000000101",
+              name: "Salam Land",
+              code: "salam-land",
+              capabilities: ["finance.read"],
+            },
+          ],
           demo: false,
           displayName: viewer.displayName,
         },
       },
     });
+    expect(JSON.stringify(result)).not.toContain("membership");
+    expect(JSON.stringify(result)).not.toContain("recordScope");
     expect(mocks.getRuntimeConfig).toHaveBeenCalledOnce();
+  });
+
+  it("never leaks a non-Salam active preference into the Tasha client boundary", async () => {
+    mocks.headers.mockResolvedValue(new Headers({ "x-salam-request-path": "/finance" }));
+    mocks.getViewer.mockResolvedValue({
+      ...viewer,
+      businessUnitId: "00000000-0000-4000-8000-000000000102",
+      activeMembershipId: "00000000-0000-4000-8000-000000000202",
+      membershipIds: ["00000000-0000-4000-8000-000000000202"],
+      capabilities: ["task.read"],
+    });
+
+    const result = await CrmLayout({ children: "protected child" });
+    expect(result).toMatchObject({
+      props: {
+        viewer: {
+          businessUnitId: "00000000-0000-4000-8000-000000000101",
+          businessUnitAccess: [
+            expect.objectContaining({
+              id: "00000000-0000-4000-8000-000000000101",
+              code: "salam-land",
+            }),
+          ],
+        },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("00000000-0000-4000-8000-000000000102");
+    expect(JSON.stringify(result)).not.toContain("00000000-0000-4000-8000-000000000202");
   });
 
   it("404s a CRM-only Tasha route before any viewer or auth interrupt work", async () => {

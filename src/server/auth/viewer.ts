@@ -22,9 +22,12 @@ import { hashSessionToken } from "./crypto";
 import { CRM_MODULE_READ_CAPABILITIES } from "./module-access";
 import { safeReturnTo } from "./return-to";
 import {
-  deriveCapabilityRecordScopes,
   type CapabilityRecordScopes,
 } from "./capability-policy";
+import {
+  deriveBusinessUnitAccess,
+  deriveBusinessUnitCommandViewer,
+} from "./business-scope";
 
 export { SESSION_COOKIE } from "./constants";
 
@@ -36,12 +39,19 @@ export interface ViewerBusinessUnit {
   slug: string;
 }
 
+export interface ViewerBusinessUnitAccess extends ViewerBusinessUnit {
+  membershipIds: readonly string[];
+  capabilities: readonly string[];
+  capabilityRecordScopes: CapabilityRecordScopes;
+}
+
 export interface Viewer {
   userId: string;
   displayName: string;
   organizationId: string;
   businessUnitId: string;
   businessUnits: readonly ViewerBusinessUnit[];
+  businessUnitAccess: readonly ViewerBusinessUnitAccess[];
   activeMembershipId: string;
   membershipIds: readonly string[];
   capabilities: readonly string[];
@@ -72,6 +82,56 @@ const demoViewer: Viewer = {
       name: "Barakah Emas",
       code: "barakah-emas",
       slug: "barakah-emas",
+    },
+  ],
+  businessUnitAccess: [
+    {
+      id: "00000000-0000-4000-8000-000000000101",
+      name: "Salam Land",
+      code: "salam-land",
+      slug: "salam-land",
+      membershipIds: ["00000000-0000-4000-8000-000000000201"],
+      capabilities: [
+        ...new Set([
+          ...CRM_MODULE_READ_CAPABILITIES,
+          "lead.create",
+          "lead.update",
+          "lead.reopen",
+        ]),
+      ].sort(),
+      capabilityRecordScopes: { "lead.update": ["BUSINESS_UNIT"] },
+    },
+    {
+      id: "00000000-0000-4000-8000-000000000102",
+      name: "Bumi Hayat Printing",
+      code: "bumi-hayat",
+      slug: "bumi-hayat",
+      membershipIds: ["00000000-0000-4000-8000-000000000202"],
+      capabilities: [
+        ...new Set([
+          ...CRM_MODULE_READ_CAPABILITIES,
+          "lead.create",
+          "lead.update",
+          "lead.reopen",
+        ]),
+      ].sort(),
+      capabilityRecordScopes: { "lead.update": ["BUSINESS_UNIT"] },
+    },
+    {
+      id: "00000000-0000-4000-8000-000000000103",
+      name: "Barakah Emas",
+      code: "barakah-emas",
+      slug: "barakah-emas",
+      membershipIds: ["00000000-0000-4000-8000-000000000203"],
+      capabilities: [
+        ...new Set([
+          ...CRM_MODULE_READ_CAPABILITIES,
+          "lead.create",
+          "lead.update",
+          "lead.reopen",
+        ]),
+      ].sort(),
+      capabilityRecordScopes: { "lead.update": ["BUSINESS_UNIT"] },
     },
   ],
   activeMembershipId: "00000000-0000-4000-8000-000000000201",
@@ -168,21 +228,9 @@ async function resolveViewer(): Promise<Viewer | null> {
     allowedUnits.find((unit) => unit.id === preferredBusinessUnitId) ??
     allowedUnits.find((unit) => unit.id === session.activeBusinessUnitId) ??
     allowedUnits[0]!;
-  const applicableMemberships = activeMemberships
-    .filter(
-      (membership) =>
-        membership.businessUnitId === null || membership.businessUnitId === selectedUnit.id,
-    )
-    .sort((left, right) => {
-      const leftScope = left.businessUnitId === selectedUnit.id ? 0 : 1;
-      const rightScope = right.businessUnitId === selectedUnit.id ? 0 : 1;
-      return leftScope - rightScope || left.id.localeCompare(right.id);
-    });
-  const activeMembershipId = applicableMemberships[0]!.id;
-  const applicableMembershipIds = applicableMemberships.map((membership) => membership.id);
-
   const capabilityRows = await database
     .select({
+      membershipId: membershipRoles.membershipId,
       capability: roleCapabilities.capabilityKey,
       constraints: roleCapabilities.constraints,
     })
@@ -204,12 +252,24 @@ async function resolveViewer(): Promise<Viewer | null> {
     .where(
       and(
         eq(membershipRoles.organizationId, session.organizationId),
-        inArray(membershipRoles.membershipId, applicableMembershipIds),
+        inArray(
+          membershipRoles.membershipId,
+          activeMemberships.map((membership) => membership.id),
+        ),
         lte(membershipRoles.validFrom, now),
         or(isNull(membershipRoles.validUntil), gt(membershipRoles.validUntil, now)),
         eq(roles.status, "ACTIVE"),
       ),
     );
+
+  const viewerUnits = allowedUnits.map((unit) => ({ ...unit, slug: unit.code }));
+  const businessUnitAccess = deriveBusinessUnitAccess(
+    viewerUnits,
+    activeMemberships,
+    capabilityRows,
+  );
+  const selectedAccess = businessUnitAccess.find((unit) => unit.id === selectedUnit.id);
+  if (!selectedAccess || selectedAccess.membershipIds.length === 0) return null;
 
   const lastSeenRefreshBefore = new Date(now.getTime() - 5 * 60 * 1_000);
   if (
@@ -227,11 +287,12 @@ async function resolveViewer(): Promise<Viewer | null> {
     displayName: session.displayName,
     organizationId: session.organizationId,
     businessUnitId: selectedUnit.id,
-    businessUnits: allowedUnits.map((unit) => ({ ...unit, slug: unit.code })),
-    activeMembershipId,
-    membershipIds: applicableMembershipIds,
-    capabilities: [...new Set(capabilityRows.map((row) => row.capability))].sort(),
-    capabilityRecordScopes: deriveCapabilityRecordScopes(capabilityRows),
+    businessUnits: viewerUnits,
+    businessUnitAccess,
+    activeMembershipId: selectedAccess.membershipIds[0]!,
+    membershipIds: selectedAccess.membershipIds,
+    capabilities: selectedAccess.capabilities,
+    capabilityRecordScopes: selectedAccess.capabilityRecordScopes,
     demo: false,
   };
 }
@@ -251,4 +312,13 @@ export async function requireApiViewer(capability?: string): Promise<Viewer> {
     throw new ApiError(403, "FORBIDDEN", "Anda tiada akses untuk tindakan ini.");
   }
   return viewer;
+}
+
+export async function requireApiViewerForBusinessUnit(
+  capability: string,
+  businessUnitId: string,
+): Promise<Viewer> {
+  const viewer = await getViewer();
+  if (!viewer) throw new ApiError(401, "UNAUTHENTICATED", "Log masuk diperlukan.");
+  return deriveBusinessUnitCommandViewer(viewer, capability, businessUnitId);
 }

@@ -5,12 +5,7 @@ import type {
   ReactNode,
 } from "react";
 import { useId } from "react";
-import {
-  Building2,
-  ChevronDown,
-  X,
-  type LucideIcon,
-} from "lucide-react";
+import { X, type LucideIcon } from "lucide-react";
 
 import { cn } from "../ui/utils";
 
@@ -18,13 +13,6 @@ export interface SidebarBrand {
   name: string;
   meta?: string;
   mark?: ReactNode;
-}
-
-export interface SidebarWorkspace {
-  name: string;
-  label?: string;
-  onClick?: () => void;
-  ariaLabel?: string;
 }
 
 export interface SidebarNavItem {
@@ -45,7 +33,7 @@ export interface SidebarProps {
   sections: SidebarNavSection[];
   activeHref?: string;
   brand?: SidebarBrand;
-  workspace?: SidebarWorkspace;
+  workspace?: ReactNode;
   footer?: ReactNode;
   className?: string;
   ariaLabel?: string;
@@ -54,36 +42,6 @@ export interface SidebarProps {
     event: ReactMouseEvent<HTMLAnchorElement>,
   ) => void;
   onClose?: () => void;
-}
-
-function WorkspaceSwitcher({ workspace }: { workspace: SidebarWorkspace }) {
-  const content = (
-    <>
-      <Building2 aria-hidden="true" />
-      <span className="crm-workspace-switcher__copy">
-        <span className="crm-workspace-switcher__label">
-          {workspace.label ?? "Syarikat"}
-        </span>
-        <span className="crm-workspace-switcher__name">{workspace.name}</span>
-      </span>
-      {workspace.onClick ? <ChevronDown aria-hidden="true" /> : null}
-    </>
-  );
-
-  if (workspace.onClick) {
-    return (
-      <button
-        type="button"
-        className="crm-workspace-switcher"
-        onClick={workspace.onClick}
-        aria-label={workspace.ariaLabel ?? `Tukar syarikat. Semasa: ${workspace.name}`}
-      >
-        {content}
-      </button>
-    );
-  }
-
-  return <div className="crm-workspace-switcher">{content}</div>;
 }
 
 export function Sidebar({
@@ -127,7 +85,7 @@ export function Sidebar({
         ) : null}
       </div>
 
-      {workspace ? <WorkspaceSwitcher workspace={workspace} /> : null}
+      {workspace ?? null}
 
       <div className="crm-sidebar__scroll">
         <nav aria-label={ariaLabel}>

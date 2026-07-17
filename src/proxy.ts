@@ -1,7 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PRODUCT_REQUEST_PATH_HEADER } from "@/config/product-navigation";
+import {
+  BUSINESS_SCOPE_QUERY_MAX_BYTES,
+  BUSINESS_SCOPE_QUERY_PATTERN,
+} from "@/domain/business-units/read-scope";
 
 export function proxy(request: NextRequest) {
+  const scopeValues = request.nextUrl.searchParams.getAll("bu");
+  if (
+    scopeValues.length > 1 ||
+    (scopeValues.length === 1 && (
+      new TextEncoder().encode(scopeValues[0]!).byteLength > BUSINESS_SCOPE_QUERY_MAX_BYTES ||
+      !BUSINESS_SCOPE_QUERY_PATTERN.test(scopeValues[0]!)
+    ))
+  ) {
+    return NextResponse.json(
+      { error: { code: "INVALID_SCOPE", message: "Skop syarikat tidak sah." } },
+      { status: 400, headers: { "Cache-Control": "no-store" } },
+    );
+  }
+
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
   const isDevelopment = process.env.NODE_ENV === "development";
   const directives = [

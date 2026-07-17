@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { CRM_MODULE_ACCESS } from "@/server/auth/module-access";
 
 describe("protected CRM module layouts", () => {
-  it("has one server capability boundary for every declared module route", async () => {
+  it("has one immutable surface boundary for every declared module route", async () => {
     const crmRoot = resolve(process.cwd(), "src/app/(crm)");
 
     for (const moduleKey of Object.keys(CRM_MODULE_ACCESS)) {
@@ -31,8 +31,11 @@ describe("protected CRM module layouts", () => {
     }
 
     expect(routeKeys.sort()).toEqual(Object.keys(CRM_MODULE_ACCESS).sort());
-    await expect(readFile(resolve(crmRoot, "page.tsx"), "utf8")).resolves.toContain(
-      'requirePageViewer(undefined, "/")',
-    );
+    const rootPage = await readFile(resolve(crmRoot, "page.tsx"), "utf8");
+    expect(rootPage).toContain("requireScopedPageViewer");
+    expect(rootPage).toContain("const query = await searchParams");
+    expect(rootPage).toContain("query.bu");
+    expect(rootPage).toMatch(/requireScopedPageViewer\([\s\S]*?undefined,[\s\S]*?["']\/["']/);
+    expect(rootPage).not.toContain("requirePageViewer");
   });
 });

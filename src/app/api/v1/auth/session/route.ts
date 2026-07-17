@@ -1,4 +1,6 @@
 import { getViewer } from "@/server/auth/viewer";
+import { projectPublicViewer } from "@/domain/auth/public-viewer";
+import { getRuntimeConfig } from "@/server/env";
 import { requestIdFrom, toErrorResponse } from "@/server/http/errors";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +16,11 @@ export async function GET(request: Request): Promise<Response> {
       );
     }
     return Response.json(
-      { authenticated: true, viewer, requestId },
+      {
+        authenticated: true,
+        viewer: projectPublicViewer(viewer, getRuntimeConfig().productSurface),
+        requestId,
+      },
       { status: 200, headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {

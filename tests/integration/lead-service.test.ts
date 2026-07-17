@@ -53,6 +53,26 @@ const viewer: Viewer = {
     { id: ids.businessUnit, name: "Sales Integration", code: "sales-integration", slug: "sales-integration" },
     { id: ids.businessUnitB, name: "Sales B", code: "sales-b", slug: "sales-b" },
   ],
+  businessUnitAccess: [
+    {
+      id: ids.businessUnit,
+      name: "Sales Integration",
+      code: "sales-integration",
+      slug: "sales-integration",
+      membershipIds: [ids.membership],
+      capabilities: ["lead.create", "lead.update", "lead.assign", "lead.reopen"],
+      capabilityRecordScopes: { "lead.update": ["BUSINESS_UNIT"] },
+    },
+    {
+      id: ids.businessUnitB,
+      name: "Sales B",
+      code: "sales-b",
+      slug: "sales-b",
+      membershipIds: [ids.membershipB],
+      capabilities: ["lead.create", "lead.update", "lead.assign", "lead.reopen"],
+      capabilityRecordScopes: { "lead.update": ["BUSINESS_UNIT"] },
+    },
+  ],
   activeMembershipId: ids.membership,
   membershipIds: [ids.membership],
   capabilities: ["lead.create", "lead.update", "lead.assign", "lead.reopen"],
@@ -313,6 +333,7 @@ describe("lead application service", () => {
         viewer,
         created.lead.id,
         {
+          businessUnitId: ids.businessUnit,
           version: created.lead.version,
           stage: created.lead.stage,
           ownerMembershipId: ids.expiredOwnerMembership,
@@ -399,6 +420,7 @@ describe("lead application service", () => {
         viewer,
         created.lead.id,
         {
+          businessUnitId: ids.businessUnit,
           version: created.lead.version,
           stage: created.lead.stage,
           ownerMembershipId: ids.membership,
@@ -413,6 +435,7 @@ describe("lead application service", () => {
         viewer,
         created.lead.id,
         {
+          businessUnitId: ids.businessUnit,
           version: created.lead.version,
           stage: created.lead.stage,
           ownerMembershipId: null,
@@ -428,6 +451,7 @@ describe("lead application service", () => {
       viewer,
       created.lead.id,
       {
+        businessUnitId: ids.businessUnit,
         version: created.lead.version,
         stage: created.lead.stage,
         ownerMembershipId: null,
@@ -492,6 +516,7 @@ describe("lead application service", () => {
         viewer,
         created.lead.id,
         {
+          businessUnitId: ids.businessUnit,
           version: created.lead.version,
           stage: created.lead.stage,
           ownerMembershipId: ids.assigneeMembership,
@@ -609,6 +634,61 @@ describe("lead application service", () => {
         )::text as unauthorized_links
     `;
     expect(evidence).toEqual({ target_status: "POSSIBLE_DUPLICATE", unauthorized_links: "0" });
+  });
+
+  it("rejects an explicit cross-unit transition before creating any durable mutation", async () => {
+    const target = await createLead(
+      viewerB,
+      {
+        businessUnitId: ids.businessUnitB,
+        name: "Cross Unit Transition Guard",
+        phone: "0175550188",
+        source: "website",
+      },
+      "lead-cross-unit-transition-source-001",
+      randomUUID(),
+    );
+    const key = "lead-cross-unit-transition-denied-001";
+    const [before] = await sql<{
+      stage_id: string;
+      owner_membership_id: string | null;
+      version: string;
+    }[]>`
+      select stage_id, owner_membership_id, version::text
+      from leads where id = ${target.lead.id}
+    `;
+
+    await expect(
+      transitionLeadRecord(
+        viewer,
+        target.lead.id,
+        {
+          businessUnitId: ids.businessUnitB,
+          version: target.lead.version,
+          stage: target.lead.stage,
+        },
+        randomUUID(),
+        key,
+      ),
+    ).rejects.toMatchObject({ code: "BUSINESS_UNIT_FORBIDDEN", status: 403 });
+
+    const [after] = await sql<{
+      stage_id: string;
+      owner_membership_id: string | null;
+      version: string;
+    }[]>`
+      select stage_id, owner_membership_id, version::text
+      from leads where id = ${target.lead.id}
+    `;
+    const [idempotency] = await sql<{ count: string }[]>`
+      select count(*)::text as count
+      from idempotency_keys
+      where organization_id = ${ids.organization}
+        and command_name = 'lead.transition'
+        and idempotency_key = ${key}
+    `;
+    expect(after).toEqual(before);
+    expect(idempotency?.count).toBe("0");
   });
 
   it("does not reactivate or reuse a contact whose business-unit relationship becomes restricted", async () => {
@@ -747,7 +827,7 @@ describe("lead application service", () => {
       transitionLeadRecord(
         viewer,
         firstLead.id,
-        { version: firstLead.version, stage: "assigned", ownerMembershipId: ids.membership },
+        { businessUnitId: ids.businessUnit, version: firstLead.version, stage: "assigned", ownerMembershipId: ids.membership },
         randomUUID(),
         randomUUID(),
       ),
@@ -764,7 +844,7 @@ describe("lead application service", () => {
     const result = await transitionLeadRecord(
       viewer,
       firstLead.id,
-      { version: firstLead.version, stage: "assigned", ownerMembershipId: ids.membership },
+      { businessUnitId: ids.businessUnit, version: firstLead.version, stage: "assigned", ownerMembershipId: ids.membership },
       randomUUID(),
       randomUUID(),
     );
@@ -804,6 +884,7 @@ describe("lead application service", () => {
       viewer,
       created.lead.id,
       {
+        businessUnitId: ids.businessUnit,
         version: created.lead.version,
         stage: "assigned",
         ownerMembershipId: ids.assigneeMembership,
@@ -869,6 +950,7 @@ describe("lead application service", () => {
       viewer,
       created.lead.id,
       {
+        businessUnitId: ids.businessUnit,
         version: Number(before!.version),
         stage: "assigned",
         ownerMembershipId: ids.assigneeMembership,
@@ -912,7 +994,7 @@ describe("lead application service", () => {
     await transitionLeadRecord(
       viewer,
       created.lead.id,
-      { version: created.lead.version, stage: "assigned" },
+      { businessUnitId: ids.businessUnit, version: created.lead.version, stage: "assigned" },
       randomUUID(),
       randomUUID(),
     );
@@ -1130,7 +1212,7 @@ describe("lead application service", () => {
     const attempt = transitionLeadRecord(
       viewer,
       created.lead.id,
-      { version: created.lead.version, stage: created.lead.stage },
+      { businessUnitId: ids.businessUnit, version: created.lead.version, stage: created.lead.stage },
       randomUUID(),
       randomUUID(),
     ).then(
@@ -1202,7 +1284,7 @@ describe("lead application service", () => {
       transitionLeadRecord(
         ownScopedViewer,
         created.lead.id,
-        { version: created.lead.version, stage: "assigned" },
+        { businessUnitId: ids.businessUnit, version: created.lead.version, stage: "assigned" },
         randomUUID(),
         "lead-record-scope-denied-001",
       ),
@@ -1211,7 +1293,7 @@ describe("lead application service", () => {
     const elevated = await transitionLeadRecord(
       viewer,
       created.lead.id,
-      { version: created.lead.version, stage: "assigned" },
+      { businessUnitId: ids.businessUnit, version: created.lead.version, stage: "assigned" },
       randomUUID(),
       "lead-record-scope-elevated-001",
     );
@@ -1239,6 +1321,7 @@ describe("lead application service", () => {
     );
     const key = "lead-transition-replay-001";
     const input = {
+      businessUnitId: ids.businessUnit,
       version: created.lead.version,
       stage: "assigned",
       ownerMembershipId: ids.membership,

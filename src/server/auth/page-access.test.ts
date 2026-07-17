@@ -27,7 +27,7 @@ vi.mock("@/server/env", () => ({
 
 import * as pageAccess from "./page-access";
 
-const { createCrmModuleLayout, requirePageViewer } = pageAccess;
+const { createCrmModuleLayout, requirePageViewer, requireScopedPageViewer } = pageAccess;
 const { canRenderDemoFixtures } = pageAccess;
 
 const viewer: Viewer = {
@@ -41,6 +41,26 @@ const viewer: Viewer = {
       name: "Salam Land",
       code: "salam-land",
       slug: "salam-land",
+    },
+  ],
+  businessUnitAccess: [
+    {
+      id: "00000000-0000-4000-8000-000000000101",
+      name: "Salam Land",
+      code: "salam-land",
+      slug: "salam-land",
+      membershipIds: ["00000000-0000-4000-8000-000000000201"],
+      capabilities: ["finance.read"],
+      capabilityRecordScopes: {},
+    },
+    {
+      id: "00000000-0000-4000-8000-000000000102",
+      name: "Bumi Hayat",
+      code: "bumi-hayat",
+      slug: "bumi-hayat",
+      membershipIds: ["00000000-0000-4000-8000-000000000202"],
+      capabilities: ["task.read"],
+      capabilityRecordScopes: {},
     },
   ],
   activeMembershipId: "00000000-0000-4000-8000-000000000201",
@@ -105,6 +125,124 @@ describe("requirePageViewer", () => {
   });
 });
 
+describe("requireScopedPageViewer", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getRuntimeConfig.mockReturnValue({ productSurface: "crm" });
+    mocks.redirect.mockImplementation(() => {
+      throw new Error("redirected");
+    });
+    mocks.forbidden.mockImplementation(() => {
+      throw new Error("forbidden");
+    });
+    mocks.notFound.mockImplementation(() => {
+      throw new Error("not-found");
+    });
+  });
+
+  it("validates duplicate scope before authentication or redirects", async () => {
+    mocks.getViewer.mockResolvedValue(null);
+
+    await expect(
+      requireScopedPageViewer(["salam-land", "bumi-hayat"], "finance.read", "/finance"),
+    ).rejects.toThrow("not-found");
+    expect(mocks.getViewer).not.toHaveBeenCalled();
+    expect(mocks.redirect).not.toHaveBeenCalled();
+  });
+
+  it("preserves the exact validated scope in an unauthenticated return target", async () => {
+    mocks.getViewer.mockResolvedValue(null);
+
+    await expect(
+      requireScopedPageViewer("salam-land", "finance.read", "/finance", {
+        bu: "salam-land",
+        tab: "aging",
+      }),
+    ).rejects.toThrow("redirected");
+    expect(mocks.redirect).toHaveBeenCalledWith(
+      "/login?returnTo=%2Ffinance%3Ftab%3Daging%26bu%3Dsalam-land",
+    );
+  });
+
+  it("canonicalizes an omitted scope to the resolved unit without losing safe query values", async () => {
+    mocks.getViewer.mockResolvedValue(viewer);
+
+    await expect(
+      requireScopedPageViewer(undefined, "finance.read", "/finance", {
+        tab: "aging",
+        filter: ["open", "late"],
+      }),
+    ).rejects.toThrow("redirected");
+    expect(mocks.redirect).toHaveBeenCalledWith(
+      "/finance?tab=aging&filter=open&filter=late&bu=salam-land",
+    );
+  });
+
+  it("canonicalizes to the first capability-eligible unit when the active preference is ineligible", async () => {
+    mocks.getViewer.mockResolvedValue({
+      ...viewer,
+      businessUnitId: "00000000-0000-4000-8000-000000000102",
+    });
+
+    await expect(
+      requireScopedPageViewer(undefined, "finance.read", "/finance", { view: "aging" }),
+    ).rejects.toThrow("redirected");
+    expect(mocks.redirect).toHaveBeenCalledWith(
+      "/finance?view=aging&bu=salam-land",
+    );
+  });
+
+  it("does not redirect an already canonical scope", async () => {
+    mocks.getViewer.mockResolvedValue(viewer);
+
+    await expect(
+      requireScopedPageViewer("salam-land", "finance.read", "/finance", {
+        bu: "salam-land",
+        tab: "aging",
+      }),
+    ).resolves.toMatchObject({ scope: { queryValue: "salam-land" } });
+    expect(mocks.redirect).not.toHaveBeenCalled();
+  });
+
+  it("resolves per-unit capability access instead of the active cookie capabilities", async () => {
+    mocks.getViewer.mockResolvedValue({
+      ...viewer,
+      capabilities: [],
+      businessUnitId: "00000000-0000-4000-8000-000000000102",
+    });
+
+    await expect(
+      requireScopedPageViewer("salam-land", "finance.read", "/finance"),
+    ).resolves.toMatchObject({
+      viewer: { businessUnitId: "00000000-0000-4000-8000-000000000102" },
+      scope: {
+        kind: "UNIT",
+        businessUnitCode: "salam-land",
+        businessUnitId: "00000000-0000-4000-8000-000000000101",
+      },
+    });
+    expect(mocks.forbidden).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 for a valid but unauthorised unit", async () => {
+    mocks.getViewer.mockResolvedValue(viewer);
+
+    await expect(
+      requireScopedPageViewer("bumi-hayat", "finance.read", "/finance"),
+    ).rejects.toThrow("forbidden");
+    expect(mocks.forbidden).toHaveBeenCalledOnce();
+  });
+
+  it("limits Tasha scopes to Salam Land", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({ productSurface: "tasha" });
+    mocks.getViewer.mockResolvedValue(viewer);
+
+    await expect(
+      requireScopedPageViewer("bumi-hayat", "task.read", "/tasks"),
+    ).rejects.toThrow("forbidden");
+  });
+});
+
 describe("createCrmModuleLayout", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -124,13 +262,13 @@ describe("createCrmModuleLayout", () => {
     });
   });
 
-  it("binds the module capability and exact return path to the server layout", async () => {
-    mocks.getViewer.mockResolvedValue(viewer);
+  it("leaves authentication and query-aware capability checks to the page helper", async () => {
+    mocks.getViewer.mockResolvedValue(null);
     const FinanceLayout = createCrmModuleLayout("finance");
     const child = "child";
 
     await expect(FinanceLayout({ children: child })).resolves.toBe(child);
-    expect(mocks.getViewer).toHaveBeenCalledOnce();
+    expect(mocks.getViewer).not.toHaveBeenCalled();
   });
 
   it("returns a cross-surface 404 before viewer, redirect, or forbidden work", async () => {
@@ -149,7 +287,7 @@ describe("createCrmModuleLayout", () => {
     expect(mocks.forbidden).not.toHaveBeenCalled();
   });
 
-  it("keeps a shared Tasha route behind the existing capability boundary", async () => {
+  it("keeps a shared Tasha route behind only the immutable surface boundary", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
       demoMode: false,
       nodeEnv: "test",
@@ -160,7 +298,7 @@ describe("createCrmModuleLayout", () => {
 
     await expect(FinanceLayout({ children: "shared" })).resolves.toBe("shared");
     expect(mocks.notFound).not.toHaveBeenCalled();
-    expect(mocks.getViewer).toHaveBeenCalledOnce();
+    expect(mocks.getViewer).not.toHaveBeenCalled();
   });
 });
 

@@ -1,20 +1,57 @@
 import { DataEmptyState } from "@/components/crm/data-empty-state";
-import { OperationalModule } from "@/components/crm/operational-module";
-import { canRenderDemoFixtures } from "@/server/auth/page-access";
+import { createDemoModuleMetrics, OperationalModule, parseModuleMetricQuery, type DemoModuleMetric, type ModuleRow } from "@/components/crm/operational-module";
+import { demoTasks, isDemoTaskActionableToday } from "@/lib/demo-crm";
+import { CRM_MODULE_ACCESS } from "@/server/auth/module-access";
+import { canRenderDemoFixtures, requireScopedPageViewer } from "@/server/auth/page-access";
 
-export default function TasksPage() {
+const rows: readonly ModuleRow[] = demoTasks.map((task) => ({
+  ...task,
+  task: task.id === "t1" ? "Hubungi pelanggan" : task.title,
+  record: task.title.replace(/^(?:Hubungi|Semak|Tamatkan|Hantar)\s+/, ""),
+  owner: task.meta.split("·").at(-1)?.trim() ?? "—",
+  due: task.meta.split("·")[0]?.trim() ?? "—",
+}));
+const metricDefinitions: readonly DemoModuleMetric[] = [
+  {
+    key: "today",
+    label: "Hari ini",
+    filterLabel: "Tugasan hari ini",
+    definition: { formula: "Bilangan tugasan perlu tindakan hari ini.", source: "Rekod tugasan demo." },
+    matches: (row) => isDemoTaskActionableToday({ status: row.status }),
+  },
+  {
+    key: "overdue",
+    label: "Susulan lewat",
+    filterLabel: "Susulan lewat",
+    definition: { formula: "Bilangan tugasan berstatus lewat.", source: "Rekod tugasan demo." },
+    matches: (row) => row.status === "overdue",
+  },
+  {
+    key: "upcoming",
+    label: "Akan datang",
+    filterLabel: "Tugasan akan datang",
+    definition: { formula: "Bilangan tugasan selepas hari ini.", source: "Rekod tugasan demo." },
+    matches: (row) => row.status === "upcoming",
+  },
+];
+
+type PageSearchParams = Record<string, string | string[] | undefined>;
+
+export default async function TasksPage({ searchParams }: { searchParams: Promise<PageSearchParams> }) {
+  const query = await searchParams;
+  const { scope } = await requireScopedPageViewer(query.bu, CRM_MODULE_ACCESS.tasks.capability, "/tasks", query);
   if (!canRenderDemoFixtures()) {
     return <DataEmptyState label="Belum ada data." />;
   }
 
+  const metrics = createDemoModuleMetrics({ scope, capability: CRM_MODULE_ACCESS.tasks.capability, modulePath: "/tasks", dateBasis: "Tarikh akhir", periodLabel: "Hari ini", rows, metrics: metricDefinitions });
   return <OperationalModule
-    metrics={[{ label: "Hari ini", value: "12" }, { label: "Lewat", value: "7" }, { label: "Selesai", value: "34" }]}
+    scope={scope}
+    metrics={metrics}
+    activeMetricKey={parseModuleMetricQuery(query.metric, metrics)}
+    activeDefinitionKey={parseModuleMetricQuery(query.definition, metrics)}
     title="Senarai tugasan"
     columns={[{ key: "task", label: "Tugasan" }, { key: "record", label: "Rekod" }, { key: "owner", label: "Pemilik" }, { key: "due", label: "Tarikh" }]}
-    rows={[
-      { id: "t1", task: "Hubungi pelanggan", record: "Nur Aisyah", owner: "Farah", due: "Hari ini, 2:30 PTG" },
-      { id: "t2", task: "Semak bukti bayaran", record: "SL-2026-0481", owner: "Amir", due: "Hari ini, 3:15 PTG" },
-      { id: "t3", task: "Tamatkan pegangan", record: "Lot A-109", owner: "Nadia", due: "Hari ini, 4:45 PTG" },
-    ]}
+    rows={rows}
   />;
 }

@@ -3,14 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   assertTrustedOrigin: vi.fn(),
   createLead: vi.fn(),
-  requireApiViewer: vi.fn(),
+  requireApiViewerForBusinessUnit: vi.fn(),
 }));
 
 vi.mock("@/server/http/security", () => ({
   assertTrustedOrigin: mocks.assertTrustedOrigin,
 }));
 vi.mock("@/server/auth/viewer", () => ({
-  requireApiViewer: mocks.requireApiViewer,
+  requireApiViewerForBusinessUnit: mocks.requireApiViewerForBusinessUnit,
 }));
 vi.mock("@/server/leads/create-lead", () => ({
   createLead: mocks.createLead,
@@ -51,9 +51,43 @@ function leadRequest({
 describe("POST /api/v1/leads duplicate mapping", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.requireApiViewer.mockResolvedValue({
+    mocks.requireApiViewerForBusinessUnit.mockResolvedValue({
       businessUnitId: "00000000-0000-4000-8000-000000000101",
     });
+  });
+
+  it("parses the bounded command before authorising its explicit business unit", async () => {
+    const commandViewer = { businessUnitId: validLeadBody.businessUnitId, membershipIds: ["unit-membership"] };
+    mocks.requireApiViewerForBusinessUnit.mockResolvedValueOnce(commandViewer);
+    mocks.createLead.mockResolvedValueOnce({
+      lead: { id: "00000000-0000-4000-8000-000000000501" },
+      replayed: false,
+      responseCode: 201,
+    });
+
+    const response = await POST(leadRequest());
+
+    expect(response.status).toBe(201);
+    expect(mocks.requireApiViewerForBusinessUnit).toHaveBeenCalledWith(
+      "lead.create",
+      validLeadBody.businessUnitId,
+    );
+    expect(mocks.createLead).toHaveBeenCalledWith(
+      commandViewer,
+      expect.objectContaining({ businessUnitId: validLeadBody.businessUnitId }),
+      "route-duplicate-lead-001",
+      requestId,
+    );
+  });
+
+  it("does not authorise a unit until the command body is valid", async () => {
+    const response = await POST(leadRequest({
+      body: JSON.stringify({ ...validLeadBody, businessUnitId: undefined }),
+    }));
+
+    expect(response.status).toBe(422);
+    expect(mocks.requireApiViewerForBusinessUnit).not.toHaveBeenCalled();
+    expect(mocks.createLead).not.toHaveBeenCalled();
   });
 
   it.each([

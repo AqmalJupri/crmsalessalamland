@@ -69,7 +69,7 @@ function transitionRequestHash(
   input: TransitionLeadInput,
 ): Uint8Array {
   const canonicalRequest = canonicalize({
-    businessUnitId: viewer.businessUnitId,
+    businessUnitId: input.businessUnitId,
     convertedOpportunityId: input.convertedOpportunityId,
     leadId,
     organizationId: viewer.organizationId,
@@ -147,6 +147,13 @@ export async function transitionLeadRecord(
   requestId: string,
   idempotencyKey: string,
 ): Promise<{ lead: TransitionedLead; changed: boolean; replayed: boolean }> {
+  if (input.businessUnitId !== viewer.businessUnitId) {
+    throw new ApiError(
+      403,
+      "BUSINESS_UNIT_FORBIDDEN",
+      "Akses syarikat tidak dibenarkan.",
+    );
+  }
   assertOwnerAssignmentAllowed(viewer, input.ownerMembershipId);
   const now = new Date();
 

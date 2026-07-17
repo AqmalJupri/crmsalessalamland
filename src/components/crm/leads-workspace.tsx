@@ -4,7 +4,8 @@ import { useMemo, useRef, useState, type FormEvent } from "react";
 import { Plus, Search, X } from "lucide-react";
 import { Badge, Button, Card, CardContent, Input, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui";
 import { normalizeMalaysianPhone } from "@/domain/contacts/identity";
-import { getLeadStageFilterOptions, getLeadStagePresentation, getProviderLabel, leadProviderOptions, type DemoLead } from "@/lib/demo-crm";
+import type { ClientBusinessScope } from "@/domain/business-units/client-scope";
+import { filterDemoRecordsByUnitIds, getLeadStageFilterOptions, getLeadStagePresentation, getProviderLabel, leadProviderOptions, type DemoLead } from "@/lib/demo-crm";
 import { DataEmptyState } from "./data-empty-state";
 import { useDialogFocus } from "./use-dialog-focus";
 
@@ -23,18 +24,38 @@ interface ApiCreatedLead {
   version: number;
 }
 
-export function LeadsWorkspace({
-  businessUnitId,
-  canCreate,
-  initialLeads,
-}: {
-  businessUnitId: string;
+interface LeadsWorkspaceProps {
+  scope: ClientBusinessScope;
   canCreate: boolean;
   initialLeads: DemoLead[];
-}) {
-  const [leads, setLeads] = useState(initialLeads);
+  initialStageFilter?: string | null;
+}
+
+export function LeadsWorkspace(props: LeadsWorkspaceProps) {
+  const scopeKey = props.scope.kind === "ALL"
+    ? `ALL:${props.scope.unitIds.join("|")}`
+    : `UNIT:${props.scope.businessUnitId}`;
+  return <ScopedLeadsWorkspace key={`${scopeKey}:${props.initialStageFilter ?? "all"}`} {...props} />;
+}
+
+function ScopedLeadsWorkspace({
+  scope,
+  canCreate,
+  initialLeads,
+  initialStageFilter = null,
+}: LeadsWorkspaceProps) {
+  const unitIds = scope.kind === "ALL" ? scope.unitIds : [scope.businessUnitId];
+  const [leads, setLeads] = useState(() =>
+    filterDemoRecordsByUnitIds(initialLeads, unitIds),
+  );
+  const writeAccess = scope.kind === "UNIT" ? {
+    id: scope.businessUnitId,
+    code: scope.businessUnitCode,
+    name: scope.businessUnitName,
+  } : null;
+  const createAllowed = canCreate && writeAccess !== null;
   const [query, setQuery] = useState("");
-  const [stage, setStage] = useState<string>("all");
+  const [stage, setStage] = useState<string>(initialStageFilter ?? "all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -50,14 +71,27 @@ export function LeadsWorkspace({
   const selectedLead = leads.find((lead) => lead.id === selectedId) ?? null;
   const selectedStage = selectedLead ? getLeadStagePresentation(selectedLead.stage) : null;
   const dialogOpen = selectedLead !== null || createOpen;
-  const stageOptions = useMemo(() => getLeadStageFilterOptions(leads), [leads]);
+  const stageOptions = useMemo(() => {
+    const options = getLeadStageFilterOptions(leads);
+    if (
+      initialStageFilter &&
+      !options.some((option) => option.value === initialStageFilter)
+    ) {
+      options.push({
+        value: initialStageFilter,
+        label: getLeadStagePresentation(initialStageFilter).label,
+      });
+      options.sort((left, right) => left.label.localeCompare(right.label, "ms"));
+    }
+    return options;
+  }, [initialStageFilter, leads]);
   const filtered = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return leads.filter((lead) => {
       const matchesStage = stage === "all" || lead.stage === stage;
       const matchesQuery =
         normalizedQuery.length === 0 ||
-        [lead.name, lead.phone, getProviderLabel(lead.source), lead.productInterest, lead.owner]
+        [lead.name, lead.phone, getProviderLabel(lead.source), lead.productInterest, lead.owner, lead.businessUnitName]
           .join(" ")
           .toLowerCase()
           .includes(normalizedQuery);
@@ -94,6 +128,10 @@ export function LeadsWorkspace({
   async function submitLead(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (saving) return;
+    if (!writeAccess) {
+      setFormError("Pilih syarikat.");
+      return;
+    }
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name") ?? "").trim();
     const phoneRaw = String(form.get("phone") ?? "");
@@ -112,7 +150,7 @@ export function LeadsWorkspace({
           "Content-Type": "application/json",
           "Idempotency-Key": idempotencyKey,
         },
-        body: JSON.stringify({ businessUnitId, name, phone, source, productInterest }),
+        body: JSON.stringify({ businessUnitId: writeAccess.id, name, phone, source, productInterest }),
       });
       const body = (await response.json()) as {
         data?: ApiCreatedLead;
@@ -121,6 +159,9 @@ export function LeadsWorkspace({
       if (!response.ok || !body.data) throw new Error(body.error?.message ?? "Lead tidak dapat disimpan.");
 
       const created: DemoLead = {
+        businessUnitId: writeAccess.id,
+        businessUnitCode: writeAccess.code,
+        businessUnitName: writeAccess.name,
         id: body.data.id,
         name: body.data.name,
         phone: maskPhone(body.data.phone),
@@ -148,7 +189,7 @@ export function LeadsWorkspace({
         inert={dialogOpen || undefined}
         aria-hidden={dialogOpen || undefined}
       >
-      {leads.length > 0 || canCreate ? (
+      {leads.length > 0 || createAllowed || scope.kind === "ALL" ? (
         <div className="crm-toolbar">
         {leads.length > 0 ? (
           <div className="crm-toolbar__filters">
@@ -171,9 +212,9 @@ export function LeadsWorkspace({
           </Select>
           </div>
         ) : <span />}
-        {canCreate ? (
+        {createAllowed ? (
           <Button variant="primary" onClick={() => setCreateOpen(true)}><Plus aria-hidden="true" />Lead baharu</Button>
-        ) : null}
+        ) : scope.kind === "ALL" ? <Button disabled>Pilih syarikat</Button> : null}
         </div>
       ) : null}
 
@@ -187,7 +228,7 @@ export function LeadsWorkspace({
           <Table responsive="stack">
             <TableHeader>
               <TableRow>
-                <TableHead>Lead</TableHead><TableHead>Status</TableHead><TableHead>Pemilik</TableHead>
+                <TableHead>Lead</TableHead>{scope.kind === "ALL" ? <TableHead>Syarikat</TableHead> : null}<TableHead>Status</TableHead><TableHead>Pemilik</TableHead>
                 <TableHead>Tindakan seterusnya</TableHead>
               </TableRow>
             </TableHeader>
@@ -201,13 +242,14 @@ export function LeadsWorkspace({
                       <span>{lead.phone} · {getProviderLabel(lead.source)}</span>
                     </div>
                   </TableCell>
+                  {scope.kind === "ALL" ? <TableCell label="Syarikat">{lead.businessUnitName}</TableCell> : null}
                   <TableCell label="Status"><Badge variant={leadStage.variant}>{leadStage.label}</Badge></TableCell>
                   <TableCell label="Pemilik">{lead.owner}</TableCell>
                   <TableCell label="Tindakan seterusnya">{lead.nextAction}</TableCell>
                 </TableRow>
               })}
               {filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={4}>Tiada rekod sepadan.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={scope.kind === "ALL" ? 5 : 4}>Tiada rekod sepadan.</TableCell></TableRow>
               ) : null}
             </TableBody>
           </Table>
@@ -229,6 +271,7 @@ export function LeadsWorkspace({
               <h3>Ringkasan</h3>
               <ul className="crm-detail-list">
                 <li><span>Status</span><Badge variant={selectedStage!.variant}>{selectedStage!.label}</Badge></li>
+                <li><span>Syarikat</span><strong>{selectedLead.businessUnitName}</strong></li>
                 <li><span>Minat produk</span><strong>{selectedLead.productInterest}</strong></li>
                 <li><span>Sumber</span><strong>{getProviderLabel(selectedLead.source)}</strong></li>
                 <li><span>Pemilik</span><strong>{selectedLead.owner}</strong></li>

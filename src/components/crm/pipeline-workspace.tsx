@@ -4,16 +4,53 @@ import { useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { PipelineBoard, type PipelineStage } from "@/components/crm";
 import { Button } from "@/components/ui";
-import { formatMoneyMinor, opportunityStageTotalMinor, type DemoOpportunityStage } from "@/lib/demo-crm";
+import type { ClientBusinessScope } from "@/domain/business-units/client-scope";
+import {
+  filterOpportunityStagesByUnitIds,
+  formatMoneyMinor,
+  opportunityStageTotalMinor,
+  type DemoOpportunityStage,
+} from "@/lib/demo-crm";
 import { DataEmptyState } from "./data-empty-state";
 import { useDialogFocus } from "./use-dialog-focus";
 
-export function PipelineWorkspace({ initialStages }: { initialStages: DemoOpportunityStage[] }) {
-  const [stages, setStages] = useState<DemoOpportunityStage[]>(() =>
-    initialStages.map((stage) => ({
+function copyScopedStages(
+  initialStages: readonly DemoOpportunityStage[],
+  scope: ClientBusinessScope,
+): DemoOpportunityStage[] {
+  const unitIds = scope.kind === "ALL" ? scope.unitIds : [scope.businessUnitId];
+  return filterOpportunityStagesByUnitIds(initialStages, unitIds).map((stage) => ({
       ...stage,
       items: stage.items.map((item) => ({ ...item })),
-    })),
+  }));
+}
+
+interface PipelineWorkspaceProps {
+  initialStages: DemoOpportunityStage[];
+  scope: ClientBusinessScope;
+  populationKey: "all" | "active";
+  activeFilterLabel?: string | null;
+}
+
+export function PipelineWorkspace(props: PipelineWorkspaceProps) {
+  const scopeKey = props.scope.kind === "ALL"
+    ? `ALL:${props.scope.unitIds.join("|")}`
+    : `UNIT:${props.scope.businessUnitId}`;
+  return (
+    <ScopedPipelineWorkspace
+      key={`${scopeKey}:population:${props.populationKey}`}
+      {...props}
+    />
+  );
+}
+
+function ScopedPipelineWorkspace({
+  initialStages,
+  scope,
+  activeFilterLabel = null,
+}: PipelineWorkspaceProps) {
+  const [stages, setStages] = useState<DemoOpportunityStage[]>(() =>
+    copyScopedStages(initialStages, scope),
   );
   const [selected, setSelected] = useState<{ itemId: string; stageId: string } | null>(null);
   const detailDialogRef = useRef<HTMLElement>(null);
@@ -31,9 +68,10 @@ export function PipelineWorkspace({ initialStages }: { initialStages: DemoOpport
     value: formatMoneyMinor(opportunityStageTotalMinor(stage.items), true),
     items: stage.items.map((item) => ({
       ...item,
+      status: scope.kind === "ALL" ? item.businessUnitName : undefined,
       value: formatMoneyMinor(item.valueMinor, true),
     })),
-  })), [stages]);
+  })), [scope.kind, stages]);
 
   useDialogFocus({
     dialogRef: detailDialogRef,
@@ -43,7 +81,7 @@ export function PipelineWorkspace({ initialStages }: { initialStages: DemoOpport
   });
 
   function move(direction: -1 | 1): void {
-    if (!selection) return;
+    if (!selection || scope.kind === "ALL") return;
     const targetIndex = selection.stageIndex + direction;
     const target = stages[targetIndex];
     const source = stages[selection.stageIndex];
@@ -63,6 +101,11 @@ export function PipelineWorkspace({ initialStages }: { initialStages: DemoOpport
         inert={selection !== null || undefined}
         aria-hidden={selection !== null || undefined}
       >
+        {activeFilterLabel ? (
+          <p className="crm-filter-status" role="status">
+            Tapis: {activeFilterLabel} · {stages.reduce((sum, stage) => sum + stage.items.length, 0)} rekod
+          </p>
+        ) : null}
         {stages.length === 0 ? (
           <DataEmptyState label="Belum ada peluang." />
         ) : (
@@ -78,8 +121,8 @@ export function PipelineWorkspace({ initialStages }: { initialStages: DemoOpport
           <button className="crm-detail-backdrop" type="button" aria-label="Tutup butiran peluang" onClick={() => setSelected(null)} />
           <aside ref={detailDialogRef} className="crm-detail-panel" role="dialog" aria-modal="true" aria-labelledby="opportunity-title" tabIndex={-1}>
             <header className="crm-detail-panel__header"><div><h2 id="opportunity-title">{selection.item.title}</h2><p>{selection.item.meta}</p></div><Button ref={detailCloseRef} size="icon" variant="quiet" aria-label="Tutup" onClick={() => setSelected(null)}><X aria-hidden="true" /></Button></header>
-            <section className="crm-detail-panel__section"><h3>Ringkasan</h3><ul className="crm-detail-list"><li><span>Peringkat</span><strong>{stages[selection.stageIndex]?.title}</strong></li><li><span>Nilai</span><strong>{formatMoneyMinor(selection.item.valueMinor)}</strong></li><li><span>Pemilik</span><strong>{selection.item.owner}</strong></li></ul></section>
-            <footer className="crm-detail-panel__footer"><Button disabled={selection.stageIndex === 0} onClick={() => move(-1)}><ChevronLeft aria-hidden="true" />Undur</Button><Button variant="primary" disabled={selection.stageIndex === stages.length - 1} onClick={() => move(1)}>Seterusnya<ChevronRight aria-hidden="true" /></Button></footer>
+            <section className="crm-detail-panel__section"><h3>Ringkasan</h3><ul className="crm-detail-list">{scope.kind === "ALL" ? <li><span>Syarikat</span><strong>{selection.item.businessUnitName}</strong></li> : null}<li><span>Peringkat</span><strong>{stages[selection.stageIndex]?.title}</strong></li><li><span>Nilai</span><strong>{formatMoneyMinor(selection.item.valueMinor)}</strong></li><li><span>Pemilik</span><strong>{selection.item.owner}</strong></li></ul></section>
+            <footer className="crm-detail-panel__footer">{scope.kind === "ALL" ? <Button disabled>Pilih syarikat</Button> : <><Button disabled={selection.stageIndex === 0} onClick={() => move(-1)}><ChevronLeft aria-hidden="true" />Undur</Button><Button variant="primary" disabled={selection.stageIndex === stages.length - 1} onClick={() => move(1)}>Seterusnya<ChevronRight aria-hidden="true" /></Button></>}</footer>
           </aside>
         </>
       ) : null}

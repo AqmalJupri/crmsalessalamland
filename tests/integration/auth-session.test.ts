@@ -213,6 +213,18 @@ describe("managed OIDC session establishment", () => {
     });
     expect(sessionCookie?.value.length).toBeGreaterThan(32);
     expect(Buffer.from(session!.token_hash)).not.toEqual(Buffer.from(sessionCookie!.value));
+    const businessUnitCookie = writtenCookies.find((cookie) => cookie.name === "crm_bu");
+    expect(businessUnitCookie).toMatchObject({
+      value: ids.businessUnit,
+      options: {
+        httpOnly: true,
+        secure: false,
+        sameSite: "lax",
+        path: "/",
+        priority: "high",
+        expires: expect.any(Date),
+      },
+    });
 
     const [attempt] = await sql<{ attempted_identifier_hash: Uint8Array; outcome: string }[]>`
       select attempted_identifier_hash, outcome

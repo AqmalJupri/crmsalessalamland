@@ -181,6 +181,7 @@ export type CreateLeadInput = z.infer<typeof createLeadSchema>;
 
 export const transitionLeadSchema = z
   .object({
+    businessUnitId: z.uuid(),
     version: z.number().int().positive(),
     stage: pipelineStageCode,
     ownerMembershipId: z.uuid().nullable().optional(),
@@ -188,6 +189,7 @@ export const transitionLeadSchema = z
     disqualificationReason: nullableReason,
     convertedOpportunityId: z.uuid().nullable().optional(),
   })
+  .strict()
   .superRefine((value, context) => {
     if (
       value.reason &&

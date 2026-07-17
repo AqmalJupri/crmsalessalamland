@@ -90,4 +90,33 @@ describe("AppShell mobile drawer", () => {
     expect(screen.queryByRole("dialog", { name: "Navigasi utama" })).toBeNull();
     expect(container.querySelector(".crm-shell__workspace")?.hasAttribute("inert")).toBe(false);
   });
+
+  it("closes the mobile drawer when the route or business scope changes", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      createElement(
+        AppShellWithPositionalChildren,
+        {
+          title: "Utama",
+          routeKey: "/leads?bu=salam-land",
+          navigation: [{ items: [{ label: "Utama", href: "/", icon: LayoutDashboard }] }],
+        },
+        "Kandungan",
+      ),
+    );
+    await user.click(screen.getByRole("button", { name: "Buka menu navigasi" }));
+    expect(screen.getByRole("dialog", { name: "Navigasi utama" })).toBeTruthy();
+
+    rerender(createElement(
+      AppShellWithPositionalChildren,
+      {
+        title: "Utama",
+        routeKey: "/leads?bu=bumi-hayat",
+        navigation: [{ items: [{ label: "Utama", href: "/", icon: LayoutDashboard }] }],
+      },
+      "Kandungan",
+    ));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigasi utama" })).toBeNull());
+  });
 });

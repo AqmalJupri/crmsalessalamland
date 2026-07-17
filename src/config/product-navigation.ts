@@ -155,7 +155,7 @@ export function getProductNavigationSections(
   }));
 }
 
-function findProductNavigationItem(
+export function getProductNavigationItem(
   pathname: string,
 ): ProductNavigationDefinition | undefined {
   if (!pathname.startsWith("/")) return undefined;
@@ -171,7 +171,7 @@ export function isProductPathAvailable(
   surface: ProductSurface,
   pathname: string,
 ): boolean {
-  const item = findProductNavigationItem(pathname);
+  const item = getProductNavigationItem(pathname);
   return item !== undefined && supportsSurface(item, surface);
 }
 
@@ -180,7 +180,7 @@ export function getProductRouteTitle(
   pathname: string,
 ): string {
   const path = pathname.split(/[?#]/, 1)[0] || "/";
-  const item = findProductNavigationItem(path);
+  const item = getProductNavigationItem(path);
 
   return item && supportsSurface(item, surface)
     ? item.title

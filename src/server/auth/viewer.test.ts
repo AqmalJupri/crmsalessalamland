@@ -42,7 +42,7 @@ vi.mock("@/server/env", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
-import { getViewer } from "./viewer";
+import { getViewer, requireApiViewerForBusinessUnit } from "./viewer";
 
 describe("getViewer request memoization", () => {
   beforeEach(() => {
@@ -62,5 +62,32 @@ describe("getViewer request memoization", () => {
 
     await expect(getViewer()).resolves.toMatchObject({ demo: true });
     expect(mocks.getRuntimeConfig).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("requireApiViewerForBusinessUnit", () => {
+  beforeEach(() => {
+    mocks.requestState.id = crypto.randomUUID();
+    mocks.requestState.values.clear();
+    mocks.getRuntimeConfig.mockReset();
+    mocks.getRuntimeConfig.mockReturnValue({ demoMode: true, nodeEnv: "test" });
+  });
+
+  it("returns the requested unit's memberships and capabilities", async () => {
+    await expect(requireApiViewerForBusinessUnit(
+      "lead.create",
+      "00000000-0000-4000-8000-000000000102",
+    )).resolves.toMatchObject({
+      businessUnitId: "00000000-0000-4000-8000-000000000102",
+      activeMembershipId: "00000000-0000-4000-8000-000000000202",
+      membershipIds: ["00000000-0000-4000-8000-000000000202"],
+    });
+  });
+
+  it("rejects a unit outside the per-unit capability projection", async () => {
+    await expect(requireApiViewerForBusinessUnit(
+      "lead.create",
+      "00000000-0000-4000-8000-000000000199",
+    )).rejects.toMatchObject({ status: 403, code: "BUSINESS_UNIT_FORBIDDEN" });
   });
 });

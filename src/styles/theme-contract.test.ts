@@ -465,6 +465,27 @@ export default function manifest() {
     expect(coarsePointer).toContain("width: 44px");
   });
 
+  it("anchors the company listbox and keeps KPI provenance compact but visible", () => {
+    const switcher = cssRule(themeSource, ".crm-business-unit-switcher");
+    const menu = cssRule(themeSource, ".crm-business-unit-switcher__menu");
+    const option = cssRule(themeSource, ".crm-business-unit-switcher__menu button");
+    const metricScope = cssRule(themeSource, ".crm-metric__scope");
+    const metricLink = cssRule(themeSource, ".crm-metric__value a");
+
+    expect(switcher).toContain("position: relative");
+    expect(menu).toContain("position: absolute");
+    expect(menu).toMatch(/background:\s*var\(--crm-sidebar-raised\)/);
+    expect(menu).toMatch(/box-shadow:\s*var\(--crm-shadow-overlay\)/);
+    expect(menu).toContain("overscroll-behavior: contain");
+    expect(option).toContain("display: flex");
+    expect(metricScope).toMatch(/border-top:\s*1px solid var\(--crm-divider\)/);
+    expect(metricScope).toMatch(/font-size:\s*0\.6875rem/);
+    expect(metricLink).toContain("color: inherit");
+
+    const coarsePointer = atRule(themeSource, "@media (pointer: coarse)");
+    expect(coarsePointer).toContain(".crm-business-unit-switcher__menu button");
+  });
+
   it("keeps numeric operational values aligned and removes the login grid", () => {
     for (const selector of [
       ".crm-table",

@@ -17,6 +17,7 @@ import { selectAccessScope, type AccessPreferences } from "./access-policy";
 import { BUSINESS_UNIT_COOKIE, ORGANIZATION_COOKIE, SESSION_COOKIE } from "./constants";
 import { hashSensitiveLookup, hashSessionToken, newSessionToken } from "./crypto";
 import { addHours } from "./time";
+import type { Viewer } from "./viewer";
 
 export interface AuthenticationContext extends AccessPreferences {
   correlationId: string;
@@ -207,7 +208,47 @@ export async function establishOidcSession(
     httpOnly: true,
   });
   cookieStore.set(ORGANIZATION_COOKIE, result.organizationId, sharedPreferences);
-  cookieStore.set(BUSINESS_UNIT_COOKIE, result.businessUnitId, sharedPreferences);
+  cookieStore.set(BUSINESS_UNIT_COOKIE, result.businessUnitId, {
+    ...sharedPreferences,
+    httpOnly: true,
+  });
+}
+
+export async function updateActiveSessionBusinessUnit(
+  viewer: Viewer,
+  businessUnitId: string,
+): Promise<Date> {
+  if (!viewer.businessUnitAccess.some((unit) => unit.id === businessUnitId)) {
+    throw new ApiError(403, "BUSINESS_UNIT_FORBIDDEN", "Akses syarikat tidak dibenarkan.");
+  }
+
+  const config = getRuntimeConfig();
+  const now = new Date();
+  if (viewer.demo && config.demoMode && config.nodeEnv !== "production") {
+    return addHours(now, config.sessionTtlHours);
+  }
+
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
+  if (!token) throw new ApiError(401, "UNAUTHENTICATED", "Log masuk diperlukan.");
+
+  const [updated] = await getDatabase()
+    .update(sessions)
+    .set({ activeBusinessUnitId: businessUnitId, lastSeenAt: now })
+    .where(
+      and(
+        eq(sessions.tokenHash, hashSessionToken(token)),
+        eq(sessions.organizationId, viewer.organizationId),
+        eq(sessions.userId, viewer.userId),
+        eq(sessions.status, "ACTIVE"),
+        isNull(sessions.revokedAt),
+        gt(sessions.expiresAt, now),
+      ),
+    )
+    .returning({ expiresAt: sessions.expiresAt });
+  if (!updated) {
+    throw new ApiError(401, "SESSION_EXPIRED", "Sesi telah tamat. Log masuk semula.");
+  }
+  return updated.expiresAt;
 }
 
 export async function revokeCurrentSession(reason = "USER_LOGOUT"): Promise<void> {

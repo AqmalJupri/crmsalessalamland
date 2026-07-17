@@ -16,7 +16,6 @@ import {
   type SidebarNavItem,
   type SidebarNavSection,
   type SidebarProps,
-  type SidebarWorkspace,
 } from "./sidebar";
 import { Topbar, type TopbarUser } from "./topbar";
 
@@ -26,7 +25,7 @@ export interface AppShellProps {
   title: ReactNode;
   activeHref?: string;
   brand?: SidebarBrand;
-  workspace?: SidebarWorkspace;
+  workspace?: ReactNode;
   topbarEyebrow?: ReactNode;
   topbarDescription?: ReactNode;
   topbarActions?: ReactNode;
@@ -41,6 +40,7 @@ export interface AppShellProps {
   defaultDrawerOpen?: boolean;
   onDrawerOpenChange?: (open: boolean) => void;
   onNavigate?: SidebarProps["onNavigate"];
+  routeKey?: string;
 }
 
 const focusableSelector = [
@@ -71,6 +71,7 @@ export function AppShell({
   navigation,
   onDrawerOpenChange,
   onNavigate,
+  routeKey,
   sidebarFooter,
   skipLabel = "Langkau ke kandungan",
   title,
@@ -84,6 +85,7 @@ export function AppShell({
   const drawerId = `crm-drawer-${generatedId}`;
   const drawerRef = useRef<HTMLDivElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const previousRouteKeyRef = useRef(routeKey);
   const [internalDrawerOpen, setInternalDrawerOpen] = useState(defaultDrawerOpen);
   const drawerOpen = controlledDrawerOpen ?? internalDrawerOpen;
 
@@ -111,6 +113,14 @@ export function AppShell({
     menuButtonRef.current?.blur();
     setDrawerOpen(true);
   }, [setDrawerOpen]);
+
+  useEffect(() => {
+    const previousRouteKey = previousRouteKeyRef.current;
+    previousRouteKeyRef.current = routeKey;
+    if (previousRouteKey !== routeKey && drawerOpen) {
+      closeDrawer(false);
+    }
+  }, [closeDrawer, drawerOpen, routeKey]);
 
   useEffect(() => {
     if (!drawerOpen) return;

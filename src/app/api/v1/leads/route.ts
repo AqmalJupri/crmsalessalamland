@@ -1,7 +1,7 @@
 import { ApiError, requestIdFrom, toErrorResponse } from "@/server/http/errors";
 import { JsonRequestBodyError, readJsonRequestBody } from "@/server/http/request-body";
 import { assertTrustedOrigin } from "@/server/http/security";
-import { requireApiViewer } from "@/server/auth/viewer";
+import { requireApiViewerForBusinessUnit } from "@/server/auth/viewer";
 import { createLead } from "@/server/leads/create-lead";
 import { createLeadSchema } from "@/server/leads/schemas";
 
@@ -75,7 +75,6 @@ export async function POST(request: Request): Promise<Response> {
   const requestId = requestIdFrom(request);
   try {
     assertTrustedOrigin(request);
-    const viewer = await requireApiViewer("lead.create");
     const idempotencyKey = request.headers.get("idempotency-key");
     if (!idempotencyKey || !/^[a-zA-Z0-9._:-]{8,200}$/.test(idempotencyKey)) {
       throw new ApiError(400, "IDEMPOTENCY_KEY_REQUIRED", "Kunci permintaan diperlukan.");
@@ -87,6 +86,11 @@ export async function POST(request: Request): Promise<Response> {
         fields: parsed.error.flatten().fieldErrors,
       });
     }
+
+    const viewer = await requireApiViewerForBusinessUnit(
+      "lead.create",
+      parsed.data.businessUnitId,
+    );
 
     const result = await createLead(viewer, parsed.data, idempotencyKey, requestId);
     return Response.json(

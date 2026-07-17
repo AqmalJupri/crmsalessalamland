@@ -233,15 +233,21 @@ describe("lead request schemas", () => {
 
   it("accepts a configured stage code instead of a static enum", () => {
     expect(
-      transitionLeadSchema.safeParse({ version: 3, stage: "site-visit-booked" }).success,
+      transitionLeadSchema.safeParse({ businessUnitId, version: 3, stage: "site-visit-booked" }).success,
     ).toBe(true);
-    expect(transitionLeadSchema.safeParse({ version: 3, stage: "Invalid Stage" }).success).toBe(
+    expect(transitionLeadSchema.safeParse({ businessUnitId, version: 3, stage: "Invalid Stage" }).success).toBe(
       false,
     );
   });
 
+  it("requires one explicit business unit for every transition command", () => {
+    expect(transitionLeadSchema.safeParse({ version: 3, stage: "contacted" }).success)
+      .toBe(false);
+  });
+
   it("rejects conflicting transition-reason aliases", () => {
     const result = transitionLeadSchema.safeParse({
+      businessUnitId,
       version: 3,
       stage: "disqualified",
       reason: "No financing",
@@ -262,6 +268,7 @@ describe("lead request schemas", () => {
   it("resolves transition-reason aliases in canonical order", () => {
     expect(
       transitionReason({
+        businessUnitId,
         version: 3,
         stage: "disqualified",
         reason: "Canonical reason",
@@ -270,11 +277,12 @@ describe("lead request schemas", () => {
     ).toBe("Canonical reason");
     expect(
       transitionReason({
+        businessUnitId,
         version: 3,
         stage: "disqualified",
         disqualificationReason: "Legacy reason",
       }),
     ).toBe("Legacy reason");
-    expect(transitionReason({ version: 3, stage: "contacted" })).toBeNull();
+    expect(transitionReason({ businessUnitId, version: 3, stage: "contacted" })).toBeNull();
   });
 });

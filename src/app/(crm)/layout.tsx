@@ -6,6 +6,7 @@ import {
   PRODUCT_REQUEST_PATH_HEADER,
 } from "@/config/product-navigation";
 import { getViewer } from "@/server/auth/viewer";
+import { projectPublicViewer } from "@/domain/auth/public-viewer";
 import { getRuntimeConfig } from "@/server/env";
 
 export const dynamic = "force-dynamic";
@@ -23,13 +24,7 @@ export default async function CrmLayout({ children }: Readonly<{ children: React
   return (
     <ApplicationShell
       surface={surface}
-      viewer={{
-        displayName: viewer.displayName,
-        businessUnitId: viewer.businessUnitId,
-        businessUnits: viewer.businessUnits,
-        capabilities: viewer.capabilities,
-        demo: viewer.demo,
-      }}
+      viewer={projectPublicViewer(viewer, surface)}
     >
       {children}
     </ApplicationShell>

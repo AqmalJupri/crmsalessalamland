@@ -10,6 +10,32 @@ function forwardedRequestHeader(response: Response, name: string): string | null
 
 describe("proxy trusted request path", () => {
   it.each([
+    ["?bu=salam-land&bu=bumi-hayat", "multiple"],
+    ["?bu=", "empty"],
+    [`?bu=${"x".repeat(65)}`, "overlong"],
+    ["?bu=Salam-Land", "uppercase"],
+    ["?bu=salam--land", "malformed"],
+  ])("rejects %s business scope before forwarding (%s)", (query) => {
+    const response = proxy(new NextRequest(`https://crm.salamland.my/leads${query}`));
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(forwardedRequestHeader(response, trustedPathHeader)).toBeNull();
+  });
+
+  it.each(["all", "salam-land", "a1-b2"])(
+    "forwards one canonical business scope: %s",
+    (scope) => {
+      const response = proxy(
+        new NextRequest(`https://crm.salamland.my/leads?bu=${scope}`),
+      );
+      expect(response.status).toBe(200);
+      expect(forwardedRequestHeader(response, trustedPathHeader)).toBe("/leads");
+    },
+  );
+
+  it.each([
     ["https://crm.salamland.my/", "/"],
     ["https://crm.salamland.my/inventory/stock-123?tab=history", "/inventory/stock-123"],
   ])("forwards only the URL pathname for %s", (url, expectedPath) => {

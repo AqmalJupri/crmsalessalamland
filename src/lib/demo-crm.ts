@@ -7,7 +7,31 @@ export type DemoLeadStage =
   | "disqualified"
   | "converted";
 
-export interface DemoLead {
+export interface DemoBusinessContext {
+  businessUnitId: string;
+  businessUnitCode: string;
+  businessUnitName: string;
+}
+
+export const demoBusinessUnits = {
+  salam: {
+    businessUnitId: "00000000-0000-4000-8000-000000000101",
+    businessUnitCode: "salam-land",
+    businessUnitName: "Salam Land",
+  },
+  bumi: {
+    businessUnitId: "00000000-0000-4000-8000-000000000102",
+    businessUnitCode: "bumi-hayat",
+    businessUnitName: "Bumi Hayat Printing",
+  },
+  barakah: {
+    businessUnitId: "00000000-0000-4000-8000-000000000103",
+    businessUnitCode: "barakah-emas",
+    businessUnitName: "Barakah Emas",
+  },
+} as const satisfies Record<string, DemoBusinessContext>;
+
+export interface DemoLead extends DemoBusinessContext {
   id: string;
   name: string;
   phone: string;
@@ -47,6 +71,7 @@ export function getProviderLabel(providerKey: string): string {
 
 export const demoLeads: DemoLead[] = [
   {
+    ...demoBusinessUnits.salam,
     id: "10000000-0000-4000-8000-000000000001",
     name: "Nur Aisyah",
     phone: "+6012•••6789",
@@ -58,6 +83,7 @@ export const demoLeads: DemoLead[] = [
     version: 4,
   },
   {
+    ...demoBusinessUnits.salam,
     id: "10000000-0000-4000-8000-000000000002",
     name: "Hakim Razak",
     phone: "+6017•••4421",
@@ -69,6 +95,7 @@ export const demoLeads: DemoLead[] = [
     version: 2,
   },
   {
+    ...demoBusinessUnits.salam,
     id: "10000000-0000-4000-8000-000000000003",
     name: "Siti Maryam",
     phone: "+6011•••0098",
@@ -80,6 +107,7 @@ export const demoLeads: DemoLead[] = [
     version: 2,
   },
   {
+    ...demoBusinessUnits.salam,
     id: "10000000-0000-4000-8000-000000000004",
     name: "Faizal Ahmad",
     phone: "+6013•••7752",
@@ -91,6 +119,7 @@ export const demoLeads: DemoLead[] = [
     version: 6,
   },
   {
+    ...demoBusinessUnits.bumi,
     id: "10000000-0000-4000-8000-000000000005",
     name: "Izzati Salleh",
     phone: "+6019•••1330",
@@ -102,6 +131,7 @@ export const demoLeads: DemoLead[] = [
     version: 1,
   },
   {
+    ...demoBusinessUnits.bumi,
     id: "10000000-0000-4000-8000-000000000006",
     name: "Daniel Wong",
     phone: "+6016•••8054",
@@ -113,6 +143,7 @@ export const demoLeads: DemoLead[] = [
     version: 8,
   },
   {
+    ...demoBusinessUnits.barakah,
     id: "10000000-0000-4000-8000-000000000007",
     name: "Aina Sofea",
     phone: "+6018•••2901",
@@ -124,6 +155,7 @@ export const demoLeads: DemoLead[] = [
     version: 3,
   },
   {
+    ...demoBusinessUnits.barakah,
     id: "10000000-0000-4000-8000-000000000008",
     name: "Azlan Omar",
     phone: "+6014•••6017",
@@ -180,20 +212,97 @@ export function getLeadStageFilterOptions(leads: readonly { stage: string }[]): 
 }
 
 export const demoTasks = [
-  { id: "t1", title: "Hubungi Nur Aisyah", meta: "2:30 PTG · Farah", priority: "high" },
-  { id: "t2", title: "Semak bukti bayaran B-204", meta: "3:15 PTG · Amir", priority: "normal" },
-  { id: "t3", title: "Tamatkan pegangan A-109", meta: "4:45 PTG · Nadia", priority: "high" },
-  { id: "t4", title: "Hantar sebut harga Lot C-031", meta: "Esok · Farah", priority: "normal" },
+  { ...demoBusinessUnits.salam, id: "t1", title: "Hubungi Nur Aisyah", meta: "2:30 PTG · Farah", priority: "high", status: "overdue" },
+  { ...demoBusinessUnits.bumi, id: "t2", title: "Semak bukti bayaran B-204", meta: "3:15 PTG · Amir", priority: "normal", status: "due" },
+  { ...demoBusinessUnits.barakah, id: "t3", title: "Tamatkan pegangan A-109", meta: "4:45 PTG · Nadia", priority: "high", status: "overdue" },
+  { ...demoBusinessUnits.salam, id: "t4", title: "Hantar sebut harga Lot C-031", meta: "Esok · Farah", priority: "normal", status: "upcoming" },
+] as const;
+
+export function isDemoTaskActionableToday(task: {
+  status: string | number | undefined;
+}): boolean {
+  return task.status === "due" || task.status === "overdue";
+}
+
+export const demoFinanceReceipts = [
+  { ...demoBusinessUnits.salam, id: "p1", receipt: "RC-2026-1208", order: "SL-2026-0481", state: "Diagih", amount: "RM12,500", amountMinor: 1_250_000 },
+  { ...demoBusinessUnits.bumi, id: "p2", receipt: "RC-2026-1207", order: "BH-2026-0477", state: "Sebahagian", amount: "RM8,000", amountMinor: 800_000 },
+  { ...demoBusinessUnits.barakah, id: "p3", receipt: "RC-2026-1206", order: "BE-2026-0472", state: "Diagih", amount: "RM18,500", amountMinor: 1_850_000 },
 ] as const;
 
 export const demoActivities = [
-  { id: "a1", action: "Lead ditukar", record: "Daniel Wong · Lot C-036", actor: "Nadia", time: "12 min" },
-  { id: "a2", action: "Bayaran diterima", record: "SL-2026-0481 · RM12,500", actor: "Kewangan", time: "28 min" },
-  { id: "a3", action: "Pegangan dibuat", record: "Lot A-118 · 24 jam", actor: "Farah", time: "41 min" },
-  { id: "a4", action: "Lead masuk", record: "Izzati Salleh · Meta", actor: "Sistem", time: "1 jam" },
+  { ...demoBusinessUnits.bumi, id: "a1", action: "Lead ditukar", record: "Daniel Wong · Lot C-036", actor: "Nadia", time: "12 min" },
+  { ...demoBusinessUnits.salam, id: "a2", action: "Bayaran diterima", record: "SL-2026-0481 · RM12,500", actor: "Kewangan", time: "28 min" },
+  { ...demoBusinessUnits.barakah, id: "a3", action: "Pegangan dibuat", record: "Lot A-118 · 24 jam", actor: "Farah", time: "41 min" },
+  { ...demoBusinessUnits.bumi, id: "a4", action: "Lead masuk", record: "Izzati Salleh · Meta", actor: "Sistem", time: "1 jam" },
 ] as const;
 
-export interface DemoOpportunity {
+export interface DemoKpi extends DemoBusinessContext {
+  leadNewCount: number;
+  overdueTaskCount: number;
+  pipelineValueMinor: number;
+  collectionMinor: number;
+}
+
+export const demoKpis: readonly DemoKpi[] = [
+  {
+    ...demoBusinessUnits.salam,
+    leadNewCount: 0,
+    overdueTaskCount: 1,
+    pipelineValueMinor: 69_500_000,
+    collectionMinor: 1_250_000,
+  },
+  {
+    ...demoBusinessUnits.bumi,
+    leadNewCount: 1,
+    overdueTaskCount: 0,
+    pipelineValueMinor: 18_800_000,
+    collectionMinor: 800_000,
+  },
+  {
+    ...demoBusinessUnits.barakah,
+    leadNewCount: 0,
+    overdueTaskCount: 1,
+    pipelineValueMinor: 38_600_000,
+    collectionMinor: 1_850_000,
+  },
+] as const;
+
+export interface DemoKpiTotals {
+  leadNewCount: number;
+  overdueTaskCount: number;
+  pipelineValueMinor: number;
+  collectionMinor: number;
+}
+
+export function aggregateDemoKpiInputs(
+  inputs: readonly DemoKpi[],
+  unitIds: readonly string[],
+): DemoKpiTotals {
+  const allowed = new Set(unitIds);
+  const seen = new Set<string>();
+  const totals: DemoKpiTotals = {
+    leadNewCount: 0,
+    overdueTaskCount: 0,
+    pipelineValueMinor: 0,
+    collectionMinor: 0,
+  };
+
+  for (const input of inputs) {
+    if (seen.has(input.businessUnitId)) {
+      throw new Error("Demo KPI inputs must be unique per business unit.");
+    }
+    seen.add(input.businessUnitId);
+    if (!allowed.has(input.businessUnitId)) continue;
+    totals.leadNewCount += input.leadNewCount;
+    totals.overdueTaskCount += input.overdueTaskCount;
+    totals.pipelineValueMinor += input.pipelineValueMinor;
+    totals.collectionMinor += input.collectionMinor;
+  }
+  return totals;
+}
+
+export interface DemoOpportunity extends DemoBusinessContext {
   id: string;
   title: string;
   meta: string;
@@ -209,30 +318,34 @@ export interface DemoOpportunityStage {
   items: DemoOpportunity[];
 }
 
+export function isActiveDemoOpportunityStage(stage: { id: string }): boolean {
+  return stage.id !== "won";
+}
+
 export const opportunityStages: DemoOpportunityStage[] = [
   {
     id: "qualification",
     title: "Kelayakan",
     items: [
-      { id: "o1", title: "Nur Aisyah", meta: "Lot A-118", valueMinor: 18_500_000, owner: "Farah", originLeadId: "10000000-0000-4000-8000-000000000001" },
-      { id: "o2", title: "Siti Maryam", meta: "Lot C-031", valueMinor: 15_200_000, owner: "Farah", originLeadId: "10000000-0000-4000-8000-000000000003" },
-      { id: "o3", title: "Hakim Razak", meta: "Lot B-204", valueMinor: 16_800_000, owner: "Amir", originLeadId: "10000000-0000-4000-8000-000000000002" },
+      { ...demoBusinessUnits.salam, id: "o1", title: "Nur Aisyah", meta: "Lot A-118", valueMinor: 18_500_000, owner: "Farah", originLeadId: "10000000-0000-4000-8000-000000000001" },
+      { ...demoBusinessUnits.salam, id: "o2", title: "Siti Maryam", meta: "Lot C-031", valueMinor: 15_200_000, owner: "Farah", originLeadId: "10000000-0000-4000-8000-000000000003" },
+      { ...demoBusinessUnits.salam, id: "o3", title: "Hakim Razak", meta: "Lot B-204", valueMinor: 16_800_000, owner: "Amir", originLeadId: "10000000-0000-4000-8000-000000000002" },
     ],
   },
   {
     id: "proposal",
     title: "Tawaran",
     items: [
-      { id: "o4", title: "Aina Sofea", meta: "Lot A-127", valueMinor: 17_600_000, owner: "Farah", originLeadId: "10000000-0000-4000-8000-000000000007" },
-      { id: "o5", title: "Faizal Ahmad", meta: "Lot A-121", valueMinor: 19_000_000, owner: "Nadia", originLeadId: "10000000-0000-4000-8000-000000000004" },
+      { ...demoBusinessUnits.barakah, id: "o4", title: "Aina Sofea", meta: "Lot A-127", valueMinor: 17_600_000, owner: "Farah", originLeadId: "10000000-0000-4000-8000-000000000007" },
+      { ...demoBusinessUnits.salam, id: "o5", title: "Faizal Ahmad", meta: "Lot A-121", valueMinor: 19_000_000, owner: "Nadia", originLeadId: "10000000-0000-4000-8000-000000000004" },
     ],
   },
   {
     id: "negotiation",
     title: "Rundingan",
     items: [
-      { id: "o6", title: "Liyana Musa", meta: "Lot B-219", valueMinor: 18_800_000, owner: "Amir" },
-      { id: "o7", title: "Kumar Ravi", meta: "Lot C-044", valueMinor: 21_000_000, owner: "Nadia" },
+      { ...demoBusinessUnits.bumi, id: "o6", title: "Liyana Musa", meta: "Lot B-219", valueMinor: 18_800_000, owner: "Amir" },
+      { ...demoBusinessUnits.barakah, id: "o7", title: "Kumar Ravi", meta: "Lot C-044", valueMinor: 21_000_000, owner: "Nadia" },
     ],
   },
   {
@@ -240,7 +353,7 @@ export const opportunityStages: DemoOpportunityStage[] = [
     title: "Menang",
     tone: "success",
     items: [
-      { id: "o8", title: "Daniel Wong", meta: "Lot C-036", valueMinor: 21_000_000, owner: "Nadia", originLeadId: "10000000-0000-4000-8000-000000000006" },
+      { ...demoBusinessUnits.bumi, id: "o8", title: "Daniel Wong", meta: "Lot C-036", valueMinor: 21_000_000, owner: "Nadia", originLeadId: "10000000-0000-4000-8000-000000000006" },
     ],
   },
 ] ;
@@ -249,11 +362,30 @@ export function opportunityStageTotalMinor(items: readonly { valueMinor: number 
   return items.reduce((total, item) => total + item.valueMinor, 0);
 }
 
+export function filterDemoRecordsByUnitIds<T extends DemoBusinessContext>(
+  records: readonly T[],
+  unitIds: readonly string[],
+): T[] {
+  const allowed = new Set(unitIds);
+  return records.filter((record) => allowed.has(record.businessUnitId));
+}
+
+export function filterOpportunityStagesByUnitIds(
+  stages: readonly DemoOpportunityStage[],
+  unitIds: readonly string[],
+): DemoOpportunityStage[] {
+  return stages.map((stage) => ({
+    ...stage,
+    items: filterDemoRecordsByUnitIds(stage.items, unitIds),
+  }));
+}
+
 export function formatMoneyMinor(valueMinor: number, compact = false): string {
   return new Intl.NumberFormat("ms-MY", {
     style: "currency",
     currency: "MYR",
-    maximumFractionDigits: 0,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: compact ? 2 : 0,
     notation: compact ? "compact" : "standard",
   }).format(valueMinor / 100);
 }

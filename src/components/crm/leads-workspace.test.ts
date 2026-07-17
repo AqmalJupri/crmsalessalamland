@@ -7,10 +7,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LeadsWorkspace } from "./leads-workspace";
 import type { DemoLead } from "@/lib/demo-crm";
+import type { ClientBusinessScope } from "@/domain/business-units/client-scope";
 
 const businessUnitId = "00000000-0000-4000-8000-000000000101";
+const salamAccess = {
+  id: businessUnitId,
+  name: "Salam Land",
+  code: "salam-land",
+  slug: "salam-land",
+  membershipIds: ["membership-salam"],
+  capabilities: ["lead.read", "lead.create"],
+  capabilityRecordScopes: {},
+} as const;
+const unitScope: ClientBusinessScope = {
+  kind: "UNIT",
+  queryValue: "salam-land",
+  businessUnitId,
+  businessUnitCode: "salam-land",
+  businessUnitName: "Salam Land",
+};
 const initialLeads: DemoLead[] = [
   {
+    businessUnitId,
+    businessUnitCode: "salam-land",
+    businessUnitName: "Salam Land",
     id: "10000000-0000-4000-8000-000000000001",
     name: "Nur Aisyah",
     phone: "+6012•••6789",
@@ -22,6 +42,9 @@ const initialLeads: DemoLead[] = [
     version: 1,
   },
   {
+    businessUnitId,
+    businessUnitCode: "salam-land",
+    businessUnitName: "Salam Land",
     id: "10000000-0000-4000-8000-000000000002",
     name: "Daniel Wong",
     phone: "+6017•••4421",
@@ -34,12 +57,18 @@ const initialLeads: DemoLead[] = [
   },
 ];
 
-function renderWorkspace(canCreate = true, leads = initialLeads) {
+function renderWorkspace(
+  canCreate = true,
+  leads = initialLeads,
+  scope: ClientBusinessScope = unitScope,
+  initialStageFilter: string | null = null,
+) {
   return render(
     createElement(LeadsWorkspace, {
-      businessUnitId,
+      scope,
       canCreate,
       initialLeads: leads,
+      initialStageFilter,
     }),
   );
 }
@@ -77,6 +106,82 @@ afterEach(() => {
 });
 
 describe("LeadsWorkspace", () => {
+  it("makes Semua read-only and labels every row with its company", () => {
+    const bumi = {
+      id: "00000000-0000-4000-8000-000000000102",
+      name: "Bumi Hayat Printing",
+      code: "bumi-hayat",
+      slug: "bumi-hayat",
+      membershipIds: ["membership-bumi"],
+      capabilities: ["lead.read", "lead.create"],
+      capabilityRecordScopes: {},
+    } as const;
+    const allScope: ClientBusinessScope = {
+      kind: "ALL",
+      queryValue: "all",
+      units: [
+        { id: salamAccess.id, code: salamAccess.code, name: salamAccess.name },
+        { id: bumi.id, code: bumi.code, name: bumi.name },
+      ],
+      unitIds: [salamAccess.id, bumi.id],
+    };
+    renderWorkspace(true, [
+      initialLeads[0]!,
+      {
+        ...initialLeads[1]!,
+        businessUnitId: bumi.id,
+        businessUnitCode: bumi.code,
+        businessUnitName: bumi.name,
+      },
+    ], allScope);
+
+    expect(screen.getByRole("columnheader", { name: "Syarikat" })).toBeTruthy();
+    expect(screen.getByText("Salam Land")).toBeTruthy();
+    expect(screen.getByText("Bumi Hayat Printing")).toBeTruthy();
+    const choose = screen.getByRole("button", { name: "Pilih syarikat" }) as HTMLButtonElement;
+    expect(choose.disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "Lead baharu" })).toBeNull();
+  });
+
+  it("drops local records and dialogs when the authorised unit scope changes", async () => {
+    const bumiAccess = {
+      ...salamAccess,
+      id: "00000000-0000-4000-8000-000000000102",
+      name: "Bumi Hayat Printing",
+      code: "bumi-hayat",
+      slug: "bumi-hayat",
+      membershipIds: ["membership-bumi"],
+    } as const;
+    const bumiScope: ClientBusinessScope = {
+      kind: "UNIT",
+      queryValue: bumiAccess.code,
+      businessUnitId: bumiAccess.id,
+      businessUnitCode: bumiAccess.code,
+      businessUnitName: bumiAccess.name,
+    };
+    const bumiLead: DemoLead = {
+      ...initialLeads[1]!,
+      businessUnitId: bumiAccess.id,
+      businessUnitCode: bumiAccess.code,
+      businessUnitName: bumiAccess.name,
+      id: "10000000-0000-4000-8000-000000000099",
+      name: "Izzati Salleh",
+    };
+    const user = userEvent.setup();
+    const { rerender } = renderWorkspace();
+    await user.click(screen.getByRole("button", { name: "Nur Aisyah" }));
+
+    rerender(createElement(LeadsWorkspace, {
+      scope: bumiScope,
+      canCreate: true,
+      initialLeads: [bumiLead],
+    }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Nur Aisyah" })).toBeNull());
+    expect(screen.queryByRole("button", { name: "Nur Aisyah" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Izzati Salleh" })).toBeTruthy();
+  });
+
   it("shows a truthful empty state while retaining authorized creation", () => {
     renderWorkspace(true, []);
 
@@ -139,6 +244,25 @@ describe("LeadsWorkspace", () => {
     expect(screen.queryByRole("button", { name: "Daniel Wong" })).toBeNull();
 
     await user.type(search, "Daniel");
+    expect(screen.getByText("Tiada rekod sepadan.")).toBeTruthy();
+    expect(screen.getByText("0 daripada 2")).toBeTruthy();
+  });
+
+  it("applies an authorised stage drill-down on first render", () => {
+    renderWorkspace(true, initialLeads, unitScope, "new");
+
+    expect((screen.getByRole("combobox", { name: "Tapis status" }) as HTMLSelectElement).value).toBe("new");
+    expect(screen.getByRole("button", { name: "Nur Aisyah" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Daniel Wong" })).toBeNull();
+    expect(screen.getByText("1 daripada 2")).toBeTruthy();
+  });
+
+  it("keeps an allowlisted zero-result drill-down visible in the status control", () => {
+    renderWorkspace(true, initialLeads, unitScope, "qualified");
+
+    const status = screen.getByRole("combobox", { name: "Tapis status" }) as HTMLSelectElement;
+    expect(status.value).toBe("qualified");
+    expect(Array.from(status.options, (option) => option.value)).toContain("qualified");
     expect(screen.getByText("Tiada rekod sepadan.")).toBeTruthy();
     expect(screen.getByText("0 daripada 2")).toBeTruthy();
   });

@@ -411,6 +411,9 @@ describe("Quality workflow browser evidence", () => {
       /workflow_dispatch:[\s\S]*capture_visual_baselines:[\s\S]*type:\s*boolean[\s\S]*default:\s*false/,
     );
     expect(normalStep).toContain("env.VISUAL_CAPTURE_REQUESTED != 'true'");
+    expect(normalStep).toContain(
+      "env.VISUAL_BOOTSTRAP_CAPTURE_REQUESTED != 'true'",
+    );
     expect(normalStep).toContain("pnpm test:e2e");
     expect(normalStep).not.toContain("--update-snapshots");
     expect(captureStep).toContain("env.VISUAL_CAPTURE_REQUESTED == 'true'");
@@ -433,7 +436,7 @@ describe("Quality workflow browser evidence", () => {
   });
 
   it("allows one auditable bootstrap capture only on the visual-evidence branch", () => {
-    expect(qualityWorkflow).toContain("VISUAL_CAPTURE_REQUESTED");
+    expect(qualityWorkflow).toContain("VISUAL_BOOTSTRAP_CAPTURE_REQUESTED");
     expect(qualityWorkflow).toContain(
       "refs/heads/codex/ui9-b3-visual-evidence",
     );
@@ -446,16 +449,28 @@ describe("Quality workflow browser evidence", () => {
     );
     const captureStep = jobStep(
       checksJob,
-      "Capture reviewed Linux visual baselines",
+      "Bootstrap Linux visual baseline candidates",
     );
     const uploadStep = jobStep(
       checksJob,
-      "Upload Linux visual baseline candidates",
+      "Upload bootstrap Linux visual baseline candidates",
     );
 
-    expect(normalStep).toContain("env.VISUAL_CAPTURE_REQUESTED != 'true'");
-    expect(captureStep).toContain("env.VISUAL_CAPTURE_REQUESTED == 'true'");
-    expect(uploadStep).toContain("env.VISUAL_CAPTURE_REQUESTED == 'true'");
+    expect(normalStep).toContain(
+      "env.VISUAL_BOOTSTRAP_CAPTURE_REQUESTED != 'true'",
+    );
+    expect(captureStep).toContain(
+      "env.VISUAL_BOOTSTRAP_CAPTURE_REQUESTED == 'true'",
+    );
+    expect(captureStep).toContain("VISUAL_BASELINE_CAPTURE: reviewed-linux");
+    expect(captureStep).toContain("--update-snapshots");
+    expect(captureStep).toContain(
+      "node scripts/ci/write-visual-baseline-provenance.mjs",
+    );
+    expect(uploadStep).toContain(
+      "env.VISUAL_BOOTSTRAP_CAPTURE_REQUESTED == 'true' && success()",
+    );
+    expect(uploadStep).toContain("visual-baseline-candidates-${{ github.sha }}");
   });
 });
 

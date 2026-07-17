@@ -1297,6 +1297,60 @@ describe("migration control-plane deferred invariants", () => {
     },
   );
 
+  it.each([
+    { checkKind: "AMOUNT", amount: "NaN" },
+    { checkKind: "AMOUNT", amount: "Infinity" },
+    { checkKind: "AMOUNT", amount: "-Infinity" },
+    { checkKind: "FINANCE_BALANCE", amount: "NaN" },
+    { checkKind: "FINANCE_BALANCE", amount: "Infinity" },
+    { checkKind: "FINANCE_BALANCE", amount: "-Infinity" },
+  ])(
+    "rejects non-finite $checkKind value $amount in the database",
+    async ({ checkKind, amount }) => {
+      const fixture = await insertSourceAuthority(sql);
+      const transformId = await insertTransform(sql, fixture.sourceId);
+      const { liveBatchId } = await insertDryRunAndLiveBatch(sql, fixture.sourceId, transformId);
+      const runId = syntheticId(59);
+      const requiredChecks = [
+        {
+          check_kind: checkKind,
+          check_key: "records.amount",
+          scope_key: "all",
+          measure_unit: "MYR",
+          decimal_scale: 2,
+        },
+      ];
+      await sql`
+        insert into reconciliation_runs (
+          id, organization_id, business_unit_id, batch_id, run_no, status,
+          plan_artifact_ref, plan_sha256, required_checks, required_checks_sha256,
+          required_check_count
+        ) values (
+          ${runId}, ${ids.organization}, ${ids.businessUnit}, ${liveBatchId}, 1, 'PENDING',
+          'protected://synthetic/finite-amount-plan', ${sha("81")}, ${sql.json(requiredChecks)},
+          digest(convert_to(${sql.json(requiredChecks)}::jsonb::text, 'UTF8'), 'sha256'), 1
+        )
+      `;
+
+      const insertion = sql`
+        insert into reconciliation_results (
+          id, organization_id, business_unit_id, run_id, check_kind, check_key,
+          scope_key, source_amount, target_amount, measure_unit, decimal_scale,
+          passed, evidence_metadata
+        ) values (
+          ${syntheticId(60)}, ${ids.organization}, ${ids.businessUnit}, ${runId}, ${checkKind},
+          'records.amount', 'all', ${amount}::numeric, ${amount}::numeric, 'MYR', 2,
+          true, '{}'::jsonb
+        )
+      `;
+      if (amount === "NaN") {
+        await expect(insertion).rejects.toThrow(/finite.amount/i);
+      } else {
+        await expect(insertion).rejects.toThrow();
+      }
+    },
+  );
+
   it("enforces reconciliation requirement order by UTF-8 bytes instead of database locale", async () => {
     const [guard] = await sql<{ definition: string }[]>`
       select pg_get_functiondef(

@@ -4,7 +4,7 @@
 
 **Goal:** Build the source-neutral, checksum-idempotent migration control plane required to import Salam CRM JSON, Tasha SQLite, Niagawan CSV, and Barakah Sheet snapshots without guessing mappings, losing lineage, or permitting dual writable authority.
 
-**Architecture:** Add the forward-compatible `0002_migration_platform.sql` control-plane migration, the narrowly scoped `0003_reconciliation_bytewise_order.sql` locale-independence correction, the `0004_membership_user_identity_guard.sql` immutable-provenance guard, the `0005_reconciliation_typed_result_truth.sql` database truth constraint, and a separate Drizzle migration schema. The control plane registers source/domain authority scopes and immutable transform versions, records artifact checksums, stages protected row evidence, quarantines ambiguous/invalid rows, applies approved rows through canonical transactional writers, records source-to-target lineage, reconciles typed metrics, and permits one-way signed authority transitions. Source adapters remain separate sub-projects and consume these contracts.
+**Architecture:** Add the forward-compatible `0002_migration_platform.sql` control-plane migration, the narrowly scoped `0003_reconciliation_bytewise_order.sql` locale-independence correction, the `0004_membership_user_identity_guard.sql` immutable-provenance guard, the `0005_reconciliation_typed_result_truth.sql` database truth constraint, the `0006_reconciliation_finite_amounts.sql` non-finite numeric guard, and a separate Drizzle migration schema. The control plane registers source/domain authority scopes and immutable transform versions, records artifact checksums, stages protected row evidence, quarantines ambiguous/invalid rows, applies approved rows through canonical transactional writers, records source-to-target lineage, reconciles typed metrics, and permits one-way signed authority transitions. Source adapters remain separate sub-projects and consume these contracts.
 
 **Tech Stack:** PostgreSQL 16.14, Drizzle ORM 0.45.2, TypeScript 6.0.3, Zod 4.4.3, Node.js streams/crypto, Vitest 4.1.10, and the existing checksum-locked migration runner.
 
@@ -830,6 +830,7 @@ export async function signReconciliationRun(
 
 - Create: `db/migrations/0004_membership_user_identity_guard.sql`
 - Create: `db/migrations/0005_reconciliation_typed_result_truth.sql`
+- Create: `db/migrations/0006_reconciliation_finite_amounts.sql`
 - Modify: `src/server/db/migration-manifest.ts`
 - Modify: `src/server/db/migration-manifest.test.ts`
 - Modify: `tests/integration/migration-platform-schema.test.ts`
@@ -840,6 +841,7 @@ export async function signReconciliationRun(
 - [ ] Add `0004_membership_user_identity_guard.sql` as a narrow `BEFORE UPDATE OF user_id` trigger using SQLSTATE `23514`; retain status, validity-window, and role administration workflows.
 - [ ] Add RED direct-SQL regressions proving typed reconciliation truth is derived in both directions: unequal COUNT/amount/checksum values cannot claim `passed=true`, and equal values cannot claim `passed=false`.
 - [ ] Add `0005_reconciliation_typed_result_truth.sql` as a validated additive CHECK constraint over `COUNT`, `AMOUNT`, `FINANCE_BALANCE`, and `CHECKSUM`. Existing and future rows must pass before the migration ledger advances.
+- [ ] Add RED AMOUNT and FINANCE_BALANCE regressions for PostgreSQL `NaN`, `Infinity`, and `-Infinity`, then add `0006_reconciliation_finite_amounts.sql` as a validated additive CHECK. PostgreSQL numeric special values must never satisfy financial reconciliation equality.
 - [ ] Register and checksum-lock both migrations, update runtime ledger evidence, and prove upgrade from the exact `0001`-`0003` prefix applies only `0004` and `0005` without changing earlier ledger timestamps.
 - [ ] Update the verifier-race test that previously reassigned `memberships.user_id`: the database must now reject that mutation itself, while capability/status/validity races remain service recheck coverage.
 - [ ] Independently review both forward migrations and rerun every migration/import/reconciliation integration suite.
@@ -886,7 +888,7 @@ export async function signReconciliationRun(
 - Modify only other files when evidence reveals a defect in a file owned by Tasks 1-10.
 
 - [ ] Parse and assert the database name first, then reset and create only the isolated local database `crm_salam_codex_migration_platform`. Set both `DATABASE_URL` and `TEST_DATABASE_URL` to `postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_migration_platform`; refuse any host other than loopback or database name that differs, and fail deployment preflight unless PostgreSQL reports `server_encoding = 'UTF8'`.
-- [ ] Run `pnpm db:migrate` twice and query `schema_migrations`; expect exactly the five reviewed filename/checksum rows with unchanged timestamps after the second run.
+- [ ] Run `pnpm db:migrate` twice and query `schema_migrations`; expect exactly the six reviewed filename/checksum rows with unchanged timestamps after the second run.
 - [ ] Run focused unit and integration suites:
 
 ```bash
@@ -931,7 +933,7 @@ node scripts/ci/run-next-runtime-smoke.mjs \
   --log /tmp/crm-migration-runtime.log
 ```
 
-Expected: runtime smoke passes and readiness returns `200` only while the database ledger exactly matches `0001` through `0005`.
+Expected: runtime smoke passes and readiness returns `200` only while the database ledger exactly matches `0001` through `0006`.
 - [ ] Extend `tests/ci/quality-workflow.test.ts` to require the UI-owned portable `run-next-runtime-smoke.mjs`, matching start/probe ports, explicit liveness/readiness success branches, and migration/runtime step ordering. Run `tests/ci/runtime-process.test.ts` on macOS locally and Linux CI; it must prove the Node detached process group and grandchild are terminated on success, startup failure, smoke failure, timeout, `SIGINT`, and `SIGTERM`. Expected: PASS and no failed smoke command can be masked by cleanup.
 - [ ] Scan the full diff and newly introduced Git objects for source data, PII, credentials, database URLs with secrets, and unsafe archives.
 - [ ] Request independent code review. Resolve every Critical or Important finding with a failing regression test before changing code.

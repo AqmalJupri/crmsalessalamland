@@ -67,7 +67,8 @@ describe("SurfaceHome", () => {
   it("renders a truthful CRM empty state without demo authority", () => {
     render(home({ demo: false }));
 
-    expect(screen.getByText("Ringkasan belum tersedia.")).toBeTruthy();
+    const state = screen.getByRole("region", { name: "Ringkasan belum tersedia." });
+    expect(state.getAttribute("data-state-kind")).toBe("empty");
     expect(screen.queryByText("Lead baharu")).toBeNull();
     expect(screen.queryByText("RM1.24j")).toBeNull();
     expect(screen.queryByText(/Nur Aisyah/)).toBeNull();

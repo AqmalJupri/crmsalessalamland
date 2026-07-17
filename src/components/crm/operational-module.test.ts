@@ -225,4 +225,78 @@ describe("OperationalModule scope", () => {
     expect(screen.getByText("Rekod pesanan.")).toBeTruthy();
     expect(screen.getByText("Tarikh pesanan")).toBeTruthy();
   });
+
+  it("distinguishes an empty source population from an empty filtered result", () => {
+    const { rerender } = render(createElement(OperationalModule, {
+      scope: allScope,
+      metrics: [],
+      title: "Pesanan terkini",
+      columns: [{ key: "order", label: "Pesanan" }],
+      rows: [],
+    }));
+
+    const empty = screen.getByRole("region", { name: "Belum ada rekod." });
+    expect(empty.getAttribute("data-state-kind")).toBe("empty");
+    expect(screen.queryByRole("table")).toBeNull();
+
+    const metrics = createDemoModuleMetrics({
+      scope: allScope,
+      capability: "order.read",
+      modulePath: "/orders",
+      dateBasis: "Tarikh pesanan",
+      periodLabel: "30 hari",
+      rows,
+      metrics: [{
+        key: "none",
+        label: "Tiada",
+        filterLabel: "Pesanan tanpa padanan",
+        definition: { formula: "Bilangan pesanan tanpa padanan.", source: "Rekod pesanan." },
+        matches: () => false,
+      }],
+    });
+    rerender(createElement(OperationalModule, {
+      scope: allScope,
+      metrics,
+      activeMetricKey: "none",
+      title: "Pesanan terkini",
+      columns: [{ key: "order", label: "Pesanan" }],
+      rows,
+    }));
+
+    expect(screen.getByRole("status").textContent).toContain("0 rekod");
+    const filtered = screen.getByRole("region", { name: "Tiada rekod sepadan." });
+    expect(filtered.getAttribute("data-state-kind")).toBe("filtered-empty");
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("uses empty when an active metric is applied to a zero-row source", () => {
+    const metrics = createDemoModuleMetrics({
+      scope: allScope,
+      capability: "order.read",
+      modulePath: "/orders",
+      dateBasis: "Tarikh pesanan",
+      periodLabel: "30 hari",
+      rows: [],
+      metrics: [{
+        key: "none",
+        label: "Tiada",
+        filterLabel: "Pesanan tanpa padanan",
+        definition: { formula: "Bilangan pesanan tanpa padanan.", source: "Rekod pesanan." },
+        matches: () => false,
+      }],
+    });
+    render(createElement(OperationalModule, {
+      scope: allScope,
+      metrics,
+      activeMetricKey: "none",
+      title: "Pesanan terkini",
+      columns: [{ key: "order", label: "Pesanan" }],
+      rows: [],
+    }));
+
+    expect(screen.getByRole("status").textContent).toContain("0 rekod");
+    const state = screen.getByRole("region", { name: "Belum ada rekod." });
+    expect(state.getAttribute("data-state-kind")).toBe("empty");
+    expect(screen.queryByText("Tiada rekod sepadan.")).toBeNull();
+  });
 });

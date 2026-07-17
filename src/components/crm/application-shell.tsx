@@ -134,7 +134,7 @@ export function ApplicationShell({
       }}
       sidebarFooter={surface === "crm" && viewer.demo ? (
         <Badge variant="info" icon={ShieldCheck}>
-          Demo tempatan
+          Demo
         </Badge>
       ) : undefined}
     >

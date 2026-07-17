@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BusinessUnitReadScope } from "@/domain/business-units/read-scope";
 import type { ClientBusinessScope } from "@/domain/business-units/client-scope";
-import type { DemoOpportunityStage } from "@/lib/demo-crm";
+import { opportunityStages, type DemoOpportunityStage } from "@/lib/demo-crm";
 
 const mocks = vi.hoisted(() => ({
   canRenderDemoFixtures: vi.fn(),
@@ -19,6 +19,7 @@ import PipelinePage from "./page";
 
 interface PipelinePageProps {
   initialStages: DemoOpportunityStage[];
+  sourcePopulationCount: number;
   scope: ClientBusinessScope;
   populationKey: "all" | "active";
   activeFilterLabel?: string | null;
@@ -60,6 +61,7 @@ describe("PipelinePage fixture boundary", () => {
     );
     expect(mocks.canRenderDemoFixtures).toHaveBeenCalledWith();
     expect(page.props.initialStages).toEqual([]);
+    expect(page.props.sourcePopulationCount).toBe(0);
     expect(page.props.populationKey).toBe("all");
     expect(page.props.scope).toEqual({
       kind: "UNIT",
@@ -80,6 +82,9 @@ describe("PipelinePage fixture boundary", () => {
     expect(page.props.initialStages.flatMap((stage) => stage.items).length).toBeGreaterThan(0);
     expect(page.props.initialStages.flatMap((stage) => stage.items)
       .every((item) => item.businessUnitId === access.id)).toBe(true);
+    expect(page.props.sourcePopulationCount).toBe(
+      page.props.initialStages.flatMap((stage) => stage.items).length,
+    );
   });
 
   it("applies the active pipeline population and exposes its truthful definition", async () => {
@@ -93,6 +98,11 @@ describe("PipelinePage fixture boundary", () => {
     expect(filtered.props.initialStages.some((stage) => stage.id === "won")).toBe(false);
     expect(filtered.props.initialStages.flatMap((stage) => stage.items)
       .reduce((sum, item) => sum + item.valueMinor, 0)).toBe(69_500_000);
+    expect(filtered.props.sourcePopulationCount).toBe(
+      opportunityStages
+        .flatMap((stage) => stage.items)
+        .filter((item) => item.businessUnitId === access.id).length,
+    );
 
     const definition = await PipelinePage({
       searchParams: Promise.resolve({ bu: "salam-land", definition: "active" }),

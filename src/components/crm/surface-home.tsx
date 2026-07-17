@@ -26,6 +26,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  OperationState,
   Table,
   TableBody,
   TableCaption,
@@ -34,7 +35,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui";
-import { DataEmptyState } from "./data-empty-state";
 import { createMetricScope, MetricCard, MetricGrid } from "./metric";
 
 const DEMO_AS_OF = "2026-07-17T12:00:00+08:00";
@@ -50,19 +50,21 @@ function total(values: readonly number[]): number {
 
 export function SurfaceHome({
   demo,
+  emptyStateKind = "empty",
   scope,
   surface,
 }: {
   demo: boolean;
+  emptyStateKind?: "empty";
   scope: BusinessUnitReadScope;
   surface: ProductSurface;
 }) {
   if (surface === "tasha") {
-    return <DataEmptyState label="Data pengecualian belum tersedia." />;
+    return <OperationState kind={emptyStateKind} label="Data pengecualian belum tersedia." />;
   }
 
   if (!demo) {
-    return <DataEmptyState label="Ringkasan belum tersedia." />;
+    return <OperationState kind={emptyStateKind} label="Ringkasan belum tersedia." />;
   }
 
   const leadUnits = unitsForCapability(scope, "lead.read");
@@ -95,7 +97,7 @@ export function SurfaceHome({
     financeUnits.length === 0 &&
     reportUnits.length === 0
   ) {
-    return <DataEmptyState label="Tiada ringkasan untuk akses ini." />;
+    return <OperationState kind={emptyStateKind} label="Tiada ringkasan untuk akses ini." />;
   }
 
   return (

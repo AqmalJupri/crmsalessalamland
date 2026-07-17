@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { PipelineBoard, type PipelineStage } from "@/components/crm";
-import { Button } from "@/components/ui";
+import { Button, OperationState } from "@/components/ui";
 import type { ClientBusinessScope } from "@/domain/business-units/client-scope";
 import {
   filterOpportunityStagesByUnitIds,
@@ -11,7 +11,6 @@ import {
   opportunityStageTotalMinor,
   type DemoOpportunityStage,
 } from "@/lib/demo-crm";
-import { DataEmptyState } from "./data-empty-state";
 import { useDialogFocus } from "./use-dialog-focus";
 
 function copyScopedStages(
@@ -27,8 +26,10 @@ function copyScopedStages(
 
 interface PipelineWorkspaceProps {
   initialStages: DemoOpportunityStage[];
+  emptyStateKind?: "empty";
   scope: ClientBusinessScope;
   populationKey: "all" | "active";
+  sourcePopulationCount: number;
   activeFilterLabel?: string | null;
 }
 
@@ -46,13 +47,17 @@ export function PipelineWorkspace(props: PipelineWorkspaceProps) {
 
 function ScopedPipelineWorkspace({
   initialStages,
+  emptyStateKind = "empty",
   scope,
+  sourcePopulationCount,
   activeFilterLabel = null,
 }: PipelineWorkspaceProps) {
   const [stages, setStages] = useState<DemoOpportunityStage[]>(() =>
     copyScopedStages(initialStages, scope),
   );
   const [selected, setSelected] = useState<{ itemId: string; stageId: string } | null>(null);
+  const itemCount = stages.reduce((sum, stage) => sum + stage.items.length, 0);
+  const isFilteredEmpty = sourcePopulationCount > 0 && Boolean(activeFilterLabel);
   const detailDialogRef = useRef<HTMLElement>(null);
   const detailCloseRef = useRef<HTMLButtonElement>(null);
 
@@ -103,11 +108,14 @@ function ScopedPipelineWorkspace({
       >
         {activeFilterLabel ? (
           <p className="crm-filter-status" role="status">
-            Tapis: {activeFilterLabel} · {stages.reduce((sum, stage) => sum + stage.items.length, 0)} rekod
+            Tapis: {activeFilterLabel} · {itemCount} rekod
           </p>
         ) : null}
-        {stages.length === 0 ? (
-          <DataEmptyState label="Belum ada peluang." />
+        {itemCount === 0 ? (
+          <OperationState
+            kind={isFilteredEmpty ? "filtered-empty" : emptyStateKind}
+            label={isFilteredEmpty ? "Tiada peluang sepadan." : "Belum ada peluang."}
+          />
         ) : (
           <PipelineBoard
             stages={boardStages}

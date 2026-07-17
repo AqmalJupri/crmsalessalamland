@@ -499,6 +499,97 @@ a {
   font-size: var(--crm-text-lg);
 }
 
+.crm-operation-state {
+  display: grid;
+  min-height: 12rem;
+  align-content: center;
+  justify-items: center;
+  gap: var(--crm-space-3);
+  padding: var(--crm-space-8);
+  border-block: 1px solid var(--crm-divider);
+  background: var(--crm-surface);
+  color: var(--crm-text);
+  text-align: center;
+}
+
+.crm-operation-state > svg {
+  width: 1.5rem;
+  height: 1.5rem;
+  color: var(--crm-muted);
+  stroke-width: 2;
+}
+
+.crm-operation-state[data-state-tone="action"] > svg {
+  color: var(--crm-action);
+}
+
+.crm-operation-state[data-state-tone="warning"] > svg {
+  color: var(--crm-warning-text);
+}
+
+.crm-operation-state[data-state-tone="success"] > svg {
+  color: var(--crm-success);
+}
+
+.crm-operation-state[data-state-tone="danger"] > svg {
+  color: var(--crm-danger);
+}
+
+.crm-operation-state[data-state-kind="loading"] > svg,
+.crm-operation-state[data-state-kind="syncing"] > svg {
+  animation: crm-spin 700ms linear infinite;
+}
+
+.crm-operation-state > strong {
+  max-width: 65ch;
+  font-size: var(--crm-text-lg);
+  font-weight: 600;
+  line-height: var(--crm-leading-ui);
+  text-wrap: balance;
+}
+
+.crm-operation-state__details {
+  max-width: 65ch;
+  color: var(--crm-muted);
+  font-size: var(--crm-text-sm);
+  line-height: var(--crm-leading-body);
+  text-wrap: pretty;
+}
+
+.crm-operation-state__action {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--crm-space-2);
+}
+
+.crm-state-gallery-page {
+  min-height: 100dvh;
+  padding: var(--crm-space-6) var(--crm-space-4);
+}
+
+.crm-state-gallery-page > h1,
+.crm-state-gallery {
+  width: min(56rem, 100%);
+  margin-inline: auto;
+}
+
+.crm-state-gallery-page > h1 {
+  margin-bottom: var(--crm-space-4);
+  font-size: var(--crm-text-xl);
+  line-height: var(--crm-leading-tight);
+  text-wrap: balance;
+}
+
+.crm-state-gallery {
+  border-top: 1px solid var(--crm-divider);
+}
+
+.crm-state-gallery > .crm-operation-state {
+  min-height: 8rem;
+  border-top: 0;
+}
+
 .crm-login-page {
   min-height: 100vh;
   display: grid;

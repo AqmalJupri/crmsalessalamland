@@ -16,5 +16,12 @@ export default async function DashboardPage({
   );
   const surface = getRuntimeConfig().productSurface;
 
-  return <SurfaceHome surface={surface} demo={viewer.demo} scope={scope} />;
+  return (
+    <SurfaceHome
+      surface={surface}
+      demo={viewer.demo}
+      scope={scope}
+      emptyStateKind="empty"
+    />
+  );
 }

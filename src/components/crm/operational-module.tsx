@@ -1,4 +1,4 @@
-import { Badge, Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui";
+import { Badge, OperationState, Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui";
 import type { BusinessUnitReadScope } from "@/domain/business-units/read-scope";
 import { createMetricScope, MetricCard, MetricDefinitionPanel, MetricGrid, type MetricDefinitionContent, type MetricScope } from "./metric";
 
@@ -129,6 +129,7 @@ export function OperationalModule({
   const visibleRows = matchedRowIds
     ? scopedRows.filter((row) => matchedRowIds.has(row.id))
     : scopedRows;
+  const isFilteredEmpty = scopedRows.length > 0 && activeMetric !== null;
   const visibleColumns: readonly ModuleColumn[] = scope.kind === "ALL"
     ? [{ key: "businessUnitName", label: "Syarikat" }, ...columns]
     : columns;
@@ -157,13 +158,20 @@ export function OperationalModule({
           <h2 id={headingId}>{title}</h2>
           <Badge variant="neutral">{visibleRows.length}</Badge>
         </header>
-        <Table responsive="stack" containerLabel={title}>
-          <TableCaption>{title}</TableCaption>
-          <TableHeader><TableRow>{visibleColumns.map((column) => <TableHead key={column.key} {...(column.align ? { align: column.align } : {})}>{column.label}</TableHead>)}</TableRow></TableHeader>
-          <TableBody>
-            {visibleRows.map((row) => <TableRow key={row.id}>{visibleColumns.map((column) => <TableCell key={column.key} label={column.label} {...(column.align ? { align: column.align } : {})}>{row[column.key] ?? "—"}</TableCell>)}</TableRow>)}
-          </TableBody>
-        </Table>
+        {visibleRows.length === 0 ? (
+          <OperationState
+            kind={isFilteredEmpty ? "filtered-empty" : "empty"}
+            label={isFilteredEmpty ? "Tiada rekod sepadan." : "Belum ada rekod."}
+          />
+        ) : (
+          <Table responsive="stack" containerLabel={title}>
+            <TableCaption>{title}</TableCaption>
+            <TableHeader><TableRow>{visibleColumns.map((column) => <TableHead key={column.key} {...(column.align ? { align: column.align } : {})}>{column.label}</TableHead>)}</TableRow></TableHeader>
+            <TableBody>
+              {visibleRows.map((row) => <TableRow key={row.id}>{visibleColumns.map((column) => <TableCell key={column.key} label={column.label} {...(column.align ? { align: column.align } : {})}>{row[column.key] ?? "—"}</TableCell>)}</TableRow>)}
+            </TableBody>
+          </Table>
+        )}
       </section>
     </div>
   );

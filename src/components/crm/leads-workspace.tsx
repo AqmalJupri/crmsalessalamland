@@ -2,11 +2,10 @@
 
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { Plus, Search, X } from "lucide-react";
-import { Badge, Button, Input, Select, Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui";
+import { Badge, Button, Input, OperationState, Select, Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui";
 import { normalizeMalaysianPhone } from "@/domain/contacts/identity";
 import type { ClientBusinessScope } from "@/domain/business-units/client-scope";
 import { filterDemoRecordsByUnitIds, getLeadStageFilterOptions, getLeadStagePresentation, getProviderLabel, leadProviderOptions, type DemoLead } from "@/lib/demo-crm";
-import { DataEmptyState } from "./data-empty-state";
 import { UnsavedChangesDialog } from "./unsaved-changes-dialog";
 import { useDialogFocus } from "./use-dialog-focus";
 
@@ -82,6 +81,7 @@ function apiValidationErrors(value: unknown): {
 interface LeadsWorkspaceProps {
   scope: ClientBusinessScope;
   canCreate: boolean;
+  emptyStateKind?: "empty";
   initialLeads: DemoLead[];
   initialStageFilter?: string | null;
 }
@@ -96,6 +96,7 @@ export function LeadsWorkspace(props: LeadsWorkspaceProps) {
 function ScopedLeadsWorkspace({
   scope,
   canCreate,
+  emptyStateKind = "empty",
   initialLeads,
   initialStageFilter = null,
 }: LeadsWorkspaceProps) {
@@ -339,7 +340,12 @@ function ScopedLeadsWorkspace({
       <p className="crm-live-status" role="status" aria-live="polite">{status}</p>
 
       {leads.length === 0 ? (
-        <DataEmptyState label="Belum ada lead." />
+        <OperationState kind={emptyStateKind} label="Belum ada lead." />
+      ) : filtered.length === 0 ? (
+        <div className="crm-record-section">
+          <OperationState kind="filtered-empty" label="Tiada lead sepadan." />
+          <div className="crm-pagination"><span>0 daripada {leads.length}</span><span>Halaman 1</span></div>
+        </div>
       ) : (
         <section className="crm-record-section">
           <Table responsive="stack" containerLabel="Senarai lead">
@@ -366,9 +372,6 @@ function ScopedLeadsWorkspace({
                   <TableCell label="Tindakan seterusnya">{lead.nextAction}</TableCell>
                 </TableRow>
               })}
-              {filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={scope.kind === "ALL" ? 5 : 4}>Tiada rekod sepadan.</TableCell></TableRow>
-              ) : null}
             </TableBody>
           </Table>
           <div className="crm-pagination"><span>{filtered.length} daripada {leads.length}</span><span>Halaman 1</span></div>

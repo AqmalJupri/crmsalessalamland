@@ -40,6 +40,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
     <LeadsWorkspace
       scope={projectClientBusinessScope(scope)}
       canCreate={scope.kind === "UNIT" && scope.access.capabilities.includes("lead.create")}
+      emptyStateKind="empty"
       initialLeads={viewer.demo ? filterDemoRecordsByUnitIds(demoLeads, unitIds) : []}
       initialStageFilter={initialStageFilter}
     />

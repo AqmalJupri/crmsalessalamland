@@ -20,16 +20,23 @@ export default async function PipelinePage({ searchParams }: { searchParams: Pro
   );
   const unitIds = scope.kind === "ALL" ? scope.unitIds : [scope.businessUnitId];
   const activeOnly = query.metric === "active";
+  const sourceStages = canRenderDemoFixtures()
+    ? filterOpportunityStagesByUnitIds(opportunityStages, unitIds)
+    : [];
   const stages = activeOnly
-    ? opportunityStages.filter(isActiveDemoOpportunityStage)
-    : opportunityStages;
+    ? sourceStages.filter(isActiveDemoOpportunityStage)
+    : sourceStages;
+  const sourcePopulationCount = sourceStages.reduce(
+    (sum, stage) => sum + stage.items.length,
+    0,
+  );
   const workspace = (
     <PipelineWorkspace
       scope={projectClientBusinessScope(scope)}
       populationKey={activeOnly ? "active" : "all"}
-      initialStages={canRenderDemoFixtures()
-        ? filterOpportunityStagesByUnitIds(stages, unitIds)
-        : []}
+      emptyStateKind="empty"
+      initialStages={stages}
+      sourcePopulationCount={sourcePopulationCount}
       activeFilterLabel={activeOnly ? "Pipeline aktif" : null}
     />
   );

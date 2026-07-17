@@ -138,6 +138,18 @@ describe("ApplicationShell", () => {
     },
   );
 
+  it("omits invented production health and labels only local demo mode", () => {
+    const { rerender } = render(createElement(ApplicationShell, props()));
+
+    expect(screen.queryByText("Tersambung", { exact: true })).toBeNull();
+    expect(screen.queryByText("Tidak diketahui", { exact: true })).toBeNull();
+    expect(screen.queryByText("Demo", { exact: true })).toBeNull();
+
+    rerender(createElement(ApplicationShell, props({ demo: true })));
+    expect(screen.getByText("Demo", { exact: true })).toBeTruthy();
+    expect(screen.queryByText("Tersambung", { exact: true })).toBeNull();
+  });
+
   it("enforces Tasha's Salam-only boundary and compact navigation", async () => {
     const user = userEvent.setup();
     const tashaProps = { ...props(), surface: "tasha" as const };

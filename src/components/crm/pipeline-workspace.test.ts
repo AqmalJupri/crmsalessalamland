@@ -33,12 +33,14 @@ function workspace(
   scope: ClientBusinessScope = unitScope,
   activeFilterLabel: string | null = null,
   populationKey: "all" | "active" = "all",
+  sourcePopulationCount = stages.flatMap((stage) => stage.items).length,
 ) {
   return createElement(PipelineWorkspace, {
     initialStages: stages,
     scope,
     activeFilterLabel,
     populationKey,
+    sourcePopulationCount,
   });
 }
 
@@ -82,9 +84,29 @@ describe("PipelineWorkspace", () => {
   it("shows a truthful empty state instead of demo opportunities", () => {
     render(workspace([]));
 
-    expect(screen.getByText("Belum ada peluang.")).toBeTruthy();
+    const state = screen.getByRole("region", { name: "Belum ada peluang." });
+    expect(state.getAttribute("data-state-kind")).toBe("empty");
     expect(screen.queryByText("Nur Aisyah")).toBeNull();
     expect(screen.queryByText("Daniel Wong")).toBeNull();
+  });
+
+  it("uses filtered-empty when a nonempty source population is filtered to zero", () => {
+    const emptyStages = opportunityStages.map((stage) => ({ ...stage, items: [] }));
+    render(workspace(emptyStages, unitScope, "Pipeline aktif", "active", 3));
+
+    expect(screen.getByRole("status").textContent).toContain("Pipeline aktif · 0 rekod");
+    const state = screen.getByRole("region", { name: "Tiada peluang sepadan." });
+    expect(state.getAttribute("data-state-kind")).toBe("filtered-empty");
+    expect(screen.queryByText("Belum ada peluang.")).toBeNull();
+  });
+
+  it("uses empty when the source population is zero even with an active filter", () => {
+    render(workspace([], unitScope, "Pipeline aktif", "active", 0));
+
+    expect(screen.getByRole("status").textContent).toContain("Pipeline aktif · 0 rekod");
+    const state = screen.getByRole("region", { name: "Belum ada peluang." });
+    expect(state.getAttribute("data-state-kind")).toBe("empty");
+    expect(screen.queryByText("Tiada peluang sepadan.")).toBeNull();
   });
 
   it("remounts local board state when the authorised unit scope changes", async () => {

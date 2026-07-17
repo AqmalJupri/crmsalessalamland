@@ -1,4 +1,4 @@
-import { DataEmptyState } from "@/components/crm/data-empty-state";
+import { OperationState } from "@/components/ui";
 import { createDemoModuleMetrics, OperationalModule, parseModuleMetricQuery, type DemoModuleMetric } from "@/components/crm/operational-module";
 import { demoBusinessUnits } from "@/lib/demo-crm";
 import { CRM_MODULE_ACCESS } from "@/server/auth/module-access";
@@ -20,7 +20,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const query = await searchParams;
   const { scope } = await requireScopedPageViewer(query.bu, CRM_MODULE_ACCESS.settings.capability, "/settings", query);
   if (!canRenderDemoFixtures()) {
-    return <DataEmptyState label="Belum ada integrasi." />;
+    return <OperationState kind="empty" label="Belum ada integrasi." />;
   }
 
   const metrics = createDemoModuleMetrics({ scope, capability: CRM_MODULE_ACCESS.settings.capability, modulePath: "/settings", dateBasis: "Masa pemeriksaan", periodLabel: "24 jam", rows, metrics: metricDefinitions });

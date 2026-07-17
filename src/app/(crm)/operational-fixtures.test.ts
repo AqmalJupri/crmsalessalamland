@@ -86,6 +86,7 @@ describe("operational fixture boundaries", () => {
 
       expect(mocks.canRenderDemoFixtures).toHaveBeenCalledWith();
       expect(html).toContain(emptyLabel);
+      expect(html).toContain('data-state-kind="empty"');
       expect(html).not.toContain(fixture);
     },
   );

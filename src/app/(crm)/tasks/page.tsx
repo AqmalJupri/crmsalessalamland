@@ -1,4 +1,4 @@
-import { DataEmptyState } from "@/components/crm/data-empty-state";
+import { OperationState } from "@/components/ui";
 import { createDemoModuleMetrics, OperationalModule, parseModuleMetricQuery, type DemoModuleMetric, type ModuleRow } from "@/components/crm/operational-module";
 import { demoTasks, isDemoTaskActionableToday } from "@/lib/demo-crm";
 import { CRM_MODULE_ACCESS } from "@/server/auth/module-access";
@@ -41,7 +41,7 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
   const query = await searchParams;
   const { scope } = await requireScopedPageViewer(query.bu, CRM_MODULE_ACCESS.tasks.capability, "/tasks", query);
   if (!canRenderDemoFixtures()) {
-    return <DataEmptyState label="Belum ada tugasan." />;
+    return <OperationState kind="empty" label="Belum ada tugasan." />;
   }
 
   const metrics = createDemoModuleMetrics({ scope, capability: CRM_MODULE_ACCESS.tasks.capability, modulePath: "/tasks", dateBasis: "Tarikh akhir", periodLabel: "Hari ini", rows, metrics: metricDefinitions });

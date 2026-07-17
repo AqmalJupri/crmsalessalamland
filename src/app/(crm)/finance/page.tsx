@@ -1,4 +1,4 @@
-import { DataEmptyState } from "@/components/crm/data-empty-state";
+import { OperationState } from "@/components/ui";
 import { createDemoModuleMetrics, OperationalModule, parseModuleMetricQuery, type DemoModuleMetric } from "@/components/crm/operational-module";
 import { demoFinanceReceipts, formatMoneyMinor } from "@/lib/demo-crm";
 import { CRM_MODULE_ACCESS } from "@/server/auth/module-access";
@@ -36,7 +36,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   const query = await searchParams;
   const { scope } = await requireScopedPageViewer(query.bu, CRM_MODULE_ACCESS.finance.capability, "/finance", query);
   if (!canRenderDemoFixtures()) {
-    return <DataEmptyState label="Belum ada transaksi." />;
+    return <OperationState kind="empty" label="Belum ada transaksi." />;
   }
 
   const metrics = createDemoModuleMetrics({ scope, capability: CRM_MODULE_ACCESS.finance.capability, modulePath: "/finance", dateBasis: "Tarikh bayaran", periodLabel: "Bulan ini", rows, metrics: metricDefinitions });

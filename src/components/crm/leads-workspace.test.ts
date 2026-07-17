@@ -185,7 +185,8 @@ describe("LeadsWorkspace", () => {
   it("shows a truthful empty state while retaining authorized creation", () => {
     renderWorkspace(true, []);
 
-    expect(screen.getByText("Belum ada lead.")).toBeTruthy();
+    const state = screen.getByRole("region", { name: "Belum ada lead." });
+    expect(state.getAttribute("data-state-kind")).toBe("empty");
     expect(screen.getByRole("button", { name: "Lead baharu" })).toBeTruthy();
     expect(screen.queryByRole("table")).toBeNull();
     expect(screen.queryByText("Nur Aisyah")).toBeNull();
@@ -246,7 +247,9 @@ describe("LeadsWorkspace", () => {
     expect(screen.queryByRole("button", { name: "Daniel Wong" })).toBeNull();
 
     await user.type(search, "Daniel");
-    expect(screen.getByText("Tiada rekod sepadan.")).toBeTruthy();
+    const state = screen.getByRole("region", { name: "Tiada lead sepadan." });
+    expect(state.getAttribute("data-state-kind")).toBe("filtered-empty");
+    expect(screen.queryByRole("table")).toBeNull();
     expect(screen.getByText("0 daripada 2")).toBeTruthy();
   });
 
@@ -265,7 +268,8 @@ describe("LeadsWorkspace", () => {
     const status = screen.getByRole("combobox", { name: "Tapis status" }) as HTMLSelectElement;
     expect(status.value).toBe("qualified");
     expect(Array.from(status.options, (option) => option.value)).toContain("qualified");
-    expect(screen.getByText("Tiada rekod sepadan.")).toBeTruthy();
+    const state = screen.getByRole("region", { name: "Tiada lead sepadan." });
+    expect(state.getAttribute("data-state-kind")).toBe("filtered-empty");
     expect(screen.getByText("0 daripada 2")).toBeTruthy();
   });
 

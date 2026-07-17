@@ -1,4 +1,4 @@
-import { DataEmptyState } from "@/components/crm/data-empty-state";
+import { OperationState } from "@/components/ui";
 import { createDemoModuleMetrics, OperationalModule, parseModuleMetricQuery, type DemoModuleMetric } from "@/components/crm/operational-module";
 import { demoBusinessUnits } from "@/lib/demo-crm";
 import { CRM_MODULE_ACCESS } from "@/server/auth/module-access";
@@ -20,7 +20,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
   const query = await searchParams;
   const { scope } = await requireScopedPageViewer(query.bu, CRM_MODULE_ACCESS.orders.capability, "/orders", query);
   if (!canRenderDemoFixtures()) {
-    return <DataEmptyState label="Belum ada pesanan." />;
+    return <OperationState kind="empty" label="Belum ada pesanan." />;
   }
 
   const metrics = createDemoModuleMetrics({ scope, capability: CRM_MODULE_ACCESS.orders.capability, modulePath: "/orders", dateBasis: "Tarikh pesanan", periodLabel: "30 hari", rows, metrics: metricDefinitions });

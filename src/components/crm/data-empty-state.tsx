@@ -1,10 +1,5 @@
-import { Inbox } from "lucide-react";
+import { OperationState } from "@/components/ui/operation-state";
 
 export function DataEmptyState({ label }: { label: string }) {
-  return (
-    <section className="crm-card crm-empty-action">
-      <Inbox aria-hidden="true" />
-      <strong>{label}</strong>
-    </section>
-  );
+  return <OperationState kind="empty" label={label} />;
 }

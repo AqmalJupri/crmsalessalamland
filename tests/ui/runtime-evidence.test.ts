@@ -3,11 +3,11 @@ import {
   readDocumentEvidence,
   requireDocumentEvidence,
   runWithCleanup,
-} from "./runtime-evidence.mjs";
+} from "../production/runtime-evidence.mjs";
 
 describe("runWithCleanup", () => {
   it("runs every cleanup step in order and returns the primary result", async () => {
-    const calls = [];
+    const calls: string[] = [];
 
     const result = await runWithCleanup(
       async () => {
@@ -33,7 +33,7 @@ describe("runWithCleanup", () => {
 
   it("surfaces a cleanup-only failure after attempting every cleanup step", async () => {
     const cleanupFailure = new Error("fixture cleanup failed");
-    const calls = [];
+    const calls: string[] = [];
 
     await expect(
       runWithCleanup(async () => "result", [
@@ -70,7 +70,7 @@ describe("runWithCleanup", () => {
     const primaryFailure = new Error("primary failed");
     const firstCleanupFailure = new Error("first cleanup failed");
     const secondCleanupFailure = new Error("second cleanup failed");
-    const calls = [];
+    const calls: string[] = [];
 
     const rejection = await runWithCleanup(
       async () => {

@@ -3,8 +3,11 @@ import "server-only";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { getRuntimeConfig } from "@/server/env";
-import * as schema from "./schema";
+import * as coreSchema from "./schema";
+import * as migrationSchema from "./migration-schema";
 import { createSingletonResource, type SingletonResource } from "./singleton-resource";
+
+const schema = { ...coreSchema, ...migrationSchema };
 
 type SqlClient = ReturnType<typeof postgres>;
 

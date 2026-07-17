@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -11,6 +11,7 @@ const ownerModuleUrl = pathToFileURL(
   join(repositoryRoot, "scripts/ci/run-next-runtime-smoke.mjs"),
 ).href;
 const trackedPidFiles = new Set<string>();
+const trackedDirectories = new Set<string>();
 
 interface ProcessCommand {
   command: string;
@@ -74,7 +75,9 @@ grandchild.once("message", (message) => {
   if (message !== "ready") process.exit(93);
   writeFileSync(pidFile, JSON.stringify({ parent: process.pid, grandchild: grandchild.pid }));
 
-  if (mode === "startup-fail") {
+  if (mode === "hang") {
+    setInterval(() => undefined, 1000);
+  } else if (mode === "startup-fail") {
     setTimeout(() => process.exit(17), 40);
   } else {
     createServer((request, response) => {
@@ -113,7 +116,7 @@ async function unusedPort(): Promise<number> {
   return address.port;
 }
 
-async function fixture(mode: "healthy" | "no-live" | "ready-fail" | "startup-fail", smokeExitCode = 0): Promise<TreeFixture> {
+async function fixture(mode: "hang" | "healthy" | "no-live" | "ready-fail" | "startup-fail", smokeExitCode = 0): Promise<TreeFixture> {
   const directory = await mkdtemp(join(tmpdir(), "crm-runtime-owner-"));
   const fixturePath = join(directory, "process-tree.mjs");
   const pidFile = join(directory, "pids.json");
@@ -121,6 +124,7 @@ async function fixture(mode: "healthy" | "no-live" | "ready-fail" | "startup-fai
   const port = await unusedPort();
   await writeFile(fixturePath, treeFixtureSource, "utf8");
   trackedPidFiles.add(pidFile);
+  trackedDirectories.add(directory);
 
   return {
     directory,
@@ -206,6 +210,20 @@ async function childExit(child: ChildProcess): Promise<{ code: number | null; si
   });
 }
 
+async function waitForText(path: string, pattern: RegExp): Promise<string> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    try {
+      const value = await readFile(path, "utf8");
+      if (pattern.test(value)) return value;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for ${pattern} in ${path}.`);
+}
+
 async function runSignalPath(tree: TreeFixture, signal: "SIGINT" | "SIGTERM"): Promise<void> {
   const harnessPath = join(tree.directory, "owner-harness.mjs");
   await writeFile(
@@ -234,6 +252,39 @@ async function runSignalPath(tree: TreeFixture, signal: "SIGINT" | "SIGTERM"): P
   await expectTreeCleaned(tree);
 }
 
+async function runLateCleanupSignalPath(
+  tree: TreeFixture,
+  signal: "SIGINT" | "SIGTERM",
+): Promise<void> {
+  const harnessPath = join(tree.directory, "owner-late-signal-harness.mjs");
+  await writeFile(
+    harnessPath,
+    `import { runNextRuntimeSmokeCli } from ${JSON.stringify(ownerModuleUrl)};\nawait runNextRuntimeSmokeCli(JSON.parse(process.env.RUNTIME_OWNER_OPTIONS));\n`,
+    "utf8",
+  );
+  const child = spawn(process.execPath, [harnessPath], {
+    cwd: tree.directory,
+    env: {
+      ...process.env,
+      RUNTIME_OWNER_OPTIONS: JSON.stringify({
+        ...tree.options,
+        forceKillTimeoutMs: 1_000,
+        terminationGraceMs: 1_000,
+      }),
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const exit = childExit(child);
+  await readPids(tree.pidFile);
+  await waitForText(tree.signalFile, /SIGTERM:/);
+  child.kill(signal);
+  const result = await exit;
+
+  expect(result.signal, result.output).toBeNull();
+  expect(result.code, result.output).toBe(signal === "SIGINT" ? 130 : 143);
+  await expectTreeCleaned(tree);
+}
+
 afterEach(async () => {
   for (const pidFile of trackedPidFiles) {
     try {
@@ -251,9 +302,64 @@ afterEach(async () => {
     }
   }
   trackedPidFiles.clear();
+  await Promise.all(
+    [...trackedDirectories].map((directory) =>
+      rm(directory, { force: true, recursive: true }),
+    ),
+  );
+  trackedDirectories.clear();
 });
 
 describe.sequential("portable production runtime process owner", () => {
+  it("rejects a compatible server that already owns the configured port", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "crm-runtime-owner-decoy-"));
+    trackedDirectories.add(directory);
+    const port = await unusedPort();
+    const decoy = createServer((request, response) => {
+      if (request.url === "/api/health/live" || request.url === "/api/health/ready") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ status: "ok" }));
+        return;
+      }
+      response.writeHead(404);
+      response.end();
+    });
+    await new Promise<void>((resolve, reject) => {
+      decoy.once("error", reject);
+      decoy.listen(port, "127.0.0.1", resolve);
+    });
+    const owner = await loadOwner();
+
+    try {
+      await expect(owner.runNextRuntimeSmoke({
+        baseUrl: `http://127.0.0.1:${port}`,
+        forceKillTimeoutMs: 1_000,
+        pollIntervalMs: 20,
+        requestTimeoutMs: 100,
+        smokeCommand: {
+          command: process.execPath,
+          args: ["-e", "process.exit(0)"],
+          cwd: directory,
+        },
+        smokeTimeoutMs: 1_000,
+        startCommand: {
+          command: process.execPath,
+          args: ["-e", "setInterval(() => undefined, 1000)"],
+          cwd: directory,
+        },
+        startupTimeoutMs: 1_000,
+        terminationGraceMs: 100,
+      })).rejects.toThrow(/already|occupied|port/i);
+
+      const response = await fetch(`http://127.0.0.1:${port}/api/health/ready`);
+      expect(response.status).toBe(200);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        decoy.close((error) => error ? reject(error) : resolve());
+      });
+    }
+  }, 10_000);
+
   it("cleans the detached parent and grandchild after a successful smoke", async () => {
     const tree = await fixture("healthy");
     const owner = await loadOwner();
@@ -299,11 +405,35 @@ describe.sequential("portable production runtime process owner", () => {
     await expectTreeCleaned(tree);
   }, 10_000);
 
+  it("bounds a hanging smoke command and cleans both detached trees", async () => {
+    const server = await fixture("healthy");
+    const smoke = await fixture("hang");
+    const owner = await loadOwner();
+
+    await expect(owner.runNextRuntimeSmoke({
+      ...server.options,
+      smokeCommand: smoke.options.startCommand,
+      smokeTimeoutMs: 180,
+    })).rejects.toThrow(/smoke|timeout/i);
+
+    await expectTreeCleaned(smoke);
+    await expectTreeCleaned(server);
+  }, 10_000);
+
   it.each(["SIGINT", "SIGTERM"] as const)(
     "cleans both PIDs before exiting for %s",
     async (signal) => {
       const tree = await fixture("no-live");
       await runSignalPath(tree, signal);
+    },
+    10_000,
+  );
+
+  it.each(["SIGINT", "SIGTERM"] as const)(
+    "preserves %s exit semantics when it arrives during cleanup",
+    async (signal) => {
+      const tree = await fixture("healthy");
+      await runLateCleanupSignalPath(tree, signal);
     },
     10_000,
   );

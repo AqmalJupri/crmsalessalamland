@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { connect } from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -136,6 +137,58 @@ function throwIfAborted(signal) {
     : new Error("Production runtime smoke aborted.");
 }
 
+function assertPortAvailable(baseUrl, timeoutMs, signal) {
+  throwIfAborted(signal);
+  const parsed = new URL(baseUrl);
+  const port = Number(parsed.port || "80");
+
+  return new Promise((resolveAvailable, rejectAvailable) => {
+    let settled = false;
+    const socket = connect({ host: parsed.hostname, port });
+    const timeout = setTimeout(() => {
+      finish(() => rejectAvailable(
+        new Error(`Runtime smoke could not prove port ${port} is available.`),
+      ));
+    }, timeoutMs);
+    const onAbort = () => {
+      finish(() => {
+        try {
+          throwIfAborted(signal);
+        } catch (error) {
+          rejectAvailable(error);
+        }
+      });
+    };
+    const finish = (callback) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      socket.removeAllListeners();
+      socket.destroy();
+      callback();
+    };
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+    socket.once("connect", () => {
+      finish(() => rejectAvailable(
+        new Error(`Runtime smoke port ${port} is already occupied.`),
+      ));
+    });
+    socket.once("error", (error) => {
+      finish(() => {
+        if (error?.code === "ECONNREFUSED") {
+          resolveAvailable();
+          return;
+        }
+        rejectAvailable(new Error(
+          `Runtime smoke could not verify port ${port}: ${error?.message ?? "unknown socket error"}.`,
+        ));
+      });
+    });
+  });
+}
+
 function observeCommand(command, extraEnvironment = {}) {
   const child = spawn(command.command, command.args, {
     cwd: command.cwd,
@@ -228,17 +281,14 @@ async function waitForLive(server, options) {
   let lastStatus = null;
   while (Date.now() < deadline) {
     throwIfAborted(options.signal);
-    if (server.exitResult) {
-      throw new Error(
-        `Production runtime startup exited ${exitDescription(server.exitResult)}.`,
-      );
-    }
+    assertOwnedProcessGroup(server, "Production runtime startup");
     lastStatus = await healthStatus(
       options.fetchImpl,
       `${options.baseUrl}/api/health/live`,
       options.requestTimeoutMs,
       options.signal,
     );
+    assertOwnedProcessGroup(server, "Production runtime startup");
     if (lastStatus === 200) return;
     await delay(
       Math.min(options.pollIntervalMs, Math.max(1, deadline - Date.now())),
@@ -298,6 +348,23 @@ function processGroupExists(pid) {
     if (error?.code === "ESRCH") return false;
     if (error?.code === "EPERM") return true;
     throw error;
+  }
+}
+
+function assertOwnedProcessGroup(state, label) {
+  const result = state?.exitResult;
+  if (
+    result?.kind === "error" ||
+    (result?.kind === "exit" && result.code !== 0)
+  ) {
+    throw new Error(`${label} exited ${exitDescription(result)}.`);
+  }
+  if (
+    !Number.isSafeInteger(state?.pid) ||
+    state.pid <= 0 ||
+    !processGroupExists(state.pid)
+  ) {
+    throw new Error(`${label} process group is not running.`);
   }
 }
 
@@ -362,12 +429,19 @@ export async function runNextRuntimeSmoke(input = {}) {
   let primaryError = null;
   try {
     throwIfAborted(options.signal);
+    await assertPortAvailable(
+      options.baseUrl,
+      options.requestTimeoutMs,
+      options.signal,
+    );
+    throwIfAborted(options.signal);
     server = observeCommand(options.startCommand);
     if (!Number.isSafeInteger(server.pid) || server.pid <= 0) {
       const result = await server.exitPromise;
       throw new Error(`Production runtime startup failed ${exitDescription(result)}.`);
     }
     await waitForLive(server, options);
+    assertOwnedProcessGroup(server, "Production runtime");
 
     smoke = observeCommand(options.smokeCommand, {
       PRODUCTION_SMOKE_URL: options.baseUrl,
@@ -378,6 +452,7 @@ export async function runNextRuntimeSmoke(input = {}) {
       options.signal,
       "Production runtime smoke",
     );
+    assertOwnedProcessGroup(server, "Production runtime");
 
     const readyStatus = await healthStatus(
       options.fetchImpl,
@@ -385,6 +460,7 @@ export async function runNextRuntimeSmoke(input = {}) {
       options.requestTimeoutMs,
       options.signal,
     );
+    assertOwnedProcessGroup(server, "Production runtime");
     if (readyStatus !== 200) {
       throw new Error(
         `Production runtime ready health failed${readyStatus === null ? "" : ` with status ${readyStatus}`}.`,
@@ -419,14 +495,14 @@ export async function runNextRuntimeSmokeCli(input = {}) {
   try {
     await runNextRuntimeSmoke({ ...input, signal: combinedSignal });
   } catch (error) {
-    if (error instanceof RuntimeInterruptedError && receivedSignal) {
-      process.exitCode = receivedSignal === "SIGINT" ? 130 : 143;
-      return;
-    }
+    if (receivedSignal) return;
     throw error;
   } finally {
     for (const [signal, handler] of Object.entries(handlers)) {
       process.removeListener(signal, handler);
+    }
+    if (receivedSignal) {
+      process.exitCode = receivedSignal === "SIGINT" ? 130 : 143;
     }
   }
 }

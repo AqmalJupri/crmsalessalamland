@@ -20,7 +20,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
   const query = await searchParams;
   const { scope } = await requireScopedPageViewer(query.bu, CRM_MODULE_ACCESS.reports.capability, "/reports", query);
   if (!canRenderDemoFixtures()) {
-    return <DataEmptyState label="Belum ada data." />;
+    return <DataEmptyState label="Belum ada laporan." />;
   }
 
   const metrics = createDemoModuleMetrics({ scope, capability: CRM_MODULE_ACCESS.reports.capability, modulePath: "/reports", dateBasis: "Tarikh rekod", periodLabel: "30 hari", rows, metrics: metricDefinitions });

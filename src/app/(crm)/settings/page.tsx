@@ -20,7 +20,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const query = await searchParams;
   const { scope } = await requireScopedPageViewer(query.bu, CRM_MODULE_ACCESS.settings.capability, "/settings", query);
   if (!canRenderDemoFixtures()) {
-    return <DataEmptyState label="Belum ada data." />;
+    return <DataEmptyState label="Belum ada integrasi." />;
   }
 
   const metrics = createDemoModuleMetrics({ scope, capability: CRM_MODULE_ACCESS.settings.capability, modulePath: "/settings", dateBasis: "Masa pemeriksaan", periodLabel: "24 jam", rows, metrics: metricDefinitions });

@@ -47,6 +47,7 @@ const ids = {
 const viewer: Viewer = {
   userId: ids.user,
   displayName: "Agent Integration",
+  sessionExpiresAt: new Date("2026-07-17T12:00:00.000Z"),
   organizationId: ids.organization,
   businessUnitId: ids.businessUnit,
   businessUnits: [

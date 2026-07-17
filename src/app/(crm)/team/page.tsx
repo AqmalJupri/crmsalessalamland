@@ -20,7 +20,7 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
   const query = await searchParams;
   const { scope } = await requireScopedPageViewer(query.bu, CRM_MODULE_ACCESS.team.capability, "/team", query);
   if (!canRenderDemoFixtures()) {
-    return <DataEmptyState label="Belum ada data." />;
+    return <DataEmptyState label="Belum ada ahli pasukan." />;
   }
 
   const metrics = createDemoModuleMetrics({ scope, capability: CRM_MODULE_ACCESS.team.capability, modulePath: "/team", dateBasis: "Tarikh aktiviti", periodLabel: "Bulan ini", rows, metrics: metricDefinitions });

@@ -28,6 +28,7 @@ import {
   CardTitle,
   Table,
   TableBody,
+  TableCaption,
   TableCell,
   TableHead,
   TableHeader,
@@ -61,7 +62,7 @@ export function SurfaceHome({
   }
 
   if (!demo) {
-    return <DataEmptyState label="Belum ada data." />;
+    return <DataEmptyState label="Ringkasan belum tersedia." />;
   }
 
   const leadUnits = unitsForCapability(scope, "lead.read");
@@ -94,7 +95,7 @@ export function SurfaceHome({
     financeUnits.length === 0 &&
     reportUnits.length === 0
   ) {
-    return <DataEmptyState label="Belum ada data." />;
+    return <DataEmptyState label="Tiada ringkasan untuk akses ini." />;
   }
 
   return (
@@ -207,10 +208,13 @@ export function SurfaceHome({
         </Card> : null}
       </div> : null}
 
-      {reportUnits.length > 0 ? <Card>
-        <CardHeader><CardTitle>Aktiviti terkini</CardTitle></CardHeader>
-        <CardContent className="crm-card-content--flush">
-          <Table responsive="stack">
+      {reportUnits.length > 0 ? <section className="crm-record-section" aria-labelledby="dashboard-activity-title">
+        <header className="crm-record-section__header">
+          <h2 id="dashboard-activity-title">Aktiviti terkini</h2>
+          <Badge variant="neutral">{activities.length}</Badge>
+        </header>
+          <Table responsive="stack" containerLabel="Aktiviti terkini">
+            <TableCaption>Aktiviti terkini</TableCaption>
             <TableHeader><TableRow>{scope.kind === "ALL" ? <TableHead>Syarikat</TableHead> : null}<TableHead>Tindakan</TableHead><TableHead>Rekod</TableHead><TableHead>Oleh</TableHead><TableHead align="right">Masa</TableHead></TableRow></TableHeader>
             <TableBody>
               {activities.map((activity) => (
@@ -224,8 +228,7 @@ export function SurfaceHome({
               ))}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card> : null}
+      </section> : null}
     </div>
   );
 }

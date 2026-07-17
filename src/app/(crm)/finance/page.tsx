@@ -36,7 +36,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   const query = await searchParams;
   const { scope } = await requireScopedPageViewer(query.bu, CRM_MODULE_ACCESS.finance.capability, "/finance", query);
   if (!canRenderDemoFixtures()) {
-    return <DataEmptyState label="Belum ada data." />;
+    return <DataEmptyState label="Belum ada transaksi." />;
   }
 
   const metrics = createDemoModuleMetrics({ scope, capability: CRM_MODULE_ACCESS.finance.capability, modulePath: "/finance", dateBasis: "Tarikh bayaran", periodLabel: "Bulan ini", rows, metrics: metricDefinitions });

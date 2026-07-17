@@ -202,6 +202,8 @@ describe("LeadsWorkspace", () => {
     renderWorkspace();
     const table = screen.getByRole("table");
 
+    expect(table.querySelector("caption")?.textContent).toBe("Senarai lead");
+    expect(table.closest(".crm-card")).toBeNull();
     expect(within(table).getByText("+6012•••6789 · Meta")).toBeTruthy();
     expect(within(table).getByText("+6017•••4421 · Google ads")).toBeTruthy();
     expect(within(table).getByText("Baharu")).toBeTruthy();
@@ -303,8 +305,7 @@ describe("LeadsWorkspace", () => {
     expect(document.activeElement).toBe(phone);
   });
 
-  it("protects dirty form changes and closes only after discard confirmation", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+  it("protects dirty form changes and closes only after the explicit discard action", async () => {
     const { container } = renderWorkspace();
     const { user, form } = await openCreateForm();
 
@@ -312,12 +313,24 @@ describe("LeadsWorkspace", () => {
     fireEvent.mouseDown(form);
     expect(screen.getByRole("dialog", { name: "Lead baharu" })).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: "Batal" }));
-    expect(confirm).toHaveBeenCalledTimes(1);
+    await user.click(within(form).getByRole("button", { name: "Batal" }));
+    const discardDialog = screen.getByRole("dialog", { name: "Buang perubahan?" });
+    expect(within(discardDialog).getByText("Perubahan dalam Lead baharu akan dibuang.")).toBeTruthy();
+    expect(form.getAttribute("aria-hidden")).toBe("true");
+    expect(form.hasAttribute("inert")).toBe(true);
+
+    const discardBackdrop = container.querySelector("[data-unsaved-changes-backdrop]");
+    expect(discardBackdrop).not.toBeNull();
+    fireEvent.mouseDown(discardBackdrop!);
+    expect(screen.getByRole("dialog", { name: "Buang perubahan?" })).toBeTruthy();
+    expect(form.isConnected).toBe(true);
+
+    await user.click(within(discardDialog).getByRole("button", { name: "Kekalkan perubahan" }));
+    expect(screen.queryByRole("dialog", { name: "Buang perubahan?" })).toBeNull();
     expect(screen.getByRole("dialog", { name: "Lead baharu" })).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: "Batal" }));
-    expect(confirm).toHaveBeenCalledTimes(2);
+    await user.click(within(form).getByRole("button", { name: "Batal" }));
+    await user.click(screen.getByRole("button", { name: "Buang perubahan" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Lead baharu" })).toBeNull());
 
     await user.click(screen.getByRole("button", { name: "Lead baharu" }));
@@ -327,6 +340,20 @@ describe("LeadsWorkspace", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Lead baharu" })).toBeNull());
   });
 
+  it("releases the page scroll lock when a nested discard flow unmounts", async () => {
+    const { unmount } = renderWorkspace();
+    const { user, form } = await openCreateForm();
+
+    await user.type(screen.getByLabelText(/^Nama/), "Hana");
+    await user.click(within(form).getByRole("button", { name: "Batal" }));
+    expect(screen.getByRole("dialog", { name: "Buang perubahan?" })).toBeTruthy();
+    expect(document.body.style.overflow).toBe("hidden");
+
+    unmount();
+
+    expect(document.body.style.overflow).toBe("");
+  });
+
   it("shows local phone validation without making a request", async () => {
     renderWorkspace();
     const { user } = await openCreateForm();
@@ -334,11 +361,10 @@ describe("LeadsWorkspace", () => {
 
     await user.click(screen.getByRole("button", { name: "Simpan" }));
 
-    await waitFor(() =>
-      expect(screen.getByRole("alert").textContent).toBe(
-        "Masukkan nombor mudah alih Malaysia yang sah.",
-      ),
-    );
+    const phone = screen.getByLabelText(/^Telefon/);
+    await waitFor(() => expect(phone.getAttribute("aria-invalid")).toBe("true"));
+    expect(screen.getByText("Masukkan nombor mudah alih Malaysia yang sah.")).toBeTruthy();
+    expect(document.activeElement).toBe(phone);
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -459,9 +485,48 @@ describe("LeadsWorkspace", () => {
     expect((screen.getByRole("button", { name: "Simpan" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("uses a safe fallback for malformed success and non-Error request failures", async () => {
+  it("maps API validation errors beside fields and focuses the first invalid control", async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: false,
+      json: async () => ({
+        error: {
+          message: "Semak maklumat lead.",
+          details: {
+            fields: {
+              name: ["Nama terlalu pendek."],
+              phone: ["Telefon tidak sah."],
+            },
+          },
+        },
+      }),
+    } as Response);
+    const { container } = renderWorkspace();
+    const { user } = await openCreateForm();
+    await completeRequiredFields(user);
+
+    await user.click(screen.getByRole("button", { name: "Simpan" }));
+
+    const name = screen.getByLabelText(/^Nama/);
+    const phone = screen.getByLabelText(/^Telefon/);
+    await waitFor(() => expect(name.getAttribute("aria-invalid")).toBe("true"));
+    expect(phone.getAttribute("aria-invalid")).toBe("true");
+    expect(name.getAttribute("aria-describedby")).toContain("error");
+    expect(phone.getAttribute("aria-describedby")).toContain("error");
+    expect(screen.getByText("Nama terlalu pendek.")).toBeTruthy();
+    expect(screen.getByText("Telefon tidak sah.")).toBeTruthy();
+    expect(container.querySelector(".crm-form-error")).toBeNull();
+    expect(document.activeElement).toBe(name);
+  });
+
+  it("uses a safe fallback for malformed responses and non-Error request failures", async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce({ ok: true, json: async () => ({}) } as Response)
+      .mockResolvedValueOnce({
+        ok: false,
+        json: async () => {
+          throw new SyntaxError("Unexpected end of JSON input");
+        },
+      } as unknown as Response)
       .mockRejectedValueOnce("network unavailable");
     renderWorkspace();
     const first = await openCreateForm();
@@ -474,6 +539,12 @@ describe("LeadsWorkspace", () => {
 
     await first.user.click(screen.getByRole("button", { name: "Simpan" }));
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toBe("Lead tidak dapat disimpan."),
+    );
+
+    await first.user.click(screen.getByRole("button", { name: "Simpan" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
     await waitFor(() =>
       expect(screen.getByRole("alert").textContent).toBe("Lead tidak dapat disimpan."),
     );

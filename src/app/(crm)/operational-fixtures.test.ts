@@ -59,15 +59,16 @@ const operationalPages: Array<{
   name: string;
   Page: Page;
   fixture: string;
+  emptyLabel: string;
 }> = [
-  { name: "finance", Page: FinancePage, fixture: "RM12,500" },
-  { name: "inventory", Page: InventoryPage, fixture: "A-118" },
-  { name: "marketing", Page: MarketingPage, fixture: "Salam Land Julai" },
-  { name: "orders", Page: OrdersPage, fixture: "SL-2026-0481" },
-  { name: "reports", Page: ReportsPage, fixture: "Prestasi jualan" },
-  { name: "settings", Page: SettingsPage, fixture: "Meta Lead Ads" },
-  { name: "tasks", Page: TasksPage, fixture: "Hubungi pelanggan" },
-  { name: "team", Page: TeamPage, fixture: "Eksekutif Jualan" },
+  { name: "finance", Page: FinancePage, fixture: "RM12,500", emptyLabel: "Belum ada transaksi." },
+  { name: "inventory", Page: InventoryPage, fixture: "A-118", emptyLabel: "Belum ada rekod inventori." },
+  { name: "marketing", Page: MarketingPage, fixture: "Salam Land Julai", emptyLabel: "Belum ada kempen." },
+  { name: "orders", Page: OrdersPage, fixture: "SL-2026-0481", emptyLabel: "Belum ada pesanan." },
+  { name: "reports", Page: ReportsPage, fixture: "Prestasi jualan", emptyLabel: "Belum ada laporan." },
+  { name: "settings", Page: SettingsPage, fixture: "Meta Lead Ads", emptyLabel: "Belum ada integrasi." },
+  { name: "tasks", Page: TasksPage, fixture: "Hubungi pelanggan", emptyLabel: "Belum ada tugasan." },
+  { name: "team", Page: TeamPage, fixture: "Eksekutif Jualan", emptyLabel: "Belum ada ahli pasukan." },
 ];
 
 describe("operational fixture boundaries", () => {
@@ -78,13 +79,13 @@ describe("operational fixture boundaries", () => {
 
   it.each(operationalPages)(
     "$name renders no static operational data for a non-demo viewer",
-    async ({ Page, fixture }) => {
+    async ({ Page, emptyLabel, fixture }) => {
       mocks.canRenderDemoFixtures.mockReturnValue(false);
 
       const html = renderToStaticMarkup(await Page(pageInput));
 
       expect(mocks.canRenderDemoFixtures).toHaveBeenCalledWith();
-      expect(html).toContain("Belum ada data.");
+      expect(html).toContain(emptyLabel);
       expect(html).not.toContain(fixture);
     },
   );

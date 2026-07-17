@@ -12,6 +12,28 @@ const focusableSelector = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
+let bodyScrollLockCount = 0;
+let bodyOverflowBeforeLocks: string | null = null;
+
+function acquireBodyScrollLock(): () => void {
+  if (bodyScrollLockCount === 0) {
+    bodyOverflowBeforeLocks = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+  }
+  bodyScrollLockCount += 1;
+  let released = false;
+
+  return () => {
+    if (released) return;
+    released = true;
+    bodyScrollLockCount = Math.max(0, bodyScrollLockCount - 1);
+    if (bodyScrollLockCount === 0) {
+      document.body.style.overflow = bodyOverflowBeforeLocks ?? "";
+      bodyOverflowBeforeLocks = null;
+    }
+  };
+}
+
 function focusableElements(dialog: HTMLElement): HTMLElement[] {
   return Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector)).filter(
     (element) => !element.hidden && element.getAttribute("aria-hidden") !== "true",
@@ -23,17 +45,24 @@ export function useDialogFocus({
   initialFocusRef,
   onClose,
   open,
+  paused = false,
 }: {
   dialogRef: RefObject<HTMLElement | null>;
   initialFocusRef?: RefObject<HTMLElement | null>;
   onClose: () => void;
   open: boolean;
+  paused?: boolean;
 }): void {
   const onCloseRef = useRef(onClose);
+  const pausedRef = useRef(paused);
 
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
+
+  useEffect(() => {
+    pausedRef.current = paused;
+  }, [paused]);
 
   useEffect(() => {
     if (!open) return;
@@ -41,14 +70,14 @@ export function useDialogFocus({
     const opener = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const releaseBodyScrollLock = acquireBodyScrollLock();
 
     const dialog = dialogRef.current;
     const initialFocus = initialFocusRef?.current ?? (dialog ? focusableElements(dialog)[0] : null);
     (initialFocus ?? dialog)?.focus();
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (pausedRef.current) return;
       const currentDialog = dialogRef.current;
       if (!currentDialog) return;
 
@@ -83,8 +112,8 @@ export function useDialogFocus({
 
     document.addEventListener("keydown", handleKeyDown);
     return () => {
-      document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", handleKeyDown);
+      releaseBodyScrollLock();
       if (opener?.isConnected) opener.focus();
     };
   }, [dialogRef, initialFocusRef, open]);

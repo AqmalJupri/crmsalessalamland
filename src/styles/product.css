@@ -18,6 +18,28 @@ a {
   gap: var(--crm-space-4);
 }
 
+.crm-record-section {
+  min-width: 0;
+}
+
+.crm-record-section__header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--crm-space-3);
+  margin-bottom: var(--crm-space-2);
+}
+
+.crm-record-section__header h2 {
+  overflow: hidden;
+  font-size: var(--crm-text-base);
+  font-weight: 600;
+  line-height: var(--crm-leading-ui);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .crm-dashboard-grid,
 .crm-split-grid {
   display: grid;
@@ -222,7 +244,10 @@ a {
   justify-content: space-between;
   gap: var(--crm-space-3);
   padding: var(--crm-space-3) var(--crm-space-4);
-  border-top: 1px solid var(--crm-divider);
+  border: 1px solid var(--crm-divider);
+  border-top: 0;
+  border-radius: 0 0 var(--crm-radius) var(--crm-radius);
+  background: var(--crm-surface);
   color: var(--crm-muted);
   font-size: var(--crm-text-xs);
 }
@@ -329,6 +354,10 @@ a {
   padding: var(--crm-space-4);
 }
 
+.crm-modal-backdrop--confirm {
+  z-index: 100;
+}
+
 .crm-modal {
   width: min(32rem, 100%);
   max-height: calc(100vh - 2rem);
@@ -357,6 +386,16 @@ a {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--crm-space-3);
   padding: var(--crm-space-4);
+}
+
+.crm-confirm-dialog {
+  width: min(27rem, 100%);
+}
+
+.crm-confirm-dialog__body {
+  padding: var(--crm-space-4);
+  color: var(--crm-muted);
+  font-size: var(--crm-text-sm);
 }
 
 .crm-modal__field-wide {

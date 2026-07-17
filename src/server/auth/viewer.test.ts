@@ -60,7 +60,7 @@ describe("getViewer request memoization", () => {
 
     mocks.requestState.id = "request-b";
 
-    await expect(getViewer()).resolves.toMatchObject({ demo: true });
+    await expect(getViewer()).resolves.toMatchObject({ demo: true, sessionExpiresAt: null });
     expect(mocks.getRuntimeConfig).toHaveBeenCalledTimes(2);
   });
 });

@@ -12,6 +12,7 @@ import { cn } from "./utils";
 export type TableResponsiveMode = "scroll" | "stack";
 
 export interface TableProps extends TableHTMLAttributes<HTMLTableElement> {
+  containerLabel: string;
   containerClassName?: string;
   responsive?: TableResponsiveMode;
 }
@@ -21,6 +22,7 @@ export const Table = forwardRef<HTMLTableElement, TableProps>(
     {
       children,
       className,
+      containerLabel,
       containerClassName,
       responsive = "scroll",
       ...props
@@ -30,7 +32,9 @@ export const Table = forwardRef<HTMLTableElement, TableProps>(
     <div
       className={cn("crm-table-region", containerClassName)}
       data-responsive={responsive}
-      tabIndex={responsive === "scroll" ? 0 : undefined}
+      role="region"
+      aria-label={containerLabel}
+      tabIndex={0}
     >
       <table ref={ref} className={cn("crm-table", className)} {...props}>
         {children}
@@ -46,7 +50,7 @@ export const TableCaption = forwardRef<
 >(({ className, ...props }, ref) => (
   <caption
     ref={ref}
-    className={cn("crm-table__caption", className)}
+    className={cn("crm-table__caption crm-visually-hidden", className)}
     {...props}
   />
 ));

@@ -41,7 +41,7 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
   const query = await searchParams;
   const { scope } = await requireScopedPageViewer(query.bu, CRM_MODULE_ACCESS.tasks.capability, "/tasks", query);
   if (!canRenderDemoFixtures()) {
-    return <DataEmptyState label="Belum ada data." />;
+    return <DataEmptyState label="Belum ada tugasan." />;
   }
 
   const metrics = createDemoModuleMetrics({ scope, capability: CRM_MODULE_ACCESS.tasks.capability, modulePath: "/tasks", dateBasis: "Tarikh akhir", periodLabel: "Hari ini", rows, metrics: metricDefinitions });

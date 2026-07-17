@@ -26,8 +26,6 @@ export interface AppShellProps {
   activeHref?: string;
   brand?: SidebarBrand;
   workspace?: ReactNode;
-  topbarEyebrow?: ReactNode;
-  topbarDescription?: ReactNode;
   topbarActions?: ReactNode;
   user?: TopbarUser;
   sidebarFooter?: ReactNode;
@@ -76,8 +74,6 @@ export function AppShell({
   skipLabel = "Langkau ke kandungan",
   title,
   topbarActions,
-  topbarDescription,
-  topbarEyebrow,
   user,
   workspace,
 }: AppShellProps) {
@@ -270,10 +266,6 @@ export function AppShell({
           menuOpen={drawerOpen}
           menuControls={drawerId}
           menuButtonRef={menuButtonRef}
-          {...(topbarEyebrow !== undefined ? { eyebrow: topbarEyebrow } : {})}
-          {...(topbarDescription !== undefined
-            ? { description: topbarDescription }
-            : {})}
           {...(topbarActions !== undefined ? { actions: topbarActions } : {})}
           {...(user !== undefined ? { user } : {})}
         />

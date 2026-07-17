@@ -84,6 +84,7 @@ describe("business scope server boundary", () => {
       {
         userId: "user-1",
         displayName: "Agent",
+        sessionExpiresAt: new Date("2026-07-17T12:00:00.000Z"),
         organizationId: "org-1",
         businessUnitId: "unit-bumi",
         businessUnits: access,
@@ -111,6 +112,7 @@ describe("business scope server boundary", () => {
     const activePrivilegedViewer = {
       userId: "user-1",
       displayName: "Agent",
+      sessionExpiresAt: new Date("2026-07-17T12:00:00.000Z"),
       organizationId: "org-1",
       businessUnitId: "unit-salam",
       businessUnits: access,

@@ -61,6 +61,8 @@ beforeAll(async () => {
   process.env = {
     ...process.env,
     NODE_ENV: "test",
+    PRODUCT_SURFACE: "crm",
+    DEPLOYMENT_ENVIRONMENT: "ci",
     DATABASE_URL: databaseUrl,
     APP_URL: "http://127.0.0.1:3000",
     CRM_DEMO_MODE: "false",
@@ -235,13 +237,20 @@ describe("managed OIDC session establishment", () => {
     expect(Buffer.from(attempt!.attempted_identifier_hash)).toEqual(expectedSubjectHash);
   });
 
-  it("selects deterministic assignment provenance with business-unit preference and org fallback", async () => {
+  it("returns persisted expiry and deterministic assignment provenance", async () => {
     await establishOidcSession(activeSubject, { correlationId: randomUUID() });
+    const persistedExpiry = new Date("2099-07-17T12:34:56.000Z");
+    await sql`
+      update sessions
+      set expires_at = ${persistedExpiry}
+      where user_id = ${ids.activeUser} and status = 'ACTIVE'
+    `;
 
     expect(await getViewer()).toMatchObject({
       activeMembershipId: ids.activeMembership,
       capabilities: ["lead.update"],
       capabilityRecordScopes: { "lead.update": ["OWN"] },
+      sessionExpiresAt: persistedExpiry,
     });
 
     await sql`

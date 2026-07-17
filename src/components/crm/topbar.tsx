@@ -9,17 +9,16 @@ import {
 import { Menu } from "lucide-react";
 
 import { cn } from "../ui/utils";
+import { UserMenu } from "./user-menu";
 
 export interface TopbarUser {
   name: string;
-  role?: string;
-  initials?: string;
+  sessionExpiresAt: string | null;
+  demo?: boolean;
 }
 
 export interface TopbarProps extends Omit<HTMLAttributes<HTMLElement>, "title"> {
   title: ReactNode;
-  eyebrow?: ReactNode;
-  description?: ReactNode;
   actions?: ReactNode;
   user?: TopbarUser;
   onMenuClick?: () => void;
@@ -28,22 +27,11 @@ export interface TopbarProps extends Omit<HTMLAttributes<HTMLElement>, "title"> 
   menuButtonRef?: Ref<HTMLButtonElement>;
 }
 
-function initialsFor(name: string): string {
-  return name
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join("");
-}
-
 export const Topbar = forwardRef<HTMLElement, TopbarProps>(
   (
     {
       actions,
       className,
-      description,
-      eyebrow,
       menuButtonRef,
       menuControls,
       menuOpen,
@@ -70,32 +58,18 @@ export const Topbar = forwardRef<HTMLElement, TopbarProps>(
       ) : null}
 
       <div className="crm-topbar__copy">
-        {eyebrow ? <p className="crm-topbar__eyebrow">{eyebrow}</p> : null}
         <h1 className="crm-topbar__title">{title}</h1>
-        {description ? (
-          <p className="crm-topbar__description">{description}</p>
-        ) : null}
       </div>
 
       {actions || user ? (
         <div className="crm-topbar__actions">
           {actions}
           {user ? (
-            <div
-              className="crm-topbar__user"
-              role="group"
-              aria-label={`${user.name}${user.role ? `, ${user.role}` : ""}`}
-            >
-              <span className="crm-topbar__avatar" aria-hidden="true">
-                {user.initials ?? initialsFor(user.name)}
-              </span>
-              <span className="crm-topbar__user-copy">
-                <span className="crm-topbar__user-name">{user.name}</span>
-                {user.role ? (
-                  <span className="crm-topbar__user-role">{user.role}</span>
-                ) : null}
-              </span>
-            </div>
+            <UserMenu
+              displayName={user.name}
+              sessionExpiresAt={user.sessionExpiresAt}
+              {...(user.demo !== undefined ? { demo: user.demo } : {})}
+            />
           ) : null}
         </div>
       ) : null}

@@ -10,6 +10,7 @@ export interface PublicBusinessUnitAccess {
 
 export interface PublicViewer {
   displayName: string;
+  sessionExpiresAt: string | null;
   businessUnitId: string | null;
   businessUnitAccess: readonly PublicBusinessUnitAccess[];
   demo: boolean;
@@ -33,6 +34,7 @@ export function projectPublicViewer(
 
   return Object.freeze({
     displayName: viewer.displayName,
+    sessionExpiresAt: viewer.sessionExpiresAt?.toISOString() ?? null,
     businessUnitId: selected?.id ?? null,
     businessUnitAccess: Object.freeze(businessUnitAccess),
     demo: viewer.demo,

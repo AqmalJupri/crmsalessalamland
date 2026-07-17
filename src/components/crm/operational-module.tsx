@@ -1,4 +1,4 @@
-import { Badge, Card, CardContent, CardHeader, CardTitle, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui";
+import { Badge, Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui";
 import type { BusinessUnitReadScope } from "@/domain/business-units/read-scope";
 import { createMetricScope, MetricCard, MetricDefinitionPanel, MetricGrid, type MetricDefinitionContent, type MetricScope } from "./metric";
 
@@ -93,6 +93,15 @@ export interface ModuleRow {
   [key: string]: string | number;
 }
 
+function recordHeadingId(title: string): string {
+  const key = title
+    .normalize("NFKD")
+    .toLocaleLowerCase("ms")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  return `crm-record-${key || "senarai"}`;
+}
+
 export function OperationalModule({
   metrics,
   scope,
@@ -123,6 +132,7 @@ export function OperationalModule({
   const visibleColumns: readonly ModuleColumn[] = scope.kind === "ALL"
     ? [{ key: "businessUnitName", label: "Syarikat" }, ...columns]
     : columns;
+  const headingId = recordHeadingId(title);
 
   return (
     <div className="crm-page-stack">
@@ -142,17 +152,19 @@ export function OperationalModule({
       {activeMetric ? (
         <p className="crm-filter-status" role="status">Tapis: {activeMetric.filterLabel} · {visibleRows.length} rekod</p>
       ) : null}
-      <Card>
-        <CardHeader><CardTitle>{title}</CardTitle><Badge variant="neutral">{visibleRows.length}</Badge></CardHeader>
-        <CardContent className="crm-card-content--flush">
-          <Table responsive="stack">
-            <TableHeader><TableRow>{visibleColumns.map((column) => <TableHead key={column.key} {...(column.align ? { align: column.align } : {})}>{column.label}</TableHead>)}</TableRow></TableHeader>
-            <TableBody>
-              {visibleRows.map((row) => <TableRow key={row.id}>{visibleColumns.map((column) => <TableCell key={column.key} label={column.label} {...(column.align ? { align: column.align } : {})}>{row[column.key] ?? "—"}</TableCell>)}</TableRow>)}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+      <section className="crm-record-section" aria-labelledby={headingId}>
+        <header className="crm-record-section__header">
+          <h2 id={headingId}>{title}</h2>
+          <Badge variant="neutral">{visibleRows.length}</Badge>
+        </header>
+        <Table responsive="stack" containerLabel={title}>
+          <TableCaption>{title}</TableCaption>
+          <TableHeader><TableRow>{visibleColumns.map((column) => <TableHead key={column.key} {...(column.align ? { align: column.align } : {})}>{column.label}</TableHead>)}</TableRow></TableHeader>
+          <TableBody>
+            {visibleRows.map((row) => <TableRow key={row.id}>{visibleColumns.map((column) => <TableCell key={column.key} label={column.label} {...(column.align ? { align: column.align } : {})}>{row[column.key] ?? "—"}</TableCell>)}</TableRow>)}
+          </TableBody>
+        </Table>
+      </section>
     </div>
   );
 }

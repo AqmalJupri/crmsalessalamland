@@ -127,10 +127,14 @@ export function ApplicationShell({
           selectedCode={selectedCode}
         />
       )}
-      user={{ name: viewer.displayName }}
-      sidebarFooter={surface === "crm" ? (
-        <Badge variant={viewer.demo ? "info" : "success"} icon={ShieldCheck}>
-          {viewer.demo ? "Demo tempatan" : "Tersambung"}
+      user={{
+        name: viewer.displayName,
+        sessionExpiresAt: viewer.sessionExpiresAt,
+        demo: viewer.demo,
+      }}
+      sidebarFooter={surface === "crm" && viewer.demo ? (
+        <Badge variant="info" icon={ShieldCheck}>
+          Demo tempatan
         </Badge>
       ) : undefined}
     >

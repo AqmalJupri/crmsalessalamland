@@ -2,11 +2,12 @@
 
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { Plus, Search, X } from "lucide-react";
-import { Badge, Button, Card, CardContent, Input, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui";
+import { Badge, Button, Input, Select, Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui";
 import { normalizeMalaysianPhone } from "@/domain/contacts/identity";
 import type { ClientBusinessScope } from "@/domain/business-units/client-scope";
 import { filterDemoRecordsByUnitIds, getLeadStageFilterOptions, getLeadStagePresentation, getProviderLabel, leadProviderOptions, type DemoLead } from "@/lib/demo-crm";
 import { DataEmptyState } from "./data-empty-state";
+import { UnsavedChangesDialog } from "./unsaved-changes-dialog";
 import { useDialogFocus } from "./use-dialog-focus";
 
 function maskPhone(phone: string): string {
@@ -22,6 +23,60 @@ interface ApiCreatedLead {
   source: string;
   productInterest: string | null;
   version: number;
+}
+
+interface LeadApiBody {
+  data?: ApiCreatedLead;
+  error?: { message?: unknown; details?: unknown };
+}
+
+type LeadFormField = "name" | "phone" | "source" | "productInterest";
+type LeadFieldErrors = Partial<Record<LeadFormField, string>>;
+
+const leadFormFieldOrder: readonly LeadFormField[] = [
+  "name",
+  "phone",
+  "source",
+  "productInterest",
+];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function readLeadApiBody(response: Response): Promise<LeadApiBody> {
+  try {
+    const body: unknown = await response.json();
+    return isRecord(body) ? body as LeadApiBody : {};
+  } catch {
+    return {};
+  }
+}
+
+function apiValidationErrors(value: unknown): {
+  fields: LeadFieldErrors;
+  hasUnassigned: boolean;
+} {
+  if (!isRecord(value) || !isRecord(value.details) || !isRecord(value.details.fields)) {
+    return { fields: {}, hasUnassigned: false };
+  }
+
+  const fields: LeadFieldErrors = {};
+  let hasUnassigned = false;
+  for (const [name, messages] of Object.entries(value.details.fields)) {
+    const message = Array.isArray(messages)
+      ? messages.find((item): item is string => typeof item === "string" && item.trim().length > 0)
+      : typeof messages === "string" && messages.trim().length > 0
+        ? messages
+        : undefined;
+    if (!message) continue;
+    if (leadFormFieldOrder.includes(name as LeadFormField)) {
+      fields[name as LeadFormField] ??= message;
+    } else {
+      hasUnassigned = true;
+    }
+  }
+  return { fields, hasUnassigned };
 }
 
 interface LeadsWorkspaceProps {
@@ -58,15 +113,20 @@ function ScopedLeadsWorkspace({
   const [stage, setStage] = useState<string>(initialStageFilter ?? "all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<LeadFieldErrors>({});
   const [formError, setFormError] = useState("");
   const [status, setStatus] = useState("");
   const idempotencyKeyRef = useRef<string | null>(null);
   const detailDialogRef = useRef<HTMLElement>(null);
   const detailCloseRef = useRef<HTMLButtonElement>(null);
   const createDialogRef = useRef<HTMLFormElement>(null);
-  const firstInputRef = useRef<HTMLInputElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const phoneInputRef = useRef<HTMLInputElement>(null);
+  const sourceInputRef = useRef<HTMLSelectElement>(null);
+  const productInterestInputRef = useRef<HTMLInputElement>(null);
 
   const selectedLead = leads.find((lead) => lead.id === selectedId) ?? null;
   const selectedStage = selectedLead ? getLeadStagePresentation(selectedLead.stage) : null;
@@ -107,22 +167,45 @@ function ScopedLeadsWorkspace({
   });
   useDialogFocus({
     dialogRef: createDialogRef,
-    initialFocusRef: firstInputRef,
-    onClose: closeCreate,
+    initialFocusRef: nameInputRef,
+    onClose: requestCloseCreate,
     open: createOpen,
+    paused: discardOpen,
   });
 
-  function closeCreate(force = false): void {
-    if (!force && dirty && !window.confirm("Buang perubahan yang belum disimpan?")) return;
+  function closeCreate(): void {
     setCreateOpen(false);
+    setDiscardOpen(false);
     setDirty(false);
+    setFieldErrors({});
     setFormError("");
     idempotencyKeyRef.current = null;
   }
 
-  function markFormDirty(): void {
+  function requestCloseCreate(): void {
+    if (dirty) {
+      setDiscardOpen(true);
+      return;
+    }
+    closeCreate();
+  }
+
+  function markFormDirty(event: FormEvent<HTMLFormElement>): void {
     setDirty(true);
     idempotencyKeyRef.current = null;
+    const target = event.target;
+    if (
+      (target instanceof HTMLInputElement || target instanceof HTMLSelectElement) &&
+      leadFormFieldOrder.includes(target.name as LeadFormField)
+    ) {
+      const name = target.name as LeadFormField;
+      setFieldErrors((current) => {
+        if (!current[name]) return current;
+        const next = { ...current };
+        delete next[name];
+        return next;
+      });
+    }
   }
 
   async function submitLead(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -138,10 +221,23 @@ function ScopedLeadsWorkspace({
     const source = String(form.get("source") ?? "");
     const productInterest = String(form.get("productInterest") ?? "").trim();
 
+    setFieldErrors({});
+    setFormError("");
+    let phone: string;
     try {
-      const phone = normalizeMalaysianPhone(phoneRaw);
+      phone = normalizeMalaysianPhone(phoneRaw);
+    } catch (error) {
+      setFieldErrors({
+        phone: error instanceof Error
+          ? error.message
+          : "Masukkan nombor mudah alih Malaysia yang sah.",
+      });
+      phoneInputRef.current?.focus();
+      return;
+    }
+
+    try {
       setSaving(true);
-      setFormError("");
       const idempotencyKey = idempotencyKeyRef.current ?? `lead:${crypto.randomUUID()}`;
       idempotencyKeyRef.current = idempotencyKey;
       const response = await fetch("/api/v1/leads", {
@@ -152,11 +248,33 @@ function ScopedLeadsWorkspace({
         },
         body: JSON.stringify({ businessUnitId: writeAccess.id, name, phone, source, productInterest }),
       });
-      const body = (await response.json()) as {
-        data?: ApiCreatedLead;
-        error?: { message?: string };
-      };
-      if (!response.ok || !body.data) throw new Error(body.error?.message ?? "Lead tidak dapat disimpan.");
+      const body = await readLeadApiBody(response);
+      if (!response.ok) {
+        const validation = apiValidationErrors(body.error);
+        const firstInvalid = leadFormFieldOrder.find((name) => validation.fields[name]);
+        if (firstInvalid) {
+          setFieldErrors(validation.fields);
+          setFormError(
+            validation.hasUnassigned && typeof body.error?.message === "string"
+              ? body.error.message
+              : "",
+          );
+          const controls = {
+            name: nameInputRef,
+            phone: phoneInputRef,
+            source: sourceInputRef,
+            productInterest: productInterestInputRef,
+          } as const;
+          controls[firstInvalid].current?.focus();
+          return;
+        }
+        throw new Error(
+          typeof body.error?.message === "string" && body.error.message.trim()
+            ? body.error.message
+            : "Lead tidak dapat disimpan.",
+        );
+      }
+      if (!body.data) throw new Error("Lead tidak dapat disimpan.");
 
       const created: DemoLead = {
         businessUnitId: writeAccess.id,
@@ -174,7 +292,7 @@ function ScopedLeadsWorkspace({
       };
       setLeads((current) => [created, ...current]);
       setStatus(`${created.name} ditambah.`);
-      closeCreate(true);
+      closeCreate();
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "Lead tidak dapat disimpan.");
     } finally {
@@ -223,9 +341,9 @@ function ScopedLeadsWorkspace({
       {leads.length === 0 ? (
         <DataEmptyState label="Belum ada lead." />
       ) : (
-        <Card>
-        <CardContent className="crm-card-content--flush">
-          <Table responsive="stack">
+        <section className="crm-record-section">
+          <Table responsive="stack" containerLabel="Senarai lead">
+            <TableCaption>Senarai lead</TableCaption>
             <TableHeader>
               <TableRow>
                 <TableHead>Lead</TableHead>{scope.kind === "ALL" ? <TableHead>Syarikat</TableHead> : null}<TableHead>Status</TableHead><TableHead>Pemilik</TableHead>
@@ -254,8 +372,7 @@ function ScopedLeadsWorkspace({
             </TableBody>
           </Table>
           <div className="crm-pagination"><span>{filtered.length} daripada {leads.length}</span><span>Halaman 1</span></div>
-        </CardContent>
-        </Card>
+        </section>
       )}
       </div>
 
@@ -283,20 +400,27 @@ function ScopedLeadsWorkspace({
       ) : null}
 
       {createOpen ? (
-        <div className="crm-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeCreate(); }}>
-          <form ref={createDialogRef} className="crm-modal" role="dialog" aria-modal="true" aria-labelledby="new-lead-title" tabIndex={-1} onSubmit={submitLead} onChange={markFormDirty}>
-            <header className="crm-modal__header"><h2 id="new-lead-title">Lead baharu</h2><Button size="icon" variant="quiet" aria-label="Tutup" onClick={() => closeCreate()}><X aria-hidden="true" /></Button></header>
+        <div className="crm-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) requestCloseCreate(); }}>
+          <form ref={createDialogRef} className="crm-modal" role="dialog" aria-modal="true" aria-labelledby="new-lead-title" tabIndex={-1} onSubmit={submitLead} onChange={markFormDirty} inert={discardOpen || undefined} aria-hidden={discardOpen || undefined}>
+            <header className="crm-modal__header"><h2 id="new-lead-title">Lead baharu</h2><Button size="icon" variant="quiet" aria-label="Tutup" onClick={requestCloseCreate}><X aria-hidden="true" /></Button></header>
             <div className="crm-modal__body">
-              <Input ref={firstInputRef} name="name" label="Nama" autoComplete="name" required minLength={2} maxLength={160} containerClassName="crm-modal__field-wide" />
-              <Input name="phone" type="tel" label="Telefon" inputMode="tel" autoComplete="tel" required placeholder="0123456789" />
-              <Select name="source" label="Sumber" required defaultValue="meta">{leadProviderOptions.map((provider) => <option key={provider.value} value={provider.value}>{provider.label}</option>)}</Select>
-              <Input name="productInterest" label="Minat produk" required minLength={2} maxLength={200} containerClassName="crm-modal__field-wide" />
+              <Input ref={nameInputRef} name="name" label="Nama" autoComplete="name" required minLength={2} maxLength={160} error={fieldErrors.name} containerClassName="crm-modal__field-wide" />
+              <Input ref={phoneInputRef} name="phone" type="tel" label="Telefon" inputMode="tel" autoComplete="tel" required placeholder="0123456789" error={fieldErrors.phone} />
+              <Select ref={sourceInputRef} name="source" label="Sumber" required defaultValue="meta" error={fieldErrors.source}>{leadProviderOptions.map((provider) => <option key={provider.value} value={provider.value}>{provider.label}</option>)}</Select>
+              <Input ref={productInterestInputRef} name="productInterest" label="Minat produk" required minLength={2} maxLength={200} error={fieldErrors.productInterest} containerClassName="crm-modal__field-wide" />
             </div>
-            <p className="crm-live-status crm-form-error" role="alert">{formError}</p>
-            <footer className="crm-modal__footer"><Button onClick={() => closeCreate()}>Batal</Button><Button type="submit" variant="primary" loading={saving} loadingLabel="Menyimpan">Simpan</Button></footer>
+            {formError ? <p className="crm-live-status crm-form-error" role="alert">{formError}</p> : null}
+            <footer className="crm-modal__footer"><Button onClick={requestCloseCreate}>Batal</Button><Button type="submit" variant="primary" loading={saving} loadingLabel="Menyimpan">Simpan</Button></footer>
           </form>
         </div>
       ) : null}
+
+      <UnsavedChangesDialog
+        formName="Lead baharu"
+        open={discardOpen}
+        onCancel={() => setDiscardOpen(false)}
+        onDiscard={closeCreate}
+      />
     </div>
   );
 }

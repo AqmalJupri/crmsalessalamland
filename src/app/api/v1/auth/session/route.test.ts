@@ -20,6 +20,7 @@ function recursiveKeys(value: unknown): string[] {
 const viewer = {
   userId: "user-secret",
   displayName: "Aqmal Jupri",
+  sessionExpiresAt: new Date("2026-07-17T12:00:00.000Z"),
   organizationId: "organization-secret",
   businessUnitId: "unit-salam",
   businessUnits: [{ id: "unit-salam", name: "Salam Land", code: "salam-land", slug: "salam-land" }],
@@ -56,6 +57,7 @@ describe("GET /api/v1/auth/session", () => {
       authenticated: true,
       viewer: {
         displayName: "Aqmal Jupri",
+        sessionExpiresAt: "2026-07-17T12:00:00.000Z",
         businessUnitId: "unit-salam",
         businessUnitAccess: [{
           id: "unit-salam",

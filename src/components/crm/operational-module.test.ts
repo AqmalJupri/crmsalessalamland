@@ -136,7 +136,7 @@ describe("OperationalModule scope", () => {
   });
 
   it("shows a company column and scoped metrics in Semua", () => {
-    render(createElement(OperationalModule, {
+    const { container } = render(createElement(OperationalModule, {
       scope: allScope,
       metrics: [{
         key: "active",
@@ -159,6 +159,11 @@ describe("OperationalModule scope", () => {
     }));
 
     const table = screen.getByRole("table");
+    const section = container.querySelector(".crm-record-section");
+    const heading = screen.getByRole("heading", { level: 2, name: "Pesanan terkini" });
+    expect(section?.getAttribute("aria-labelledby")).toBe(heading.id);
+    expect(table.querySelector("caption")?.textContent).toBe("Pesanan terkini");
+    expect(table.closest(".crm-card")).toBeNull();
     expect(within(table).getByRole("columnheader", { name: "Syarikat" })).toBeTruthy();
     expect(within(table).getByText("Salam Land")).toBeTruthy();
     expect(within(table).getByText("Bumi Hayat")).toBeTruthy();

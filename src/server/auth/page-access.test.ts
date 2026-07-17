@@ -33,6 +33,7 @@ const { canRenderDemoFixtures } = pageAccess;
 const viewer: Viewer = {
   userId: "00000000-0000-4000-8000-000000000001",
   displayName: "Scoped Viewer",
+  sessionExpiresAt: new Date("2026-07-17T12:00:00.000Z"),
   organizationId: "00000000-0000-4000-8000-000000000010",
   businessUnitId: "00000000-0000-4000-8000-000000000101",
   businessUnits: [

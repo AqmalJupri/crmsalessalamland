@@ -52,6 +52,9 @@ describe("SurfaceHome", () => {
       .toBe("/tasks?metric=overdue&bu=salam-land");
     expect(screen.getByText("4 aktif", { exact: true })).toBeTruthy();
     expect(screen.queryByRole("progressbar", { name: /Menang/ })).toBeNull();
+    const activityTable = screen.getByRole("table");
+    expect(activityTable.querySelector("caption")?.textContent).toBe("Aktiviti terkini");
+    expect(activityTable.closest(".crm-card")).toBeNull();
   });
 
   it("keeps upcoming tasks out of the Hari ini population", () => {
@@ -64,7 +67,7 @@ describe("SurfaceHome", () => {
   it("renders a truthful CRM empty state without demo authority", () => {
     render(home({ demo: false }));
 
-    expect(screen.getByText("Belum ada data.")).toBeTruthy();
+    expect(screen.getByText("Ringkasan belum tersedia.")).toBeTruthy();
     expect(screen.queryByText("Lead baharu")).toBeNull();
     expect(screen.queryByText("RM1.24j")).toBeNull();
     expect(screen.queryByText(/Nur Aisyah/)).toBeNull();

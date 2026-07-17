@@ -48,6 +48,7 @@ export interface ViewerBusinessUnitAccess extends ViewerBusinessUnit {
 export interface Viewer {
   userId: string;
   displayName: string;
+  sessionExpiresAt: Date | null;
   organizationId: string;
   businessUnitId: string;
   businessUnits: readonly ViewerBusinessUnit[];
@@ -62,6 +63,7 @@ export interface Viewer {
 const demoViewer: Viewer = {
   userId: "00000000-0000-4000-8000-000000000001",
   displayName: "Aqmal Jupri",
+  sessionExpiresAt: null,
   organizationId: "00000000-0000-4000-8000-000000000010",
   businessUnitId: "00000000-0000-4000-8000-000000000101",
   businessUnits: [
@@ -164,6 +166,7 @@ async function resolveViewer(): Promise<Viewer | null> {
       organizationId: sessions.organizationId,
       activeBusinessUnitId: sessions.activeBusinessUnitId,
       lastSeenAt: sessions.lastSeenAt,
+      sessionExpiresAt: sessions.expiresAt,
       userId: users.id,
       displayName: users.displayName,
     })
@@ -285,6 +288,7 @@ async function resolveViewer(): Promise<Viewer | null> {
   return {
     userId: session.userId,
     displayName: session.displayName,
+    sessionExpiresAt: session.sessionExpiresAt,
     organizationId: session.organizationId,
     businessUnitId: selectedUnit.id,
     businessUnits: viewerUnits,

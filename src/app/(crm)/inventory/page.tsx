@@ -20,7 +20,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
   const query = await searchParams;
   const { scope } = await requireScopedPageViewer(query.bu, CRM_MODULE_ACCESS.inventory.capability, "/inventory", query);
   if (!canRenderDemoFixtures()) {
-    return <DataEmptyState label="Belum ada data." />;
+    return <DataEmptyState label="Belum ada rekod inventori." />;
   }
 
   const metrics = createDemoModuleMetrics({ scope, capability: CRM_MODULE_ACCESS.inventory.capability, modulePath: "/inventory", dateBasis: "Status inventori", periodLabel: "Semasa", rows, metrics: metricDefinitions });

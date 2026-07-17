@@ -44,6 +44,7 @@ function props(overrides: Partial<ShellViewer> = {}): Parameters<typeof Applicat
     surface: "crm",
     viewer: {
       displayName: "Aqmal Jupri",
+      sessionExpiresAt: "2026-07-17T12:00:00.000Z",
       businessUnitId: businessUnitAccess[0]!.id,
       businessUnitAccess,
       demo: false,
@@ -164,5 +165,17 @@ describe("ApplicationShell", () => {
     mocks.pathname = "/leads/hidden-on-tasha";
     rerender(createElement(ApplicationShell, tashaProps));
     expect(screen.getByRole("heading", { level: 1, name: "Tasha" })).toBeTruthy();
+  });
+
+  it("renders one page title and exposes the actual viewer session from the user menu", async () => {
+    const user = userEvent.setup();
+    render(createElement(ApplicationShell, props()));
+
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Menu pengguna Aqmal Jupri" }));
+    const menu = screen.getByRole("menu", { name: "Akaun Aqmal Jupri" });
+    expect(within(menu).getByText("Sesi aktif")).toBeTruthy();
+    expect(within(menu).getByText(/Tamat/).closest("time")?.getAttribute("datetime"))
+      .toBe("2026-07-17T12:00:00.000Z");
   });
 });

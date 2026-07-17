@@ -391,6 +391,19 @@ export default function manifest() {
     }
   });
 
+  it("keeps inherited form typography from overriding component foreground roles", () => {
+    const inheritedFormControl = cssRule(
+      themeSource,
+      ".crm-theme :where(button, input, select, textarea)",
+    );
+
+    expect(inheritedFormControl).toMatch(/color:\s*inherit/);
+    expect(inheritedFormControl).toMatch(/font:\s*inherit/);
+    expect(themeSource).not.toMatch(
+      /\.crm-theme button,\s*\.crm-theme input,\s*\.crm-theme select,\s*\.crm-theme textarea\s*\{[^}]*color:\s*inherit/,
+    );
+  });
+
   it("binds action blue to selection and keeps informational badges neutral", () => {
     const selectedTab = cssRule(productSource, '.crm-tab[aria-selected="true"]');
     const currentNavigation = cssRule(

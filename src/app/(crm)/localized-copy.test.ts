@@ -14,7 +14,9 @@ vi.mock("@/server/auth/page-access", () => ({
 }));
 
 import InventoryPage from "./inventory/page";
+import FinancePage from "./finance/page";
 import MarketingPage from "./marketing/page";
+import OrdersPage from "./orders/page";
 import ReportsPage from "./reports/page";
 import SettingsPage from "./settings/page";
 import TasksPage from "./tasks/page";
@@ -91,5 +93,25 @@ describe("visible CRM demo copy", () => {
     expect(text).toContain("Laman web");
     expect(text).toContain("Datang terus");
     expect(text).not.toMatch(/Follow-up lewat|\bLeads\b|\bMarketing\b|\bFinance\b|\bOperations\b|Sales Executive|Sales Manager|Win rate|Marketing attribution|\bHold\b|quotation|\bReferral\b|\bWebsite\b|Walk-in/);
+  });
+
+  it("uses a one-line empty label specific to each module", async () => {
+    mocks.canRenderDemoFixtures.mockReturnValue(false);
+    const text = (await Promise.all(
+      [FinancePage, InventoryPage, MarketingPage, OrdersPage, ReportsPage, SettingsPage, TasksPage, TeamPage]
+        .map(pageText),
+    )).join(" ");
+
+    for (const label of [
+      "Belum ada transaksi.",
+      "Belum ada rekod inventori.",
+      "Belum ada kempen.",
+      "Belum ada pesanan.",
+      "Belum ada laporan.",
+      "Belum ada integrasi.",
+      "Belum ada tugasan.",
+      "Belum ada ahli pasukan.",
+    ]) expect(text).toContain(label);
+    expect(text).not.toContain("Belum ada data.");
   });
 });

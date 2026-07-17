@@ -29,6 +29,10 @@ const typedResultTruthMigrationPath = new URL(
   "../../../db/migrations/0005_reconciliation_typed_result_truth.sql",
   import.meta.url,
 );
+const finiteAmountMigrationPath = new URL(
+  "../../../db/migrations/0006_reconciliation_finite_amounts.sql",
+  import.meta.url,
+);
 const frozenMigrationSource = readFileSync(frozenMigrationPath, "utf8");
 const bytewiseMigrationSource = existsSync(bytewiseMigrationPath)
   ? readFileSync(bytewiseMigrationPath, "utf8")
@@ -38,6 +42,9 @@ const membershipIdentityMigrationSource = existsSync(membershipIdentityMigration
   : "";
 const typedResultTruthMigrationSource = existsSync(typedResultTruthMigrationPath)
   ? readFileSync(typedResultTruthMigrationPath, "utf8")
+  : "";
+const finiteAmountMigrationSource = existsSync(finiteAmountMigrationPath)
+  ? readFileSync(finiteAmountMigrationPath, "utf8")
   : "";
 
 function reconciliationRequirementGuard(source: string): string {
@@ -67,6 +74,7 @@ describe("migration manifest", () => {
       "0003_reconciliation_bytewise_order.sql",
       "0004_membership_user_identity_guard.sql",
       "0005_reconciliation_typed_result_truth.sql",
+      "0006_reconciliation_finite_amounts.sql",
     ]);
   });
 
@@ -125,6 +133,18 @@ describe("migration manifest", () => {
     );
     expect(typedResultTruthMigrationSource).not.toMatch(/\b(?:CREATE|DROP)\s+TABLE\b/i);
     expect(typedResultTruthMigrationSource).not.toContain("DROP CONSTRAINT");
+  });
+
+  it("adds only the reviewed finite reconciliation amount constraint", () => {
+    expect(finiteAmountMigrationSource).toContain(
+      "ADD CONSTRAINT reconciliation_results_finite_amounts",
+    );
+    expect(finiteAmountMigrationSource).toContain(
+      "VALIDATE CONSTRAINT reconciliation_results_finite_amounts",
+    );
+    expect(finiteAmountMigrationSource).toContain("'NaN', 'Infinity', '-Infinity'");
+    expect(finiteAmountMigrationSource).not.toMatch(/\b(?:CREATE|DROP)\s+TABLE\b/i);
+    expect(finiteAmountMigrationSource).not.toContain("DROP CONSTRAINT");
   });
 
   it("accepts only the complete zero-padded migration plan", () => {

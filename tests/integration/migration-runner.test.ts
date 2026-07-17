@@ -128,7 +128,7 @@ describe("production migration runner", () => {
     expect(replayedLedger).toEqual(firstLedger);
   });
 
-  it.each([2, 3])(
+  it.each([2, 3, 4, 5])(
     "upgrades an exact %i-entry reviewed prefix without rewriting its ledger",
     async (prefixLength) => {
       const reviewedFilenames = [
@@ -137,6 +137,7 @@ describe("production migration runner", () => {
         "0003_reconciliation_bytewise_order.sql",
         "0004_membership_user_identity_guard.sql",
         "0005_reconciliation_typed_result_truth.sql",
+        "0006_reconciliation_finite_amounts.sql",
       ] as const;
       const legacyFilenames = reviewedFilenames.slice(0, prefixLength);
       const legacySources = await Promise.all(
@@ -183,6 +184,7 @@ describe("production migration runner", () => {
       const [integrityGuards] = await sql<{
         membership_guard: boolean;
         typed_truth_validated: boolean;
+        finite_amounts_validated: boolean;
       }[]>`
         select
           to_regprocedure('crm_guard_membership_user_identity()') is not null
@@ -191,11 +193,17 @@ describe("production migration runner", () => {
             select 1 from pg_constraint
             where conname = 'reconciliation_results_derived_pass_truth'
               and convalidated
-          ) as typed_truth_validated
+          ) as typed_truth_validated,
+          exists (
+            select 1 from pg_constraint
+            where conname = 'reconciliation_results_finite_amounts'
+              and convalidated
+          ) as finite_amounts_validated
       `;
       expect(integrityGuards).toEqual({
         membership_guard: true,
         typed_truth_validated: true,
+        finite_amounts_validated: true,
       });
     },
   );

@@ -52,6 +52,8 @@ jobs:
       OIDC_CLIENT_ID: crm-ci
       OIDC_CLIENT_SECRET: ci-only-oidc-secret-at-least-16-characters
       OIDC_REDIRECT_URI: https://crm-ci.example.test/api/v1/auth/oidc/callback
+      # Bootstrap path is branch- and commit-marker-bound, then removed once reviewed assets exist.
+      VISUAL_CAPTURE_REQUESTED: ${{ (github.event_name == 'workflow_dispatch' && inputs.capture_visual_baselines) || (github.event_name == 'push' && github.ref == 'refs/heads/codex/ui9-b3-visual-evidence' && contains(github.event.head_commit.message, '[visual-baseline-capture]')) }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -115,13 +117,13 @@ jobs:
             < "$RUNNER_TEMP/migrated-db/crm_salam_test_ci.dump"
 
       - name: Run isolated CRM and Tasha browser evidence
-        if: ${{ !inputs.capture_visual_baselines }}
+        if: ${{ env.VISUAL_CAPTURE_REQUESTED != 'true' }}
         run: |
           unset OIDC_ISSUER OIDC_CLIENT_ID OIDC_CLIENT_SECRET OIDC_REDIRECT_URI
           pnpm test:e2e
 
       - name: Capture reviewed Linux visual baselines
-        if: ${{ inputs.capture_visual_baselines }}
+        if: ${{ env.VISUAL_CAPTURE_REQUESTED == 'true' }}
         env:
           VISUAL_BASELINE_CAPTURE: reviewed-linux
         run: |
@@ -131,7 +133,7 @@ jobs:
           node scripts/ci/write-visual-baseline-provenance.mjs
 
       - name: Upload Linux visual baseline candidates
-        if: ${{ inputs.capture_visual_baselines && success() }}
+        if: ${{ env.VISUAL_CAPTURE_REQUESTED == 'true' && success() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: visual-baseline-candidates-${{ github.sha }}

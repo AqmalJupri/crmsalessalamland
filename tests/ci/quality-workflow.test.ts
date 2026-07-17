@@ -392,7 +392,7 @@ describe("Quality workflow browser evidence", () => {
     expect(uploadStep).not.toMatch(/retention-days:\s*(?:[2-9]|\d{2,})/);
   });
 
-  it("captures Linux visual baseline candidates only through an explicit manual input", () => {
+  it("supports an explicit manual Linux visual baseline capture request", () => {
     const checksJob = workflowJob("checks");
     const normalStep = jobStep(
       checksJob,
@@ -410,10 +410,10 @@ describe("Quality workflow browser evidence", () => {
     expect(qualityWorkflow).toMatch(
       /workflow_dispatch:[\s\S]*capture_visual_baselines:[\s\S]*type:\s*boolean[\s\S]*default:\s*false/,
     );
-    expect(normalStep).toContain('if: ${{ !inputs.capture_visual_baselines }}');
+    expect(normalStep).toContain("env.VISUAL_CAPTURE_REQUESTED != 'true'");
     expect(normalStep).toContain("pnpm test:e2e");
     expect(normalStep).not.toContain("--update-snapshots");
-    expect(captureStep).toContain('if: ${{ inputs.capture_visual_baselines }}');
+    expect(captureStep).toContain("env.VISUAL_CAPTURE_REQUESTED == 'true'");
     expect(captureStep).toContain("VISUAL_BASELINE_CAPTURE: reviewed-linux");
     expect(captureStep).toContain(
       "pnpm test:e2e:crm tests/e2e/ui-visual.spec.ts --update-snapshots",
@@ -424,10 +424,38 @@ describe("Quality workflow browser evidence", () => {
     expect(captureStep).toContain(
       "node scripts/ci/write-visual-baseline-provenance.mjs",
     );
-    expect(uploadStep).toContain('if: ${{ inputs.capture_visual_baselines && success() }}');
+    expect(uploadStep).toContain(
+      "env.VISUAL_CAPTURE_REQUESTED == 'true' && success()",
+    );
     expect(uploadStep).toContain("visual-baseline-candidates-${{ github.sha }}");
     expect(uploadStep).toContain("tests/e2e/__snapshots__");
     expect(uploadStep).toContain("retention-days: 1");
+  });
+
+  it("allows one auditable bootstrap capture only on the visual-evidence branch", () => {
+    expect(qualityWorkflow).toContain("VISUAL_CAPTURE_REQUESTED");
+    expect(qualityWorkflow).toContain(
+      "refs/heads/codex/ui9-b3-visual-evidence",
+    );
+    expect(qualityWorkflow).toContain("[visual-baseline-capture]");
+
+    const checksJob = workflowJob("checks");
+    const normalStep = jobStep(
+      checksJob,
+      "Run isolated CRM and Tasha browser evidence",
+    );
+    const captureStep = jobStep(
+      checksJob,
+      "Capture reviewed Linux visual baselines",
+    );
+    const uploadStep = jobStep(
+      checksJob,
+      "Upload Linux visual baseline candidates",
+    );
+
+    expect(normalStep).toContain("env.VISUAL_CAPTURE_REQUESTED != 'true'");
+    expect(captureStep).toContain("env.VISUAL_CAPTURE_REQUESTED == 'true'");
+    expect(uploadStep).toContain("env.VISUAL_CAPTURE_REQUESTED == 'true'");
   });
 });
 

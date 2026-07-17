@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   EXPECTED_MIGRATIONS,
@@ -12,6 +13,26 @@ const expectedLedger = EXPECTED_MIGRATIONS.map(({ filename, checksum }) => ({
   filename,
   checksum,
 }));
+const frozenMigrationPath = new URL(
+  "../../../db/migrations/0002_migration_platform.sql",
+  import.meta.url,
+);
+const bytewiseMigrationPath = new URL(
+  "../../../db/migrations/0003_reconciliation_bytewise_order.sql",
+  import.meta.url,
+);
+const frozenMigrationSource = readFileSync(frozenMigrationPath, "utf8");
+const bytewiseMigrationSource = existsSync(bytewiseMigrationPath)
+  ? readFileSync(bytewiseMigrationPath, "utf8")
+  : "";
+
+function reconciliationRequirementGuard(source: string): string {
+  const marker = "CREATE OR REPLACE FUNCTION crm_validate_reconciliation_requirements()";
+  const start = source.indexOf(marker);
+  const end = source.indexOf("\n$$;", start);
+  if (start < 0 || end < 0) return "";
+  return source.slice(start, end + 4);
+}
 
 describe("migration manifest", () => {
   it("freezes the reviewed manifest and every entry at runtime", () => {
@@ -29,7 +50,42 @@ describe("migration manifest", () => {
     expect(EXPECTED_MIGRATIONS.map(({ filename }) => filename)).toEqual([
       "0001_foundation.sql",
       "0002_migration_platform.sql",
+      "0003_reconciliation_bytewise_order.sql",
     ]);
+  });
+
+  it("replaces only the reconciliation requirement guard with bytewise ordering", () => {
+    expect(bytewiseMigrationSource).toContain(
+      "CREATE OR REPLACE FUNCTION crm_validate_reconciliation_requirements()",
+    );
+    expect(bytewiseMigrationSource.match(/COLLATE "C"/g)).toHaveLength(4);
+    expect(bytewiseMigrationSource).toContain(
+      "digest(convert_to(NEW.required_checks::text, 'UTF8'), 'sha256')",
+    );
+    expect(bytewiseMigrationSource).not.toMatch(/\b(?:CREATE|ALTER|DROP)\s+TABLE\b/i);
+    expect(bytewiseMigrationSource).not.toContain("DROP FUNCTION");
+  });
+
+  it("preserves every frozen requirement guard rule except the reviewed ordering correction", () => {
+    const localeOrder = `SELECT jsonb_agg(value ORDER BY
+           value ->> 'check_kind',
+           value ->> 'check_key',
+           value ->> 'scope_key',
+           value ->> 'measure_unit' NULLS FIRST,
+           (value ->> 'decimal_scale')::numeric NULLS FIRST
+         )`;
+    const bytewiseOrder = `SELECT jsonb_agg(value ORDER BY
+           (value ->> 'check_kind') COLLATE "C",
+           (value ->> 'check_key') COLLATE "C",
+           (value ->> 'scope_key') COLLATE "C",
+           (value ->> 'measure_unit') COLLATE "C" NULLS FIRST,
+           (value ->> 'decimal_scale')::numeric NULLS FIRST
+         )`;
+    const expectedReplacement = reconciliationRequirementGuard(frozenMigrationSource)
+      .replace(localeOrder, bytewiseOrder)
+      .replace("canonical sorted order", "canonical bytewise order");
+
+    expect(reconciliationRequirementGuard(bytewiseMigrationSource)).toBe(expectedReplacement);
   });
 
   it("accepts only the complete zero-padded migration plan", () => {

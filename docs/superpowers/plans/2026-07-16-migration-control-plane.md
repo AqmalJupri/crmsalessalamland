@@ -4,14 +4,14 @@
 
 **Goal:** Build the source-neutral, checksum-idempotent migration control plane required to import Salam CRM JSON, Tasha SQLite, Niagawan CSV, and Barakah Sheet snapshots without guessing mappings, losing lineage, or permitting dual writable authority.
 
-**Architecture:** Add one forward-compatible `0002_migration_platform.sql` migration plus a separate Drizzle migration schema. The control plane registers source/domain authority scopes and immutable transform versions, records artifact checksums, stages protected row evidence, quarantines ambiguous/invalid rows, applies approved rows through canonical transactional writers, records source-to-target lineage, reconciles typed metrics, and permits one-way signed authority transitions. Source adapters remain separate sub-projects and consume these contracts.
+**Architecture:** Add the forward-compatible `0002_migration_platform.sql` control-plane migration, the narrowly scoped `0003_reconciliation_bytewise_order.sql` locale-independence correction, and a separate Drizzle migration schema. The control plane registers source/domain authority scopes and immutable transform versions, records artifact checksums, stages protected row evidence, quarantines ambiguous/invalid rows, applies approved rows through canonical transactional writers, records source-to-target lineage, reconciles typed metrics, and permits one-way signed authority transitions. Source adapters remain separate sub-projects and consume these contracts.
 
 **Tech Stack:** PostgreSQL 16.14, Drizzle ORM 0.45.2, TypeScript 6.0.3, Zod 4.4.3, Node.js streams/crypto, Vitest 4.1.10, and the existing checksum-locked migration runner.
 
 ## Global Constraints
 
 - Use only synthetic fixtures in this plan. Real JSON, SQLite, CSV, Sheet exports, customer identifiers, amounts, tokens, and source object paths stay outside Git.
-- `0002` is additive. Do not rename, drop, or reinterpret a `0001` column or constraint.
+- `0002` is additive and checksum-frozen. Do not rename, drop, reinterpret, or edit a `0001`/`0002` column, constraint, or migration byte. Any correction is a separately reviewed forward migration.
 - A source artifact is immutable and addressed by SHA-256 plus protected object reference. General JSON columns may contain redacted metadata only, never raw PII payloads.
 - Every registered source in PRD 1.8 is business-unit scoped. `business_unit_id` is non-null on every business-unit-owned control-plane row, so composite tenant foreign keys cannot be bypassed through PostgreSQL `MATCH SIMPLE` null behavior. The sole organisation-wide exception is the authority-transition group header, whose complete child set binds every affected business unit and domain.
 - The exact same source checksum plus transform version plus execution mode is a replay and returns the original batch. A live batch is a distinct, lineage-bound promotion of a completed dry run for the same source/transform; reprocessing with a different transform requires explicit repair lineage and reason.
@@ -806,6 +806,24 @@ export async function signReconciliationRun(
 - [ ] Run the focused integration test. Expected after implementation: PASS.
 - [ ] Commit: `feat(migration): reconcile and sign import batches`
 
+## Task 9A: Make reconciliation ordering locale-independent
+
+**Files:**
+
+- Create: `db/migrations/0003_reconciliation_bytewise_order.sql`
+- Modify: `src/server/db/migration-manifest.ts`
+- Modify: `src/server/db/migration-manifest.test.ts`
+- Modify: `tests/integration/migration-platform-schema.test.ts`
+- Modify: `tests/production/runtime-smoke.mjs`
+
+- [ ] Preserve `0002_migration_platform.sql` byte-for-byte at SHA-256 `2e8425ae8f551fc5b8c96466f36e917df118a12a18c66e69ec68800e73ec0e73`; never repair a deployed migration in place.
+- [ ] Add a RED regression using two valid `COUNT` requirements whose keys are `a.a` and `a_`. UTF-8 byte order is `a.a`, `a_`, while `en_US.UTF-8` sorts them in the opposite order.
+- [ ] Add only a `CREATE OR REPLACE FUNCTION crm_validate_reconciliation_requirements()` forward migration. Retain every existing validation/digest/duplicate rule and add explicit `COLLATE "C"` to all four text sort keys; retain numeric ordering for `decimal_scale`.
+- [ ] Register and freeze `0003_reconciliation_bytewise_order.sql` at SHA-256 `46fb6ab301eb4362dc4c74c186a432e59bcf00736e78ab3d5d8ea8e7359885c4`, byte length `5,176`, and require the same ledger row in production runtime smoke.
+- [ ] Prove the deployed function accepts UTF-8 byte order and rejects locale order, then run migration twice and prove all three ledger rows and timestamps are unchanged on replay.
+- [ ] Independently review the function replacement against `0002` so no validation, immutability, sign-off, table, or trigger contract is weakened.
+- [ ] Commit: `fix(migration): make reconciliation ordering bytewise`
+
 ## Task 10: Add safe non-production inspection commands and synthetic contracts
 
 **Files:**
@@ -846,8 +864,8 @@ export async function signReconciliationRun(
 - Modify: `tests/ci/quality-workflow.test.ts`
 - Modify only other files when evidence reveals a defect in a file owned by Tasks 1-10.
 
-- [ ] Parse and assert the database name first, then reset and create only the isolated local database `crm_salam_codex_migration_platform`. Set both `DATABASE_URL` and `TEST_DATABASE_URL` to `postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_migration_platform`; refuse any host other than loopback or database name that differs.
-- [ ] Run `pnpm db:migrate` twice and query `schema_migrations`; expect exactly the two reviewed filename/checksum rows with unchanged timestamps after the second run.
+- [ ] Parse and assert the database name first, then reset and create only the isolated local database `crm_salam_codex_migration_platform`. Set both `DATABASE_URL` and `TEST_DATABASE_URL` to `postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_migration_platform`; refuse any host other than loopback or database name that differs, and fail deployment preflight unless PostgreSQL reports `server_encoding = 'UTF8'`.
+- [ ] Run `pnpm db:migrate` twice and query `schema_migrations`; expect exactly the three reviewed filename/checksum rows with unchanged timestamps after the second run.
 - [ ] Run focused unit and integration suites:
 
 ```bash
@@ -892,7 +910,7 @@ node scripts/ci/run-next-runtime-smoke.mjs \
   --log /tmp/crm-migration-runtime.log
 ```
 
-Expected: runtime smoke passes and readiness returns `200` only while the database ledger exactly matches `0001` plus `0002`.
+Expected: runtime smoke passes and readiness returns `200` only while the database ledger exactly matches `0001`, `0002`, and `0003`.
 - [ ] Extend `tests/ci/quality-workflow.test.ts` to require the UI-owned portable `run-next-runtime-smoke.mjs`, matching start/probe ports, explicit liveness/readiness success branches, and migration/runtime step ordering. Run `tests/ci/runtime-process.test.ts` on macOS locally and Linux CI; it must prove the Node detached process group and grandchild are terminated on success, startup failure, smoke failure, timeout, `SIGINT`, and `SIGTERM`. Expected: PASS and no failed smoke command can be masked by cleanup.
 - [ ] Scan the full diff and newly introduced Git objects for source data, PII, credentials, database URLs with secrets, and unsafe archives.
 - [ ] Request independent code review. Resolve every Critical or Important finding with a failing regression test before changing code.

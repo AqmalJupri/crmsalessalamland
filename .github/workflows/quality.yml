@@ -129,7 +129,7 @@ jobs:
           unset OIDC_ISSUER OIDC_CLIENT_ID OIDC_CLIENT_SECRET OIDC_REDIRECT_URI
           pnpm test:e2e:crm tests/e2e/ui-visual.spec.ts --update-snapshots
           pnpm test:e2e:tasha tests/e2e/ui-visual.spec.ts --update-snapshots
-          node scripts/ci/write-visual-baseline-provenance.mjs
+          pnpm exec tsx scripts/ci/write-visual-baseline-provenance.ts
 
       - name: Upload Linux visual baseline candidates
         if: ${{ env.VISUAL_CAPTURE_REQUESTED == 'true' && success() }}

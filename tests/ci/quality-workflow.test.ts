@@ -422,7 +422,7 @@ describe("Quality workflow browser evidence", () => {
       "pnpm test:e2e:tasha tests/e2e/ui-visual.spec.ts --update-snapshots",
     );
     expect(captureStep).toContain(
-      "node scripts/ci/write-visual-baseline-provenance.mjs",
+      "pnpm exec tsx scripts/ci/write-visual-baseline-provenance.ts",
     );
     expect(uploadStep).toContain(
       "env.VISUAL_CAPTURE_REQUESTED == 'true' && success()",

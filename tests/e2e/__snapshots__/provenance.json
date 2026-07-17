@@ -1,6 +1,11 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "sourceCommit": "d54edd919ded37cdce5389c24523aa6762883881",
+  "sourceBinding": {
+    "algorithm": "sha256-path-null-digest-lf-v1",
+    "digest": "0ae451a4fc9adae87c889455e77cdf50f0c86532a3c94b7c2653e4a756c15d8c",
+    "fileCount": 102
+  },
   "syntheticOnly": true,
   "dynamicData": "none-present",
   "capturedAt": "2026-07-17T19:50:42.117Z",

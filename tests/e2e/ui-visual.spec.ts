@@ -1,6 +1,12 @@
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
+import { assertReviewedVisualBaselineAuthority } from "../../scripts/ci/visual-baseline-authority";
+import {
+  computeVisualReferenceLock,
+  computeVisualSourceBinding,
+} from "../../scripts/ci/visual-baseline-binding";
 
 type ProductSurface = "crm" | "tasha";
 
@@ -30,6 +36,7 @@ const screenshotProjects = new Set([
   "desktop-chromium-1024x768",
   "desktop-chromium-1440x900",
 ]);
+const require = createRequire(import.meta.url);
 
 test.use({ serviceWorkers: "block" });
 
@@ -74,14 +81,48 @@ const surfaceScenes = {
   ],
 } as const satisfies Record<ProductSurface, readonly VisualScene[]>;
 
-function assertReviewedBaselineAuthority(): void {
-  if (captureMode) return;
-  const provenance = JSON.parse(readFileSync(provenancePath, "utf8")) as {
-    review?: { status?: string };
+async function verifyReviewedBaselineAuthority(page: Page): Promise<void> {
+  const provenance: unknown = JSON.parse(readFileSync(provenancePath, "utf8"));
+  const sourceBinding = computeVisualSourceBinding(process.cwd());
+  const browser = page.context().browser();
+  const runnerImage = process.env.ImageOS;
+  const runnerArch = process.env.RUNNER_ARCH;
+  const packagePath = require.resolve("@playwright/test/package.json");
+  const packageJson = JSON.parse(readFileSync(packagePath, "utf8")) as {
+    version?: unknown;
   };
-  if (provenance.review?.status !== "reviewed") {
-    throw new Error("Visual baselines must be explicitly reviewed before comparison.");
+
+  if (!runnerImage || !runnerArch) {
+    throw new Error(
+      "Visual baseline comparison requires explicit ImageOS and RUNNER_ARCH bindings.",
+    );
   }
+  if (!browser) {
+    throw new Error("Visual baseline comparison requires a live browser runtime.");
+  }
+  if (packageJson.version !== "1.61.1") {
+    throw new Error("Visual baseline comparison requires Playwright 1.61.1.");
+  }
+  assertReviewedVisualBaselineAuthority(provenance, {
+    sourceBinding,
+    referenceLock: computeVisualReferenceLock(process.cwd()),
+    runtime: {
+      os: "Linux",
+      runnerImage,
+      runnerArch,
+      playwrightVersion: packageJson.version,
+      browserName: browser.browserType().name(),
+      browserVersion: browser.version(),
+    },
+  });
+}
+
+let authorityVerification: Promise<void> | undefined;
+
+function assertReviewedBaselineAuthority(page: Page): Promise<void> {
+  if (captureMode) return Promise.resolve();
+  authorityVerification ??= verifyReviewedBaselineAuthority(page);
+  return authorityVerification;
 }
 
 const activeScenes: readonly VisualScene[] = [
@@ -96,7 +137,7 @@ for (const scene of activeScenes) {
       !screenshotProjects.has(testInfo.project.name),
       "Screenshots are reviewed only at 320, 390, 768, 1024, and 1440 pixels.",
     );
-    assertReviewedBaselineAuthority();
+    await assertReviewedBaselineAuthority(page);
 
     await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
     await page.goto(scene.path, { waitUntil: "domcontentloaded" });

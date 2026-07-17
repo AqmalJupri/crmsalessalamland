@@ -3,6 +3,11 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import {
+  computeVisualReferenceLock,
+  computeVisualSourceBinding,
+  type VisualSourceBinding,
+} from "../../scripts/ci/visual-baseline-binding";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const snapshotsRoot = join(repositoryRoot, "tests/e2e/__snapshots__");
@@ -45,11 +50,13 @@ const scenes = {
 interface VisualProvenance {
   schemaVersion: number;
   sourceCommit: string;
+  sourceBinding: VisualSourceBinding;
   syntheticOnly: boolean;
   dynamicData: string;
   capture: {
     os: string;
     runnerImage: string;
+    runnerArch: string;
     playwrightVersion: string;
     browserName: string;
     browserVersion: string;
@@ -119,6 +126,9 @@ describe("UI visual evidence contract", () => {
     expect(source).toMatch(/threshold:\s*0\.1/);
     expect(source).toMatch(/fullPage:\s*true/);
     expect(source).toContain("visual-snapshot.css");
+    expect(source).toContain("computeVisualSourceBinding");
+    expect(source).toContain("computeVisualReferenceLock");
+    expect(source).toContain("browser.version()");
     expect(style).toContain("nextjs-portal");
   });
 
@@ -177,22 +187,29 @@ describe("UI visual evidence contract", () => {
       .sort();
 
     expect(provenance).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       syntheticOnly: true,
       dynamicData: "none-present",
       capture: {
         os: "Linux",
+        runnerImage: "ubuntu24",
+        runnerArch: "X64",
         browserName: "chromium",
         playwrightVersion: "1.61.1",
+        browserVersion: "149.0.7827.55",
       },
       review: {
         status: "reviewed",
       },
     });
     expect(provenance.sourceCommit).toMatch(/^[0-9a-f]{40}$/);
-    expect(provenance.capture.runnerImage).toMatch(/^ubuntu/);
-    expect(provenance.capture.browserVersion).toMatch(/^\d+\./);
-    expect(provenance.review.referenceLock).toMatch(/^[0-9a-f]{64}$/);
+    expect(provenance.review.referenceLock).toBe(
+      computeVisualReferenceLock(repositoryRoot),
+    );
+    expect(provenance.sourceBinding).toEqual(
+      computeVisualSourceBinding(repositoryRoot),
+    );
+    expect(provenance.sourceBinding.fileCount).toBeGreaterThan(0);
     expect(provenance.review.reviewer.trim().length).toBeGreaterThan(0);
     expect(Object.keys(provenance.assets).sort()).toEqual(expected);
     expect(pngs).toEqual(expected);

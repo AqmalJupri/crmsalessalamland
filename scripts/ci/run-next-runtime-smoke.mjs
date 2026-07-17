@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { connect } from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +12,7 @@ const DEFAULT_POLL_INTERVAL_MS = 250;
 const DEFAULT_SMOKE_TIMEOUT_MS = 180_000;
 const DEFAULT_TERMINATION_GRACE_MS = 3_000;
 const DEFAULT_FORCE_KILL_TIMEOUT_MS = 3_000;
+const RUNTIME_SMOKE_INSTANCE_HEADER = "x-runtime-smoke-instance";
 
 export class RuntimeInterruptedError extends Error {
   constructor(signal) {
@@ -252,7 +254,13 @@ function delay(milliseconds, signal) {
   });
 }
 
-async function healthStatus(fetchImpl, url, timeoutMs, signal) {
+async function healthStatus(
+  fetchImpl,
+  url,
+  timeoutMs,
+  signal,
+  expectedInstanceId,
+) {
   throwIfAborted(signal);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -264,6 +272,11 @@ async function healthStatus(fetchImpl, url, timeoutMs, signal) {
       redirect: "manual",
       signal: controller.signal,
     });
+    if (
+      response.headers.get(RUNTIME_SMOKE_INSTANCE_HEADER) !== expectedInstanceId
+    ) {
+      throw new Error("Runtime health instance identity does not match the spawned process.");
+    }
     return response.status;
   } catch (error) {
     throwIfAborted(signal);
@@ -287,6 +300,7 @@ async function waitForLive(server, options) {
       `${options.baseUrl}/api/health/live`,
       options.requestTimeoutMs,
       options.signal,
+      options.instanceId,
     );
     assertOwnedProcessGroup(server, "Production runtime startup");
     if (lastStatus === 200) return;
@@ -423,7 +437,7 @@ async function cleanupStates(states, options, primaryError) {
 }
 
 export async function runNextRuntimeSmoke(input = {}) {
-  const options = normalizeOptions(input);
+  const options = { ...normalizeOptions(input), instanceId: randomUUID() };
   let server = null;
   let smoke = null;
   let primaryError = null;
@@ -435,7 +449,9 @@ export async function runNextRuntimeSmoke(input = {}) {
       options.signal,
     );
     throwIfAborted(options.signal);
-    server = observeCommand(options.startCommand);
+    server = observeCommand(options.startCommand, {
+      RUNTIME_SMOKE_INSTANCE_ID: options.instanceId,
+    });
     if (!Number.isSafeInteger(server.pid) || server.pid <= 0) {
       const result = await server.exitPromise;
       throw new Error(`Production runtime startup failed ${exitDescription(result)}.`);
@@ -459,6 +475,7 @@ export async function runNextRuntimeSmoke(input = {}) {
       `${options.baseUrl}/api/health/ready`,
       options.requestTimeoutMs,
       options.signal,
+      options.instanceId,
     );
     assertOwnedProcessGroup(server, "Production runtime");
     if (readyStatus !== 200) {
@@ -495,7 +512,7 @@ export async function runNextRuntimeSmokeCli(input = {}) {
   try {
     await runNextRuntimeSmoke({ ...input, signal: combinedSignal });
   } catch (error) {
-    if (receivedSignal) return;
+    if (isMatchingRuntimeInterrupt(error, receivedSignal)) return;
     throw error;
   } finally {
     for (const [signal, handler] of Object.entries(handlers)) {
@@ -505,6 +522,14 @@ export async function runNextRuntimeSmokeCli(input = {}) {
       process.exitCode = receivedSignal === "SIGINT" ? 130 : 143;
     }
   }
+}
+
+export function isMatchingRuntimeInterrupt(error, receivedSignal) {
+  return Boolean(
+    receivedSignal &&
+    error instanceof RuntimeInterruptedError &&
+    error.signal === receivedSignal,
+  );
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === scriptPath) {

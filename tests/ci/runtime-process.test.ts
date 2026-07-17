@@ -33,6 +33,8 @@ interface RuntimeOwnerOptions {
 }
 
 interface RuntimeOwnerModule {
+  RuntimeInterruptedError: new (signal: string) => Error & { signal: string };
+  isMatchingRuntimeInterrupt(error: unknown, signal: string | null): boolean;
   runNextRuntimeSmoke(options: RuntimeOwnerOptions): Promise<void>;
   runNextRuntimeSmokeCli(options: RuntimeOwnerOptions): Promise<void>;
 }
@@ -53,6 +55,7 @@ const mode = process.env.TREE_MODE;
 const pidFile = process.env.TREE_PID_FILE;
 const signalFile = process.env.TREE_SIGNAL_FILE;
 const port = Number(process.env.TREE_PORT);
+const runtimeInstanceId = process.env.RUNTIME_SMOKE_INSTANCE_ID;
 if (!mode || !pidFile || !signalFile || !Number.isInteger(port)) process.exit(91);
 
 const grandchildSource = [
@@ -81,13 +84,17 @@ grandchild.once("message", (message) => {
     setTimeout(() => process.exit(17), 40);
   } else {
     createServer((request, response) => {
+      const headers = { "content-type": "application/json" };
+      if (mode !== "foreign" && runtimeInstanceId) {
+        headers["x-runtime-smoke-instance"] = runtimeInstanceId;
+      }
       if (request.url === "/api/health/live") {
-        response.writeHead(mode === "no-live" ? 503 : 200, { "content-type": "application/json" });
+        response.writeHead(mode === "no-live" ? 503 : 200, headers);
         response.end(JSON.stringify({ status: mode === "no-live" ? "starting" : "ok" }));
         return;
       }
       if (request.url === "/api/health/ready") {
-        response.writeHead(mode === "ready-fail" ? 503 : 200, { "content-type": "application/json" });
+        response.writeHead(mode === "ready-fail" ? 503 : 200, headers);
         response.end(JSON.stringify({ status: mode === "ready-fail" ? "unavailable" : "ok" }));
         return;
       }
@@ -116,7 +123,7 @@ async function unusedPort(): Promise<number> {
   return address.port;
 }
 
-async function fixture(mode: "hang" | "healthy" | "no-live" | "ready-fail" | "startup-fail", smokeExitCode = 0): Promise<TreeFixture> {
+async function fixture(mode: "foreign" | "hang" | "healthy" | "no-live" | "ready-fail" | "startup-fail", smokeExitCode = 0): Promise<TreeFixture> {
   const directory = await mkdtemp(join(tmpdir(), "crm-runtime-owner-"));
   const fixturePath = join(directory, "process-tree.mjs");
   const pidFile = join(directory, "pids.json");
@@ -311,6 +318,18 @@ afterEach(async () => {
 });
 
 describe.sequential("portable production runtime process owner", () => {
+  it("does not suppress cleanup failures merely because an interrupt was received", async () => {
+    const owner = await loadOwner();
+    const interrupt = new owner.RuntimeInterruptedError("SIGTERM");
+
+    expect(owner.isMatchingRuntimeInterrupt(interrupt, "SIGTERM")).toBe(true);
+    expect(owner.isMatchingRuntimeInterrupt(interrupt, "SIGINT")).toBe(false);
+    expect(owner.isMatchingRuntimeInterrupt(
+      new AggregateError([interrupt, new Error("cleanup failed")]),
+      "SIGTERM",
+    )).toBe(false);
+  });
+
   it("rejects a compatible server that already owns the configured port", async () => {
     const directory = await mkdtemp(join(tmpdir(), "crm-runtime-owner-decoy-"));
     trackedDirectories.add(directory);
@@ -365,6 +384,17 @@ describe.sequential("portable production runtime process owner", () => {
     const owner = await loadOwner();
 
     await owner.runNextRuntimeSmoke(tree.options);
+
+    await expectTreeCleaned(tree);
+  }, 10_000);
+
+  it("rejects a post-preflight listener without the spawned instance identity", async () => {
+    const tree = await fixture("foreign");
+    const owner = await loadOwner();
+
+    await expect(owner.runNextRuntimeSmoke(tree.options)).rejects.toThrow(
+      /instance|identity|ownership/i,
+    );
 
     await expectTreeCleaned(tree);
   }, 10_000);

@@ -6,6 +6,7 @@ import {
 } from "@/server/db/migration-manifest";
 import { getRuntimeConfig } from "@/server/env";
 import { evaluateReadiness } from "@/server/health/readiness";
+import { getRuntimeSmokeInstanceHeaders } from "@/server/health/runtime-smoke-instance";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,9 @@ export async function GET(): Promise<Response> {
   const result = await evaluateReadiness(getRuntimeConfig, assertDatabaseReady);
   return Response.json(result.body, {
     status: result.statusCode,
-    headers: { "Cache-Control": "no-store" },
+    headers: {
+      "Cache-Control": "no-store",
+      ...getRuntimeSmokeInstanceHeaders(),
+    },
   });
 }

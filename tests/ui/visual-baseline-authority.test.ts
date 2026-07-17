@@ -7,6 +7,11 @@ const expectedAuthority = {
     digest: "a".repeat(64),
     fileCount: 102,
   },
+  comparisonBinding: {
+    algorithm: "sha256-path-null-digest-lf-v1" as const,
+    digest: "f".repeat(64),
+    fileCount: 6,
+  },
   referenceLock: "b".repeat(64),
   runtime: {
     os: "Linux",
@@ -20,9 +25,10 @@ const expectedAuthority = {
 
 function reviewedProvenance() {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     sourceCommit: "c".repeat(40),
     sourceBinding: { ...expectedAuthority.sourceBinding },
+    comparisonBinding: { ...expectedAuthority.comparisonBinding },
     syntheticOnly: true,
     dynamicData: "none-present",
     capture: { ...expectedAuthority.runtime },
@@ -45,10 +51,11 @@ describe("reviewed visual baseline authority", () => {
   });
 
   it.each([
-    ["schemaVersion", (value: ReturnType<typeof reviewedProvenance>) => { value.schemaVersion = 1; }],
+    ["schemaVersion", (value: ReturnType<typeof reviewedProvenance>) => { value.schemaVersion = 2; }],
     ["sourceCommit", (value: ReturnType<typeof reviewedProvenance>) => { value.sourceCommit = "not-a-commit"; }],
     ["sourceBinding.digest", (value: ReturnType<typeof reviewedProvenance>) => { value.sourceBinding.digest = "d".repeat(64); }],
     ["sourceBinding.fileCount", (value: ReturnType<typeof reviewedProvenance>) => { value.sourceBinding.fileCount = 101; }],
+    ["comparisonBinding.digest", (value: ReturnType<typeof reviewedProvenance>) => { value.comparisonBinding.digest = "0".repeat(64); }],
     ["review.referenceLock", (value: ReturnType<typeof reviewedProvenance>) => { value.review.referenceLock = "e".repeat(64); }],
     ["review.status", (value: ReturnType<typeof reviewedProvenance>) => { value.review.status = "candidate"; }],
     ["review.reviewer", (value: ReturnType<typeof reviewedProvenance>) => { value.review.reviewer = "PENDING"; }],

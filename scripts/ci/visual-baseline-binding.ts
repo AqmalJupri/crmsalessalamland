@@ -30,6 +30,15 @@ const visualSourceFiles = [
   "tests/e2e/visual-snapshot.css",
 ] as const;
 
+const visualComparisonFiles = [
+  "playwright.config.ts",
+  "scripts/ci/visual-baseline-authority.ts",
+  "scripts/ci/visual-baseline-binding.ts",
+  "scripts/ci/write-visual-baseline-provenance.ts",
+  "tests/e2e/ui-visual.spec.ts",
+  "tests/e2e/visual-snapshot.css",
+] as const;
+
 export interface VisualSourceBinding {
   algorithm: typeof VISUAL_SOURCE_BINDING_ALGORITHM;
   digest: string;
@@ -105,17 +114,38 @@ function collectVisualSourceFiles(repositoryRoot: string): string[] {
   );
 }
 
+function collectExactFiles(
+  repositoryRoot: string,
+  paths: readonly string[],
+): string[] {
+  const root = resolve(repositoryRoot);
+  const files = new Set<string>();
+  for (const path of paths) {
+    const absolutePath = resolve(root, path);
+    const normalized = repositoryPath(root, absolutePath);
+    const stat = lstatSync(absolutePath);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error(`Visual binding input must be a real file: ${normalized}`);
+    }
+    files.add(normalized);
+  }
+  return [...files].sort((left, right) =>
+    Buffer.from(left).compare(Buffer.from(right)),
+  );
+}
+
 function sha256(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-export function computeVisualSourceBinding(
+function computeFileBinding(
   repositoryRoot: string,
+  files: readonly string[],
+  label: string,
 ): VisualSourceBinding {
   const root = resolve(repositoryRoot);
-  const files = collectVisualSourceFiles(root);
   if (files.length === 0) {
-    throw new Error("Visual source binding cannot be empty.");
+    throw new Error(`${label} cannot be empty.`);
   }
 
   const manifest = createHash("sha256");
@@ -132,6 +162,28 @@ export function computeVisualSourceBinding(
     digest: manifest.digest("hex"),
     fileCount: files.length,
   };
+}
+
+export function computeVisualSourceBinding(
+  repositoryRoot: string,
+): VisualSourceBinding {
+  const root = resolve(repositoryRoot);
+  return computeFileBinding(
+    root,
+    collectVisualSourceFiles(root),
+    "Visual source binding",
+  );
+}
+
+export function computeVisualComparisonBinding(
+  repositoryRoot: string,
+): VisualSourceBinding {
+  const root = resolve(repositoryRoot);
+  return computeFileBinding(
+    root,
+    collectExactFiles(root, visualComparisonFiles),
+    "Visual comparison binding",
+  );
 }
 
 export function computeVisualReferenceLock(repositoryRoot: string): string {

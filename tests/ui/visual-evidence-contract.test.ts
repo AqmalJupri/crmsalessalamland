@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   computeVisualReferenceLock,
+  computeVisualComparisonBinding,
   computeVisualSourceBinding,
   type VisualSourceBinding,
 } from "../../scripts/ci/visual-baseline-binding";
@@ -51,6 +52,7 @@ interface VisualProvenance {
   schemaVersion: number;
   sourceCommit: string;
   sourceBinding: VisualSourceBinding;
+  comparisonBinding: VisualSourceBinding;
   syntheticOnly: boolean;
   dynamicData: string;
   capture: {
@@ -128,6 +130,7 @@ describe("UI visual evidence contract", () => {
     expect(source).toContain("visual-snapshot.css");
     expect(source).toContain("computeVisualSourceBinding");
     expect(source).toContain("computeVisualReferenceLock");
+    expect(source).toContain("computeVisualComparisonBinding");
     expect(source).toContain("browser.version()");
     expect(style).toContain("nextjs-portal");
   });
@@ -187,7 +190,7 @@ describe("UI visual evidence contract", () => {
       .sort();
 
     expect(provenance).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       syntheticOnly: true,
       dynamicData: "none-present",
       capture: {
@@ -208,6 +211,9 @@ describe("UI visual evidence contract", () => {
     );
     expect(provenance.sourceBinding).toEqual(
       computeVisualSourceBinding(repositoryRoot),
+    );
+    expect(provenance.comparisonBinding).toEqual(
+      computeVisualComparisonBinding(repositoryRoot),
     );
     expect(provenance.sourceBinding.fileCount).toBeGreaterThan(0);
     expect(provenance.review.reviewer.trim().length).toBeGreaterThan(0);

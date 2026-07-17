@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { assertReviewedVisualBaselineAuthority } from "../../scripts/ci/visual-baseline-authority";
 import {
+  computeVisualComparisonBinding,
   computeVisualReferenceLock,
   computeVisualSourceBinding,
 } from "../../scripts/ci/visual-baseline-binding";
@@ -105,6 +106,7 @@ async function verifyReviewedBaselineAuthority(page: Page): Promise<void> {
   }
   assertReviewedVisualBaselineAuthority(provenance, {
     sourceBinding,
+    comparisonBinding: computeVisualComparisonBinding(process.cwd()),
     referenceLock: computeVisualReferenceLock(process.cwd()),
     runtime: {
       os: "Linux",

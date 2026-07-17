@@ -5,6 +5,7 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 import {
+  computeVisualComparisonBinding,
   computeVisualReferenceLock,
   computeVisualSourceBinding,
 } from "./visual-baseline-binding";
@@ -81,9 +82,10 @@ try {
 }
 
 const provenance = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   sourceCommit: process.env.GITHUB_SHA,
   sourceBinding: computeVisualSourceBinding(repositoryRoot),
+  comparisonBinding: computeVisualComparisonBinding(repositoryRoot),
   syntheticOnly: true,
   dynamicData: "none-present",
   capturedAt: new Date().toISOString(),

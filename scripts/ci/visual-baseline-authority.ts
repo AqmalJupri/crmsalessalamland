@@ -11,6 +11,7 @@ export interface VisualRuntimeAuthority {
 
 export interface ExpectedVisualBaselineAuthority {
   sourceBinding: VisualSourceBinding;
+  comparisonBinding: VisualSourceBinding;
   referenceLock: string;
   runtime: VisualRuntimeAuthority;
 }
@@ -45,6 +46,10 @@ export function assertReviewedVisualBaselineAuthority(
     provenance.sourceBinding,
     "sourceBinding",
   );
+  const comparisonBinding = requireRecord(
+    provenance.comparisonBinding,
+    "comparisonBinding",
+  );
   const capture = requireRecord(provenance.capture, "capture");
   const review = requireRecord(provenance.review, "review");
 
@@ -66,7 +71,7 @@ export function assertReviewedVisualBaselineAuthority(
     );
   }
 
-  assertAuthorityValue("schemaVersion", provenance.schemaVersion, 2);
+  assertAuthorityValue("schemaVersion", provenance.schemaVersion, 3);
   assertAuthorityValue("syntheticOnly", provenance.syntheticOnly, true);
   assertAuthorityValue("dynamicData", provenance.dynamicData, "none-present");
   assertAuthorityValue(
@@ -83,6 +88,21 @@ export function assertReviewedVisualBaselineAuthority(
     "sourceBinding.fileCount",
     sourceBinding.fileCount,
     expected.sourceBinding.fileCount,
+  );
+  assertAuthorityValue(
+    "comparisonBinding.algorithm",
+    comparisonBinding.algorithm,
+    expected.comparisonBinding.algorithm,
+  );
+  assertAuthorityValue(
+    "comparisonBinding.digest",
+    comparisonBinding.digest,
+    expected.comparisonBinding.digest,
+  );
+  assertAuthorityValue(
+    "comparisonBinding.fileCount",
+    comparisonBinding.fileCount,
+    expected.comparisonBinding.fileCount,
   );
   assertAuthorityValue("review.status", review.status, "reviewed");
   assertAuthorityValue(

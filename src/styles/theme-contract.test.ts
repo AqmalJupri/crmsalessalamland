@@ -413,6 +413,15 @@ export default function manifest() {
     }
   });
 
+  it("keeps generic empty-state icons neutral instead of implying success", () => {
+    const emptyStateIcon = cssRule(productSource, ".crm-empty-action svg");
+
+    expect(emptyStateIcon).toMatch(/color:\s*var\(--crm-muted\)/);
+    expect(emptyStateIcon).not.toMatch(
+      /--crm-(?:success|action|danger|brand-attention|warning)(?:\b|-)/,
+    );
+  });
+
   it("gives the record button a compact desktop height and a 44px coarse target", () => {
     const recordLink = cssRule(productSource, ".crm-record-link");
     const coarsePointer = atRule(themeSource, "@media (pointer: coarse)");

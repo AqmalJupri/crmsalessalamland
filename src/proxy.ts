@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { PRODUCT_REQUEST_PATH_HEADER } from "@/config/product-navigation";
 
 export function proxy(request: NextRequest) {
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
@@ -19,6 +20,7 @@ export function proxy(request: NextRequest) {
   ];
   const policy = directives.join("; ");
   const requestHeaders = new Headers(request.headers);
+  requestHeaders.set(PRODUCT_REQUEST_PATH_HEADER, request.nextUrl.pathname);
   requestHeaders.set("x-nonce", nonce);
   requestHeaders.set("Content-Security-Policy", policy);
 
@@ -32,11 +34,6 @@ export const config = {
   matcher: [
     {
       source: "/((?!api|_next/static|_next/image|favicon.ico).*)",
-      // Next strips Flight headers before proxy code runs. Skip only the exact
-      // framework marker here. A beforeFiles rewrite rejects marker=1 unless
-      // RSC=1; arbitrary values and Purpose-prefetch HTML still receive the
-      // nonce, CSP, and no-store policy.
-      missing: [{ type: "header", key: "next-router-prefetch", value: "1" }],
     },
   ],
 };

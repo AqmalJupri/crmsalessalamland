@@ -1,44 +1,47 @@
-/** @vitest-environment jsdom */
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const mocks = vi.hoisted(() => ({ requirePageViewer: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn(),
+  requirePageViewer: vi.fn(),
+}));
 
 vi.mock("@/server/auth/page-access", () => ({
   requirePageViewer: mocks.requirePageViewer,
 }));
 
-import DashboardPage from "./page";
+vi.mock("@/server/env", () => ({
+  getRuntimeConfig: mocks.getRuntimeConfig,
+}));
 
-afterEach(cleanup);
+vi.mock("@/components/crm/surface-home", () => ({
+  SurfaceHome: "surface-home",
+}));
+
+import DashboardPage from "./page";
 
 describe("DashboardPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.requirePageViewer.mockResolvedValue({ demo: true });
+    mocks.getRuntimeConfig.mockReturnValue({ productSurface: "crm" });
   });
 
-  it("uses an auth-only root boundary, Malay task copy, and no unavailable task actions", async () => {
-    render(await DashboardPage());
-
+  it("keeps the auth-only root boundary and passes the server CRM surface", async () => {
+    await expect(DashboardPage()).resolves.toMatchObject({
+      type: "surface-home",
+      props: { demo: true, surface: "crm" },
+    });
     expect(mocks.requirePageViewer).toHaveBeenCalledWith(undefined, "/");
-    expect(screen.getByText("Susulan lewat")).toBeTruthy();
-    expect(screen.getByText("Kewangan")).toBeTruthy();
-    expect(screen.queryByText("Follow-up lewat")).toBeNull();
-    expect(screen.queryByText("Finance")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Buka" })).toBeNull();
+    expect(mocks.getRuntimeConfig).toHaveBeenCalledOnce();
   });
 
-  it("never presents synthetic metrics, tasks, or activity to a non-demo viewer", async () => {
+  it("passes Tasha and the real viewer demo flag without request-host inference", async () => {
     mocks.requirePageViewer.mockResolvedValue({ demo: false });
+    mocks.getRuntimeConfig.mockReturnValue({ productSurface: "tasha" });
 
-    render(await DashboardPage());
-
-    expect(screen.getByText("Belum ada data.")).toBeTruthy();
-    expect(screen.queryByText("Lead baharu")).toBeNull();
-    expect(screen.queryByText("RM1.24j")).toBeNull();
-    expect(screen.queryByText("Nur Aisyah")).toBeNull();
-    expect(screen.queryByText("Daniel Wong")).toBeNull();
+    await expect(DashboardPage()).resolves.toMatchObject({
+      type: "surface-home",
+      props: { demo: false, surface: "tasha" },
+    });
   });
 });

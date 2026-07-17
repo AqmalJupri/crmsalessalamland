@@ -451,7 +451,7 @@ a {
   width: 1.5rem;
   height: 1.5rem;
   margin-bottom: var(--crm-space-3);
-  color: var(--crm-success);
+  color: var(--crm-muted);
 }
 
 .crm-empty-action strong {

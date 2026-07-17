@@ -15,9 +15,9 @@ const securityHeaders = [
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=()" },
   { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
   { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
-  // Proxy replaces this with the request nonce policy for HTML. Requests that
-  // Next intentionally keeps out of Proxy (for example exact RSC prefetches)
-  // retain a non-executable fail-closed policy instead of having no CSP.
+  // Proxy replaces this with the request nonce policy for matched page and
+  // Flight requests. API/static paths outside its matcher retain a
+  // non-executable fail-closed policy instead of having no CSP.
   { key: "Content-Security-Policy", value: failClosedFallbackCsp },
 ];
 

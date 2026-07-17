@@ -5,7 +5,13 @@ import postgres from "postgres";
 const baseUrl = process.env.PRODUCTION_SMOKE_URL ?? "http://127.0.0.1:3000";
 const requestTimeoutMs = 10_000;
 const databaseUrl = process.env.DATABASE_URL;
+const productSurface = process.env.PRODUCT_SURFACE;
 assert.ok(databaseUrl, "DATABASE_URL is required for the production runtime smoke.");
+assert.match(
+  productSurface ?? "",
+  /^(?:crm|tasha)$/,
+  "PRODUCT_SURFACE must identify the immutable artifact under test.",
+);
 const databaseName = new URL(databaseUrl).pathname.slice(1);
 assert.match(
   databaseName,
@@ -74,17 +80,29 @@ async function provisionRestrictedFixture() {
     `;
     await transaction`
       insert into sessions (
-        id, organization_id, active_business_unit_id, user_id, token_hash, expires_at
+        id, organization_id, active_business_unit_id, user_id, token_hash, last_seen_at,
+        expires_at
       ) values (
         ${restrictedFixture.sessionId},
         ${restrictedFixture.organizationId},
         ${restrictedFixture.businessUnitId},
         ${restrictedFixture.userId},
         ${tokenHash},
+        clock_timestamp() - interval '1 hour',
         clock_timestamp() + interval '1 hour'
       )
     `;
   });
+}
+
+async function readRestrictedLastSeen() {
+  const [session] = await sql`
+    select last_seen_at::text as value
+    from sessions
+    where id = ${restrictedFixture.sessionId}
+  `;
+  assert.ok(session?.value, "Restricted runtime session must exist.");
+  return session.value;
 }
 
 function requireBaselineHeaders(response) {
@@ -142,19 +160,80 @@ async function verifyHtml(path, expectedStatus, headers) {
   requireMatchingHtmlNonces(await response.text(), nonce);
 }
 
-async function verifyRscPrefetch() {
-  const response = await fetchBounded(new URL("/login", baseUrl), {
+async function verifyRscPrefetch(path) {
+  const response = await fetchBounded(new URL(path, baseUrl), {
     headers: { "next-router-prefetch": "1", rsc: "1" },
     redirect: "manual",
   });
   assert.equal(response.status, 200);
-  requireBaselineHeaders(response);
+  requireSecurityHeaders(response);
   assert.match(response.headers.get("content-type") ?? "", /^text\/x-component\b/i);
-  assert.equal(
-    response.headers.get("content-security-policy"),
-    "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+  const payload = await response.text();
+  assert.doesNotMatch(
+    payload,
+    /NEXT_HTTP_ERROR_FALLBACK;404/,
+    "An allowed RSC prefetch must not fail closed as a missing route.",
   );
-  await response.body?.cancel();
+  assert.ok(
+    payload.includes(`"${path.slice(1)}"`),
+    `The RSC prefetch payload must identify the requested ${path} route.`,
+  );
+}
+
+async function verifyRscNavigationRequiresAuthentication(path) {
+  const response = await fetchBounded(new URL(path, baseUrl), {
+    headers: { rsc: "1" },
+    redirect: "manual",
+  });
+  assert.equal(response.status, 200);
+  requireSecurityHeaders(response);
+  assert.match(response.headers.get("content-type") ?? "", /^text\/x-component\b/i);
+
+  const payload = await response.text();
+  assert.doesNotMatch(
+    payload,
+    /NEXT_HTTP_ERROR_FALLBACK;404/,
+    "An allowed RSC navigation must reach authentication instead of failing closed as a missing route.",
+  );
+  assert.ok(
+    payload.includes(
+      `NEXT_REDIRECT;replace;/login?returnTo=${encodeURIComponent(path)};307;`,
+    ),
+    `The allowed ${path} RSC navigation must preserve its safe authentication return target.`,
+  );
+}
+
+async function verifyTashaRejectsCrmRouteBeforeViewer() {
+  const cookie = `crm_session=${restrictedFixture.sessionToken}`;
+  const lastSeenBefore = await readRestrictedLastSeen();
+  const htmlResponse = await fetchBounded(new URL("/leads", baseUrl), {
+    headers: { Cookie: cookie },
+    redirect: "manual",
+  });
+  assert.equal(htmlResponse.status, 404);
+  const htmlNonce = requireSecurityHeaders(htmlResponse);
+  const html = await htmlResponse.text();
+  assert.match(html, /Halaman tidak ditemui/);
+  requireMatchingHtmlNonces(html, htmlNonce);
+  assert.equal(
+    await readRestrictedLastSeen(),
+    lastSeenBefore,
+    "A surface-rejected HTML route must not load or refresh its viewer session.",
+  );
+
+  const rscResponse = await fetchBounded(new URL("/leads", baseUrl), {
+    headers: { Cookie: cookie, rsc: "1" },
+    redirect: "manual",
+  });
+  assert.equal(rscResponse.status, 200);
+  requireSecurityHeaders(rscResponse);
+  assert.match(rscResponse.headers.get("content-type") ?? "", /^text\/x-component\b/i);
+  assert.match(await rscResponse.text(), /NEXT_HTTP_ERROR_FALLBACK;404/);
+  assert.equal(
+    await readRestrictedLastSeen(),
+    lastSeenBefore,
+    "A surface-rejected RSC navigation must not load or refresh its viewer session.",
+  );
 }
 
 async function verifyMalformedPrefetchRejected(path) {
@@ -176,7 +255,9 @@ try {
   await verifyHtml("/login", 200);
   await verifyHtml("/does-not-exist", 404);
   await verifyHtml("/login", 200, { "next-router-prefetch": "0" });
-  await verifyRscPrefetch();
+  const allowedModulePath = productSurface === "tasha" ? "/inventory" : "/leads";
+  await verifyRscPrefetch(allowedModulePath);
+  await verifyRscNavigationRequiresAuthentication(allowedModulePath);
   await verifyMalformedPrefetchRejected("/login");
   await verifyMalformedPrefetchRejected("/api/internal/prefetch-contract/extra");
   await verifyHtml("/login", 200, { purpose: "prefetch" });
@@ -196,6 +277,9 @@ try {
   );
 
   await provisionRestrictedFixture();
+  if (productSurface === "tasha") {
+    await verifyTashaRejectsCrmRouteBeforeViewer();
+  }
   const forbiddenModule = await fetchBounded(new URL("/finance", baseUrl), {
     headers: { Cookie: `crm_session=${restrictedFixture.sessionToken}` },
     redirect: "manual",

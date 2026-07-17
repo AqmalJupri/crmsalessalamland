@@ -15,8 +15,18 @@ import {
   UsersRound,
   WalletCards,
   Workflow,
+  type LucideIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui";
+import {
+  getProductNavigationSections,
+  getProductRouteTitle,
+  type ProductNavigationHref,
+} from "@/config/product-navigation";
+import {
+  getProductSurfaceSpec,
+  type ProductSurface,
+} from "@/config/product-surface";
 import { AppShell, type SidebarNavItem } from "./app-shell";
 
 export interface ShellViewer {
@@ -27,61 +37,39 @@ export interface ShellViewer {
   demo: boolean;
 }
 
-type ProtectedNavItem = SidebarNavItem & { capability?: string };
+const navigationIcons = {
+  "/": LayoutDashboard,
+  "/leads": ContactRound,
+  "/pipeline": Workflow,
+  "/tasks": ClipboardCheck,
+  "/orders": PackageCheck,
+  "/inventory": Boxes,
+  "/finance": WalletCards,
+  "/marketing": Megaphone,
+  "/reports": BarChart3,
+  "/team": UsersRound,
+  "/settings": Settings,
+} as const satisfies Record<ProductNavigationHref, LucideIcon>;
 
-const navigation: { label?: string; items: ProtectedNavItem[] }[] = [
-  {
-    items: [
-      { label: "Utama", href: "/", icon: LayoutDashboard },
-      { label: "Lead", href: "/leads", icon: ContactRound, count: 8, capability: "lead.read" },
-      { label: "Pipeline", href: "/pipeline", icon: Workflow, capability: "opportunity.read" },
-      { label: "Tugasan", href: "/tasks", icon: ClipboardCheck, count: 7, capability: "task.read" },
-    ],
-  },
-  {
-    label: "Operasi",
-    items: [
-      { label: "Pesanan", href: "/orders", icon: PackageCheck, capability: "order.read" },
-      { label: "Inventori", href: "/inventory", icon: Boxes, capability: "inventory.read" },
-      { label: "Kewangan", href: "/finance", icon: WalletCards, capability: "finance.read" },
-    ],
-  },
-  {
-    label: "Pertumbuhan",
-    items: [
-      { label: "Pemasaran", href: "/marketing", icon: Megaphone, capability: "marketing.read" },
-      { label: "Laporan", href: "/reports", icon: BarChart3, capability: "report.read" },
-    ],
-  },
-  {
-    label: "Pentadbiran",
-    items: [
-      { label: "Pasukan", href: "/team", icon: UsersRound, capability: "team.read" },
-      { label: "Tetapan", href: "/settings", icon: Settings, capability: "settings.read" },
-    ],
-  },
-];
-
-const pageTitles: Record<string, string> = {
-  "/": "Utama",
-  "/leads": "Lead",
-  "/pipeline": "Pipeline",
-  "/tasks": "Tugasan",
-  "/orders": "Pesanan",
-  "/inventory": "Inventori",
-  "/finance": "Kewangan",
-  "/marketing": "Pemasaran",
-  "/reports": "Laporan",
-  "/team": "Pasukan",
-  "/settings": "Tetapan",
-};
+const crmDemoCounts = {
+  "/leads": 8,
+  "/tasks": 7,
+} as const satisfies Partial<Record<ProductNavigationHref, number>>;
 
 function routeRoot(pathname: string): string {
   if (pathname === "/") return "/";
   return `/${pathname.split("/").filter(Boolean)[0] ?? ""}`;
 }
 
-export function ApplicationShell({ children, viewer }: { children: React.ReactNode; viewer: ShellViewer }) {
+export function ApplicationShell({
+  children,
+  surface,
+  viewer,
+}: {
+  children: React.ReactNode;
+  surface: ProductSurface;
+  viewer: ShellViewer;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const activeHref = routeRoot(pathname);
@@ -89,25 +77,30 @@ export function ApplicationShell({ children, viewer }: { children: React.ReactNo
     viewer.businessUnits.find((unit) => unit.id === viewer.businessUnitId) ?? viewer.businessUnits[0]!;
   const [selectedUnit, setSelectedUnit] = useState(initialUnit);
 
-  const title = pageTitles[activeHref] ?? "CRM";
+  const surfaceSpec = getProductSurfaceSpec(surface);
+  const title = getProductRouteTitle(surface, pathname);
   const navWithActive = useMemo(
-    () => navigation
+    () => getProductNavigationSections(surface)
       .map((section) => ({
         ...section,
         items: section.items
           .filter(
             (item) =>
-              item.capability === undefined ||
+              !("capability" in item) ||
               viewer.capabilities.includes(item.capability),
           )
-          .map(({ count, ...item }) => ({
-            ...item,
-            ...(viewer.demo && count !== undefined ? { count } : {}),
+          .map((item): SidebarNavItem => ({
+            label: item.label,
+            href: item.href,
+            icon: navigationIcons[item.href],
+            ...(surface === "crm" && viewer.demo && item.href in crmDemoCounts
+              ? { count: crmDemoCounts[item.href as keyof typeof crmDemoCounts] }
+              : {}),
             active: item.href === activeHref,
           })),
       }))
       .filter((section) => section.items.length > 0),
-    [activeHref, viewer.capabilities, viewer.demo],
+    [activeHref, surface, viewer.capabilities, viewer.demo],
   );
 
   function cycleWorkspace(): void {
@@ -124,7 +117,7 @@ export function ApplicationShell({ children, viewer }: { children: React.ReactNo
       activeHref={activeHref}
       navigation={navWithActive}
       title={title}
-      brand={{ name: "Salam CRM", mark: "S" }}
+      brand={{ name: surfaceSpec.productName, mark: surface === "crm" ? "S" : "T" }}
       workspace={{
         name: selectedUnit.name,
         ...(viewer.businessUnits.length > 1
@@ -135,11 +128,11 @@ export function ApplicationShell({ children, viewer }: { children: React.ReactNo
           : {}),
       }}
       user={{ name: viewer.displayName }}
-      sidebarFooter={
+      sidebarFooter={surface === "crm" ? (
         <Badge variant={viewer.demo ? "info" : "success"} icon={ShieldCheck}>
           {viewer.demo ? "Demo tempatan" : "Tersambung"}
         </Badge>
-      }
+      ) : undefined}
     >
       {children}
     </AppShell>

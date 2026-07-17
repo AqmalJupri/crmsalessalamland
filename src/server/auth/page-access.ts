@@ -1,6 +1,6 @@
 import "server-only";
 
-import { forbidden, redirect } from "next/navigation";
+import { forbidden, notFound, redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { getRuntimeConfig } from "@/server/env";
 import { safeReturnTo } from "./return-to";
@@ -32,6 +32,10 @@ export function createCrmModuleLayout(moduleKey: CrmModuleKey) {
   return async function CrmModuleLayout({
     children,
   }: Readonly<{ children: ReactNode }>): Promise<ReactNode> {
+    const surface = getRuntimeConfig().productSurface;
+    if (!access.surfaces.includes(surface)) {
+      notFound();
+    }
     await requirePageViewer(access.capability, access.returnTo);
     return children;
   };

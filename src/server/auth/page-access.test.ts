@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   forbidden: vi.fn(),
   getViewer: vi.fn(),
   getRuntimeConfig: vi.fn(),
+  notFound: vi.fn(),
   redirect: vi.fn(),
 }));
 
@@ -12,6 +13,7 @@ vi.mock("server-only", () => ({}));
 
 vi.mock("next/navigation", () => ({
   forbidden: mocks.forbidden,
+  notFound: mocks.notFound,
   redirect: mocks.redirect,
 }));
 
@@ -51,11 +53,19 @@ const viewer: Viewer = {
 describe("requirePageViewer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.getRuntimeConfig.mockReturnValue({
+      demoMode: false,
+      nodeEnv: "test",
+      productSurface: "crm",
+    });
     mocks.redirect.mockImplementation(() => {
       throw new Error("redirected");
     });
     mocks.forbidden.mockImplementation(() => {
       throw new Error("forbidden");
+    });
+    mocks.notFound.mockImplementation(() => {
+      throw new Error("not-found");
     });
   });
 
@@ -96,13 +106,60 @@ describe("requirePageViewer", () => {
 });
 
 describe("createCrmModuleLayout", () => {
-  it("binds the module capability and exact return path to the server layout", async () => {
+  beforeEach(() => {
     vi.clearAllMocks();
+    mocks.getRuntimeConfig.mockReturnValue({
+      demoMode: false,
+      nodeEnv: "test",
+      productSurface: "crm",
+    });
+    mocks.notFound.mockImplementation(() => {
+      throw new Error("not-found");
+    });
+    mocks.redirect.mockImplementation(() => {
+      throw new Error("redirected");
+    });
+    mocks.forbidden.mockImplementation(() => {
+      throw new Error("forbidden");
+    });
+  });
+
+  it("binds the module capability and exact return path to the server layout", async () => {
     mocks.getViewer.mockResolvedValue(viewer);
     const FinanceLayout = createCrmModuleLayout("finance");
     const child = "child";
 
     await expect(FinanceLayout({ children: child })).resolves.toBe(child);
+    expect(mocks.getViewer).toHaveBeenCalledOnce();
+  });
+
+  it("returns a cross-surface 404 before viewer, redirect, or forbidden work", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      demoMode: false,
+      nodeEnv: "test",
+      productSurface: "tasha",
+    });
+    mocks.getViewer.mockResolvedValue(null);
+    const LeadsLayout = createCrmModuleLayout("leads");
+
+    await expect(LeadsLayout({ children: "hidden" })).rejects.toThrow("not-found");
+    expect(mocks.notFound).toHaveBeenCalledOnce();
+    expect(mocks.getViewer).not.toHaveBeenCalled();
+    expect(mocks.redirect).not.toHaveBeenCalled();
+    expect(mocks.forbidden).not.toHaveBeenCalled();
+  });
+
+  it("keeps a shared Tasha route behind the existing capability boundary", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      demoMode: false,
+      nodeEnv: "test",
+      productSurface: "tasha",
+    });
+    mocks.getViewer.mockResolvedValue(viewer);
+    const FinanceLayout = createCrmModuleLayout("finance");
+
+    await expect(FinanceLayout({ children: "shared" })).resolves.toBe("shared");
+    expect(mocks.notFound).not.toHaveBeenCalled();
     expect(mocks.getViewer).toHaveBeenCalledOnce();
   });
 });

@@ -21,9 +21,23 @@ const bytewiseMigrationPath = new URL(
   "../../../db/migrations/0003_reconciliation_bytewise_order.sql",
   import.meta.url,
 );
+const membershipIdentityMigrationPath = new URL(
+  "../../../db/migrations/0004_membership_user_identity_guard.sql",
+  import.meta.url,
+);
+const typedResultTruthMigrationPath = new URL(
+  "../../../db/migrations/0005_reconciliation_typed_result_truth.sql",
+  import.meta.url,
+);
 const frozenMigrationSource = readFileSync(frozenMigrationPath, "utf8");
 const bytewiseMigrationSource = existsSync(bytewiseMigrationPath)
   ? readFileSync(bytewiseMigrationPath, "utf8")
+  : "";
+const membershipIdentityMigrationSource = existsSync(membershipIdentityMigrationPath)
+  ? readFileSync(membershipIdentityMigrationPath, "utf8")
+  : "";
+const typedResultTruthMigrationSource = existsSync(typedResultTruthMigrationPath)
+  ? readFileSync(typedResultTruthMigrationPath, "utf8")
   : "";
 
 function reconciliationRequirementGuard(source: string): string {
@@ -51,6 +65,8 @@ describe("migration manifest", () => {
       "0001_foundation.sql",
       "0002_migration_platform.sql",
       "0003_reconciliation_bytewise_order.sql",
+      "0004_membership_user_identity_guard.sql",
+      "0005_reconciliation_typed_result_truth.sql",
     ]);
   });
 
@@ -86,6 +102,29 @@ describe("migration manifest", () => {
       .replace("canonical sorted order", "canonical bytewise order");
 
     expect(reconciliationRequirementGuard(bytewiseMigrationSource)).toBe(expectedReplacement);
+  });
+
+  it("adds only the reviewed immutable membership-user identity guard", () => {
+    expect(membershipIdentityMigrationSource).toContain(
+      "CREATE OR REPLACE FUNCTION crm_guard_membership_user_identity()",
+    );
+    expect(membershipIdentityMigrationSource).toContain(
+      "CREATE TRIGGER memberships_guard_user_identity",
+    );
+    expect(membershipIdentityMigrationSource).toContain("BEFORE UPDATE OF user_id ON memberships");
+    expect(membershipIdentityMigrationSource).not.toMatch(/\b(?:CREATE|ALTER|DROP)\s+TABLE\b/i);
+    expect(membershipIdentityMigrationSource).not.toContain("DROP FUNCTION");
+  });
+
+  it("adds only the reviewed typed-result truth constraint", () => {
+    expect(typedResultTruthMigrationSource).toContain(
+      "ADD CONSTRAINT reconciliation_results_derived_pass_truth",
+    );
+    expect(typedResultTruthMigrationSource).toContain(
+      "VALIDATE CONSTRAINT reconciliation_results_derived_pass_truth",
+    );
+    expect(typedResultTruthMigrationSource).not.toMatch(/\b(?:CREATE|DROP)\s+TABLE\b/i);
+    expect(typedResultTruthMigrationSource).not.toContain("DROP CONSTRAINT");
   });
 
   it("accepts only the complete zero-padded migration plan", () => {

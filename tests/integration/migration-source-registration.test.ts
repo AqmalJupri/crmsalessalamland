@@ -3712,10 +3712,10 @@ describe("atomic authority transition groups", () => {
         expected: { code: "MIGRATION_CAPABILITY_REQUIRED", status: 403 },
       },
       {
-        label: "membership identity changed",
+        label: "membership revoked",
         mutate: async (fixture: CutoverFixture) => {
           await sql`
-            update memberships set user_id = ${fixture.tenant.businessUnitUserIds[0]}
+            update memberships set status = 'REVOKED'
             where organization_id = ${fixture.tenant.organizationId}
               and id = ${fixture.tenant.orgWideMembershipId}
           `;

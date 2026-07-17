@@ -415,6 +415,7 @@ describe("migration control-plane catalog", () => {
       "legacy_object_links_version_unique",
       "reconciliation_runs_run_unique",
       "reconciliation_results_identity_unique",
+      "reconciliation_results_derived_pass_truth",
       "import_batches_counters_consistent",
       "import_batches_lifecycle_consistent",
       "import_rows_resolution_link_consistent",
@@ -842,6 +843,12 @@ describe("migration control-plane catalog", () => {
       31,
       "crm_guard_signed_reconciliation_result",
     );
+    exactTrigger(
+      "memberships_guard_user_identity",
+      "memberships",
+      19,
+      "crm_guard_membership_user_identity",
+    );
 
     expect(
       triggers
@@ -1105,6 +1112,19 @@ describe("migration control-plane deferred invariants", () => {
     ).rejects.toThrow(/membership scope/i);
   });
 
+  it("keeps the person behind every membership identity immutable", async () => {
+    await expect(
+      sql.begin(async (transaction) => {
+        await transaction`
+          update memberships
+          set user_id = ${ids.userOrgWide}
+          where id = ${ids.membershipReassignable}
+        `;
+        throw new Error("membership identity guard did not reject reassignment");
+      }),
+    ).rejects.toThrow(/membership user identity.*immutable/i);
+  });
+
   it("enforces final live-to-dry-run lineage from both sides", async () => {
     const fixture = await insertSourceAuthority(sql);
     const transformId = await insertTransform(sql, fixture.sourceId);
@@ -1253,6 +1273,29 @@ describe("migration control-plane deferred invariants", () => {
       sql`update reconciliation_runs set plan_artifact_ref = 'protected://changed' where id = ${runId}`,
     ).rejects.toThrow(/reconciliation plan/i);
   });
+
+  it.each([
+    { sourceCount: 1, targetCount: 2, passed: true },
+    { sourceCount: 1, targetCount: 1, passed: false },
+  ])(
+    "derives COUNT truth in the database for $sourceCount versus $targetCount",
+    async ({ sourceCount, targetCount, passed }) => {
+      const fixture = await insertSourceAuthority(sql);
+      const transformId = await insertTransform(sql, fixture.sourceId);
+      const { liveBatchId } = await insertDryRunAndLiveBatch(sql, fixture.sourceId, transformId);
+      const runId = await insertPendingCountReconciliation(sql, liveBatchId);
+
+      await expect(sql`
+        insert into reconciliation_results (
+          id, organization_id, business_unit_id, run_id, check_kind, check_key,
+          scope_key, source_count, target_count, passed, evidence_metadata
+        ) values (
+          ${syntheticId(60)}, ${ids.organization}, ${ids.businessUnit}, ${runId}, 'COUNT',
+          'records.total', 'all', ${sourceCount}, ${targetCount}, ${passed}, '{}'::jsonb
+        )
+      `).rejects.toThrow(/derived.pass.truth/i);
+    },
+  );
 
   it("enforces reconciliation requirement order by UTF-8 bytes instead of database locale", async () => {
     const [guard] = await sql<{ definition: string }[]>`

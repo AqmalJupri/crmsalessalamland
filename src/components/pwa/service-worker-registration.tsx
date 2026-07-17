@@ -25,7 +25,9 @@ export function ServiceWorkerRegistration() {
     async function registerRootWorker(): Promise<void> {
       try {
         const existing = await navigator.serviceWorker.getRegistration("/");
-        if (!active || existing) return;
+        const effectiveWorker = existing?.installing ?? existing?.waiting ?? existing?.active;
+        const expectedScriptUrl = new URL("/sw.js", window.location.origin).href;
+        if (!active || effectiveWorker?.scriptURL === expectedScriptUrl) return;
         await navigator.serviceWorker.register("/sw.js", { scope: "/" });
       } catch {
         // Registration is an enhancement; the online application remains authoritative.

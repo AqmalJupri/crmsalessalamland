@@ -54,16 +54,50 @@ describe("ServiceWorkerRegistration", () => {
     expect(container.childElementCount).toBe(0);
   });
 
-  it("does not create a duplicate registration", async () => {
-    const serviceWorker = installServiceWorkerMock({
-      getRegistration: vi.fn().mockResolvedValue({ scope: "http://localhost:3000/" }),
-    });
-    const { ServiceWorkerRegistration } = await import("./service-worker-registration");
-    render(createElement(ServiceWorkerRegistration));
+  it.each(["installing", "waiting", "active"] as const)(
+    "does not duplicate an exact root worker in the %s state",
+    async (state) => {
+      const expectedScriptUrl = new URL("/sw.js", window.location.origin).href;
+      const serviceWorker = installServiceWorkerMock({
+        getRegistration: vi.fn().mockResolvedValue({
+          installing: state === "installing" ? { scriptURL: expectedScriptUrl } : null,
+          waiting: state === "waiting" ? { scriptURL: expectedScriptUrl } : null,
+          active: state === "active" ? { scriptURL: expectedScriptUrl } : null,
+          scope: `${window.location.origin}/`,
+        }),
+      });
+      const { ServiceWorkerRegistration } = await import("./service-worker-registration");
+      render(createElement(ServiceWorkerRegistration));
 
-    await waitFor(() => expect(serviceWorker.getRegistration).toHaveBeenCalledOnce());
-    expect(serviceWorker.register).not.toHaveBeenCalled();
-  });
+      await waitFor(() => expect(serviceWorker.getRegistration).toHaveBeenCalledOnce());
+      expect(serviceWorker.register).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["installing", "waiting", "active"] as const)(
+    "replaces a non-root worker in the effective %s state",
+    async (state) => {
+      const expectedWorker = {
+        scriptURL: new URL("/sw.js", window.location.origin).href,
+      };
+      const staleWorker = {
+        scriptURL: new URL("/legacy-sw.js", window.location.origin).href,
+      };
+      const registration = state === "installing"
+        ? { installing: staleWorker, waiting: expectedWorker, active: expectedWorker }
+        : state === "waiting"
+          ? { installing: null, waiting: staleWorker, active: expectedWorker }
+          : { installing: null, waiting: null, active: staleWorker };
+      const serviceWorker = installServiceWorkerMock({
+        getRegistration: vi.fn().mockResolvedValue(registration),
+      });
+      const { ServiceWorkerRegistration } = await import("./service-worker-registration");
+      render(createElement(ServiceWorkerRegistration));
+
+      await waitFor(() => expect(serviceWorker.register).toHaveBeenCalledOnce());
+      expect(serviceWorker.register).toHaveBeenCalledWith("/sw.js", { scope: "/" });
+    },
+  );
 
   it.each(["lookup", "registration"])("fails quietly after a %s error", async (stage) => {
     const serviceWorker = installServiceWorkerMock(

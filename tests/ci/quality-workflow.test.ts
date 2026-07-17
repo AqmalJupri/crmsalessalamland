@@ -12,6 +12,19 @@ const playwrightConfig = readFileSync(
   "utf8",
 );
 
+const expectedSurfaceBindings = [
+  {
+    surface: "crm",
+    app_url: "https://crm-ci.example.test",
+    oidc_client_id: "crm-ci",
+  },
+  {
+    surface: "tasha",
+    app_url: "https://tasha-ci.example.test",
+    oidc_client_id: "tasha-ci",
+  },
+];
+
 function workflowStep(name: string) {
   const start = qualityWorkflow.indexOf(`- name: ${name}`);
   expect(start, `workflow step ${name} must exist`).toBeGreaterThanOrEqual(0);
@@ -46,6 +59,95 @@ function requiredPort(source: string, pattern: RegExp, label: string) {
   expect(match, `${label} must declare a port`).not.toBeNull();
   return Number(match?.[1]);
 }
+
+function expectDatabaseFreeRootScope(source: string) {
+  expect(source).not.toMatch(/^(?:env|["']env["'])[ \t]*:/m);
+}
+
+function parseMatrixEntry(target: Record<string, string>, source: string) {
+  const separator = source.indexOf(":");
+  if (separator < 1 || !source.slice(separator + 1).trim()) {
+    throw new Error(`Invalid matrix entry: ${source}`);
+  }
+
+  const key = source.slice(0, separator).trim();
+  if (Object.hasOwn(target, key)) {
+    throw new Error(`Duplicate matrix entry: ${key}`);
+  }
+  target[key] = source.slice(separator + 1).trim();
+}
+
+function surfaceBindings(job: string) {
+  const lines = job.split("\n");
+  const includeIndex = lines.findIndex((line) => /^\s+include:\s*$/.test(line));
+  expect(includeIndex, "surface matrix include block must exist").toBeGreaterThanOrEqual(0);
+
+  const includeIndent = lines[includeIndex]!.match(/^\s*/)?.[0].length ?? 0;
+  const rowPrefix = `${" ".repeat(includeIndent + 2)}- `;
+  const propertyPrefix = " ".repeat(includeIndent + 4);
+  const rows: Array<Record<string, string>> = [];
+
+  for (const line of lines.slice(includeIndex + 1)) {
+    if (!line.trim()) continue;
+    const indentation = line.match(/^\s*/)?.[0].length ?? 0;
+    if (indentation <= includeIndent) break;
+
+    if (line.startsWith(rowPrefix)) {
+      const row: Record<string, string> = {};
+      parseMatrixEntry(row, line.slice(rowPrefix.length));
+      rows.push(row);
+      continue;
+    }
+
+    if (line.startsWith(propertyPrefix) && indentation === includeIndent + 4 && rows.length) {
+      parseMatrixEntry(rows.at(-1)!, line.slice(propertyPrefix.length));
+      continue;
+    }
+
+    throw new Error(`Unexpected surface matrix line: ${line}`);
+  }
+
+  return rows;
+}
+
+function expectSurfaceBindings(job: string) {
+  const rows = surfaceBindings(job);
+  expect(rows).toEqual(expectedSurfaceBindings);
+  return rows;
+}
+
+describe("Quality workflow mutation resistance", () => {
+  it.each([
+    ["block", "env:\n  DATABASE_URL: postgresql://forbidden.example.test/crm"],
+    ["inline", "env: { DATABASE_URL: postgresql://forbidden.example.test/crm }"],
+    ["alias", "env: *database-environment"],
+    ["double-quoted key", '"env": { DATABASE_URL: forbidden }'],
+    ["single-quoted key", "'env': { DATABASE_URL: forbidden }"],
+  ])("rejects a root %s environment declared after jobs", (_label, rootEnvironment) => {
+    const mutatedWorkflow = `${qualityWorkflow.trimEnd()}\n\n${rootEnvironment}\n`;
+
+    expect(() => expectDatabaseFreeRootScope(mutatedWorkflow)).toThrow();
+  });
+
+  it("rejects CRM and Tasha values swapped between matrix rows", () => {
+    const smokeJob = workflowJob("runtime-smoke");
+    const mutatedJob = smokeJob
+      .replace(
+        "app_url: https://crm-ci.example.test\n            oidc_client_id: crm-ci",
+        "__CRM_SURFACE_BINDING__",
+      )
+      .replace(
+        "app_url: https://tasha-ci.example.test\n            oidc_client_id: tasha-ci",
+        "app_url: https://crm-ci.example.test\n            oidc_client_id: crm-ci",
+      )
+      .replace(
+        "__CRM_SURFACE_BINDING__",
+        "app_url: https://tasha-ci.example.test\n            oidc_client_id: tasha-ci",
+      );
+
+    expect(() => expectSurfaceBindings(mutatedJob)).toThrow();
+  });
+});
 
 describe("Quality workflow server lifecycle", () => {
   it("isolates the production smoke server from Playwright's web server", () => {
@@ -87,9 +189,7 @@ describe("Quality workflow deployment artifacts", () => {
   it("builds immutable CRM and Tasha artifacts from the same commit", () => {
     const buildJob = workflowJob("build");
 
-    expect(buildJob.match(/- surface:/g) ?? []).toHaveLength(2);
-    expect(buildJob).toContain("- surface: crm");
-    expect(buildJob).toContain("- surface: tasha");
+    expectSurfaceBindings(buildJob);
     expect(buildJob).toContain('PRODUCT_SURFACE: ${{ matrix.surface }}');
     expect(buildJob).toContain('DEPLOYMENT_ENVIRONMENT: "ci"');
     expect(buildJob).toContain('APP_VERSION: ${{ github.sha }}');
@@ -103,26 +203,22 @@ describe("Quality workflow deployment artifacts", () => {
   });
 
   it("keeps database ownership out of workflow-global and build-job scopes", () => {
-    const workflowGlobal = qualityWorkflow.slice(0, qualityWorkflow.indexOf("jobs:"));
     const buildJob = workflowJob("build");
 
-    expect(workflowGlobal).not.toMatch(/DATABASE_URL|TEST_DATABASE_URL/);
+    expectDatabaseFreeRootScope(qualityWorkflow);
     expect(buildJob).not.toMatch(
       /DATABASE_URL|TEST_DATABASE_URL|\bservices:|postgres:|db:migrate|test:db/,
     );
   });
 
   it("smokes both immutable surface artifacts without rebuilding or migrating", () => {
+    const buildJob = workflowJob("build");
     const smokeJob = workflowJob("runtime-smoke");
+    const buildBindings = expectSurfaceBindings(buildJob);
+    const smokeBindings = expectSurfaceBindings(smokeJob);
 
     expect(smokeJob).toContain("needs: [checks, build]");
-    expect(smokeJob.match(/- surface:/g) ?? []).toHaveLength(2);
-    expect(smokeJob).toContain("- surface: crm");
-    expect(smokeJob).toContain("app_url: https://crm-ci.example.test");
-    expect(smokeJob).toContain("oidc_client_id: crm-ci");
-    expect(smokeJob).toContain("- surface: tasha");
-    expect(smokeJob).toContain("app_url: https://tasha-ci.example.test");
-    expect(smokeJob).toContain("oidc_client_id: tasha-ci");
+    expect(smokeBindings).toEqual(buildBindings);
     expect(smokeJob).toContain('PRODUCT_SURFACE: ${{ matrix.surface }}');
     expect(smokeJob).toContain('APP_URL: ${{ matrix.app_url }}');
     expect(smokeJob).toContain('OIDC_CLIENT_ID: ${{ matrix.oidc_client_id }}');

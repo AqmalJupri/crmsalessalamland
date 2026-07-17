@@ -48,6 +48,9 @@ export function createMetricScope(input: {
   if (input.asOf !== null && !Number.isFinite(Date.parse(input.asOf))) {
     throw new Error("Metric as-of timestamp is invalid.");
   }
+  if (input.asOf === null && input.freshness !== "unknown") {
+    throw new Error("Metric freshness requires an as-of timestamp.");
+  }
   const units = input.scope.kind === "ALL"
     ? input.scope.units.filter((unit) => unit.capabilities.includes(input.capability))
     : input.scope.access.capabilities.includes(input.capability)

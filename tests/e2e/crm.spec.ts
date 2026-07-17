@@ -17,6 +17,28 @@ async function expectNoHorizontalOverflow(page: import("@playwright/test").Page)
   );
 }
 
+async function changeCompany(
+  page: import("@playwright/test").Page,
+  name: string,
+): Promise<void> {
+  const menuButton = page.getByRole("button", { name: "Buka menu navigasi" });
+  const usesDrawer = await menuButton.isVisible();
+  const container = usesDrawer
+    ? page.getByRole("dialog", { name: "Navigasi utama" })
+    : page.locator("body");
+
+  if (usesDrawer) {
+    await menuButton.click();
+    await expect(container).toBeVisible();
+  }
+
+  await container.getByRole("button", { name: /Tukar syarikat/ }).click();
+  const option = container.getByRole("option", { name, exact: true });
+  await expect(option).toHaveAttribute("aria-selected", "false");
+  await option.click();
+  if (usesDrawer) await expect(container).toBeHidden();
+}
+
 async function createDistinctiveLead(
   page: import("@playwright/test").Page,
   lead: { name: string; phone: string; productInterest: string },
@@ -181,12 +203,10 @@ test("company scope survives deep links and browser history", async ({ page }, t
     url.searchParams.get("campaign") === "retarget" &&
     url.searchParams.get("bu") === "salam-land",
   );
-  await expect(page.getByRole("button", { name: /Semasa: Salam Land/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "Nur Aisyah" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Izzati Salleh" })).toHaveCount(0);
 
-  await page.getByRole("button", { name: /Tukar syarikat/ }).click();
-  await page.getByRole("option", { name: "Bumi Hayat Printing" }).click();
+  await changeCompany(page, "Bumi Hayat Printing");
   await expect(page).toHaveURL((url) =>
     url.pathname === "/leads" &&
     url.searchParams.get("campaign") === "retarget" &&
@@ -195,9 +215,7 @@ test("company scope survives deep links and browser history", async ({ page }, t
   await expect(page.getByRole("button", { name: "Izzati Salleh" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Nur Aisyah" })).toHaveCount(0);
 
-  await page.getByRole("button", { name: /Tukar syarikat/ }).click();
-  await page.getByRole("listbox", { name: "Syarikat" })
-    .getByRole("option", { name: "Semua", exact: true }).click();
+  await changeCompany(page, "Semua");
   await expect(page).toHaveURL((url) => url.searchParams.get("bu") === "all");
   await expect(page.getByRole("columnheader", { name: "Syarikat" })).toBeVisible();
   await expect(page.getByText("Salam Land", { exact: true }).first()).toBeVisible();

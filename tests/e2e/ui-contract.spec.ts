@@ -172,8 +172,8 @@ test("manifest keeps the surface name, root start URL, and explicit icons", asyn
   ]);
 });
 
-test("only the current surface module set is visited and audited", async ({ page }) => {
-  for (const moduleContract of contract.modules) {
+for (const moduleContract of contract.modules) {
+  test(`${surface} ${moduleContract.title} module is visited and audited`, async ({ page }) => {
     await visitAndAudit(page, {
       path: moduleContract.path,
       title: moduleContract.title,
@@ -185,17 +185,24 @@ test("only the current surface module set is visited and audited", async ({ page
         page.getByRole("heading", { level: 2, name: moduleContract.contentHeading }),
       ).toBeVisible();
     }
-  }
 
-  if (surface === "crm") {
-    await expect(page.getByText("Tidak diketahui", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("Sihat", { exact: true })).toHaveCount(0);
-    await expect(page.getByText(/^(?:2|4|18) min$/)).toHaveCount(0);
-    await expect(page.getByRole("link", { name: "Lihat rekod Status tidak diketahui" }))
-      .toBeVisible();
-    await expect(page.getByRole("link", { name: "Lihat definisi Status tidak diketahui" }))
-      .toBeVisible();
-  } else {
+    if (surface === "crm" && moduleContract.path.startsWith("/settings")) {
+      await expect(page.getByText("Tidak diketahui", { exact: true }).first()).toBeVisible();
+      await expect(page.getByText("Sihat", { exact: true })).toHaveCount(0);
+      await expect(page.getByText(/^(?:2|4|18) min$/)).toHaveCount(0);
+      await expect(page.getByRole("link", { name: "Lihat rekod Status tidak diketahui" }))
+        .toBeVisible();
+      await expect(page.getByRole("link", { name: "Lihat definisi Status tidak diketahui" }))
+        .toBeVisible();
+    }
+  });
+}
+
+test("navigation excludes labels owned by the other surface", async ({ page }) => {
+  await page.goto("/?bu=salam-land");
+  await expectNavigationLabels(page);
+
+  if (surface === "tasha") {
     await expect(page.getByText("Lead", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Pipeline", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Tetapan", { exact: true })).toHaveCount(0);

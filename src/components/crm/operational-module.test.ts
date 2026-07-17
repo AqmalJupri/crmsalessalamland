@@ -135,6 +135,25 @@ describe("OperationalModule scope", () => {
     })).toThrow("Metric key is invalid");
   });
 
+  it("fails closed when an unknown metric timestamp omits explicit freshness", () => {
+    expect(() => createDemoModuleMetrics({
+      scope: allScope,
+      capability: "order.read",
+      modulePath: "/orders",
+      dateBasis: "Masa pemeriksaan",
+      periodLabel: "Semasa",
+      asOf: null,
+      rows,
+      metrics: [{
+        key: "unknown",
+        label: "Status tidak diketahui",
+        filterLabel: "Status tidak diketahui",
+        definition: { formula: "Bilangan tanpa bukti masa.", source: "Tiada bukti." },
+        matches: () => true,
+      }],
+    })).toThrow("Metric freshness requires an as-of timestamp");
+  });
+
   it("shows a company column and scoped metrics in Semua", () => {
     const { container } = render(createElement(OperationalModule, {
       scope: allScope,

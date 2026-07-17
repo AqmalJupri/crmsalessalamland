@@ -154,4 +154,21 @@ describe("MetricScope", () => {
       drilldownPath: "/leads",
     })).toThrow("Metric as-of timestamp is invalid");
   });
+
+  it.each(["fresh", "stale"] as const)(
+    "rejects %s freshness when no as-of evidence exists",
+    (freshness) => {
+      expect(() => createMetricScope({
+        scope: allScope,
+        capability: "lead.read",
+        dateBasis: "Masa pemeriksaan",
+        periodLabel: "Semasa",
+        asOf: null,
+        freshness,
+        attributionModel: null,
+        definitionHref: "/settings?definition=unknown",
+        drilldownPath: "/settings?metric=unknown",
+      })).toThrow("Metric freshness requires an as-of timestamp");
+    },
+  );
 });

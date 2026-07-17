@@ -1254,6 +1254,60 @@ describe("migration control-plane deferred invariants", () => {
     ).rejects.toThrow(/reconciliation plan/i);
   });
 
+  it("enforces reconciliation requirement order by UTF-8 bytes instead of database locale", async () => {
+    const [guard] = await sql<{ definition: string }[]>`
+      select pg_get_functiondef(
+        'crm_validate_reconciliation_requirements()'::regprocedure
+      ) as definition
+    `;
+    expect(guard?.definition.match(/COLLATE "C"/g)).toHaveLength(4);
+
+    const fixture = await insertSourceAuthority(sql);
+    const transformId = await insertTransform(sql, fixture.sourceId);
+    const { liveBatchId } = await insertDryRunAndLiveBatch(sql, fixture.sourceId, transformId);
+    const bytewiseRequirements = [
+      {
+        check_kind: "COUNT",
+        check_key: "a.a",
+        scope_key: "all",
+        measure_unit: null,
+        decimal_scale: null,
+      },
+      {
+        check_kind: "COUNT",
+        check_key: "a_",
+        scope_key: "all",
+        measure_unit: null,
+        decimal_scale: null,
+      },
+    ];
+
+    await expect(sql`
+      insert into reconciliation_runs (
+        id, organization_id, business_unit_id, batch_id, run_no, status,
+        plan_artifact_ref, plan_sha256, required_checks, required_checks_sha256,
+        required_check_count
+      ) values (
+        ${syntheticId(59)}, ${ids.organization}, ${ids.businessUnit}, ${liveBatchId}, 1, 'PENDING',
+        'protected://synthetic/bytewise-plan', ${sha("79")}, ${sql.json(bytewiseRequirements)},
+        digest(convert_to(${sql.json(bytewiseRequirements)}::jsonb::text, 'UTF8'), 'sha256'), 2
+      )
+    `).resolves.toHaveLength(0);
+
+    const localeOrderedRequirements = [...bytewiseRequirements].reverse();
+    await expect(sql`
+      insert into reconciliation_runs (
+        id, organization_id, business_unit_id, batch_id, run_no, status,
+        plan_artifact_ref, plan_sha256, required_checks, required_checks_sha256,
+        required_check_count
+      ) values (
+        ${syntheticId(59)}, ${ids.organization}, ${ids.businessUnit}, ${liveBatchId}, 2, 'PENDING',
+        'protected://synthetic/locale-plan', ${sha("80")}, ${sql.json(localeOrderedRequirements)},
+        digest(convert_to(${sql.json(localeOrderedRequirements)}::jsonb::text, 'UTF8'), 'sha256'), 2
+      )
+    `).rejects.toThrow(/canonical bytewise order/i);
+  });
+
   it("keeps reconciliation results bound to their original parent run", async () => {
     const fixture = await insertSourceAuthority(sql);
     const transformId = await insertTransform(sql, fixture.sourceId);

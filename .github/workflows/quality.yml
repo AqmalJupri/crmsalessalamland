@@ -6,6 +6,13 @@ on:
     branches:
       - main
       - "codex/**"
+  workflow_dispatch:
+    inputs:
+      capture_visual_baselines:
+        description: Capture Linux visual baseline candidates for review
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -108,9 +115,31 @@ jobs:
             < "$RUNNER_TEMP/migrated-db/crm_salam_test_ci.dump"
 
       - name: Run isolated CRM and Tasha browser evidence
+        if: ${{ !inputs.capture_visual_baselines }}
         run: |
           unset OIDC_ISSUER OIDC_CLIENT_ID OIDC_CLIENT_SECRET OIDC_REDIRECT_URI
           pnpm test:e2e
+
+      - name: Capture reviewed Linux visual baselines
+        if: ${{ inputs.capture_visual_baselines }}
+        env:
+          VISUAL_BASELINE_CAPTURE: reviewed-linux
+        run: |
+          unset OIDC_ISSUER OIDC_CLIENT_ID OIDC_CLIENT_SECRET OIDC_REDIRECT_URI
+          pnpm test:e2e:crm tests/e2e/ui-visual.spec.ts --update-snapshots
+          pnpm test:e2e:tasha tests/e2e/ui-visual.spec.ts --update-snapshots
+          node scripts/ci/write-visual-baseline-provenance.mjs
+
+      - name: Upload Linux visual baseline candidates
+        if: ${{ inputs.capture_visual_baselines && success() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: visual-baseline-candidates-${{ github.sha }}
+          path: tests/e2e/__snapshots__
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 6
+          overwrite: false
 
       - name: Upload failed synthetic Playwright evidence
         if: failure()

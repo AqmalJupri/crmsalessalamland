@@ -1,0 +1,10 @@
+nextjs-portal {
+  display: none !important;
+}
+
+*,
+*::before,
+*::after {
+  caret-color: transparent !important;
+  scroll-behavior: auto !important;
+}

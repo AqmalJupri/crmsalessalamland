@@ -128,56 +128,77 @@ describe("production migration runner", () => {
     expect(replayedLedger).toEqual(firstLedger);
   });
 
-  it("upgrades an exact 0001 plus 0002 ledger by applying only the reviewed 0003", async () => {
-    const legacyFilenames = ["0001_foundation.sql", "0002_migration_platform.sql"] as const;
-    const legacySources = await Promise.all(
-      legacyFilenames.map(async (filename) => ({
-        filename,
-        source: await readFile(join(process.cwd(), "db/migrations", filename)),
-      })),
-    );
-    const legacyManifest = legacySources.map(({ filename, source }) =>
-      reviewedFixture(filename, source),
-    );
-    const legacyDirectory = await createMigrationDirectory(legacySources);
-    const legacyRunner = await loadRunnerWithManifest(legacyManifest);
-    await legacyRunner.runMigrations(databaseUrl, legacyDirectory);
+  it.each([2, 3])(
+    "upgrades an exact %i-entry reviewed prefix without rewriting its ledger",
+    async (prefixLength) => {
+      const reviewedFilenames = [
+        "0001_foundation.sql",
+        "0002_migration_platform.sql",
+        "0003_reconciliation_bytewise_order.sql",
+        "0004_membership_user_identity_guard.sql",
+        "0005_reconciliation_typed_result_truth.sql",
+      ] as const;
+      const legacyFilenames = reviewedFilenames.slice(0, prefixLength);
+      const legacySources = await Promise.all(
+        legacyFilenames.map(async (filename) => ({
+          filename,
+          source: await readFile(join(process.cwd(), "db/migrations", filename)),
+        })),
+      );
+      const legacyManifest = legacySources.map(({ filename, source }) =>
+        reviewedFixture(filename, source),
+      );
+      const legacyDirectory = await createMigrationDirectory(legacySources);
+      const legacyRunner = await loadRunnerWithManifest(legacyManifest);
+      await legacyRunner.runMigrations(databaseUrl, legacyDirectory);
 
-    const legacyLedger = await sql<{
-      filename: string;
-      checksum: string;
-      applied_at: Date;
-    }[]>`
-      select filename, checksum, applied_at from schema_migrations order by filename
-    `;
-    expect(legacyLedger.map(({ filename }) => filename)).toEqual(legacyFilenames);
-    const [legacyGuard] = await sql<{ definition: string }[]>`
-      select pg_get_functiondef(
-        'crm_validate_reconciliation_requirements()'::regprocedure
-      ) as definition
-    `;
-    expect(legacyGuard?.definition).not.toContain('COLLATE "C"');
+      const legacyLedger = await sql<{
+        filename: string;
+        checksum: string;
+        applied_at: Date;
+      }[]>`
+        select filename, checksum, applied_at from schema_migrations order by filename
+      `;
+      expect(legacyLedger.map(({ filename }) => filename)).toEqual(legacyFilenames);
 
-    const { manifest, runner } = await loadProductionModules();
-    await runner.runMigrations(databaseUrl);
-    const upgradedLedger = await sql<{
-      filename: string;
-      checksum: string;
-      applied_at: Date;
-    }[]>`
-      select filename, checksum, applied_at from schema_migrations order by filename
-    `;
-    expect(upgradedLedger.map(({ filename, checksum }) => ({ filename, checksum }))).toEqual(
-      manifest.EXPECTED_MIGRATIONS.map(({ filename, checksum }) => ({ filename, checksum })),
-    );
-    expect(upgradedLedger.slice(0, 2)).toEqual(legacyLedger);
-    const [upgradedGuard] = await sql<{ definition: string }[]>`
-      select pg_get_functiondef(
-        'crm_validate_reconciliation_requirements()'::regprocedure
-      ) as definition
-    `;
-    expect(upgradedGuard?.definition.match(/COLLATE "C"/g)).toHaveLength(4);
-  });
+      const { manifest, runner } = await loadProductionModules();
+      await runner.runMigrations(databaseUrl);
+      const upgradedLedger = await sql<{
+        filename: string;
+        checksum: string;
+        applied_at: Date;
+      }[]>`
+        select filename, checksum, applied_at from schema_migrations order by filename
+      `;
+      expect(upgradedLedger.map(({ filename, checksum }) => ({ filename, checksum }))).toEqual(
+        manifest.EXPECTED_MIGRATIONS.map(({ filename, checksum }) => ({ filename, checksum })),
+      );
+      expect(upgradedLedger.slice(0, prefixLength)).toEqual(legacyLedger);
+      const [upgradedGuard] = await sql<{ definition: string }[]>`
+        select pg_get_functiondef(
+          'crm_validate_reconciliation_requirements()'::regprocedure
+        ) as definition
+      `;
+      expect(upgradedGuard?.definition.match(/COLLATE "C"/g)).toHaveLength(4);
+      const [integrityGuards] = await sql<{
+        membership_guard: boolean;
+        typed_truth_validated: boolean;
+      }[]>`
+        select
+          to_regprocedure('crm_guard_membership_user_identity()') is not null
+            as membership_guard,
+          exists (
+            select 1 from pg_constraint
+            where conname = 'reconciliation_results_derived_pass_truth'
+              and convalidated
+          ) as typed_truth_validated
+      `;
+      expect(integrityGuards).toEqual({
+        membership_guard: true,
+        typed_truth_validated: true,
+      });
+    },
+  );
 
   it("serializes concurrent runners into one exact reviewed ledger", async () => {
     const { manifest, runner } = await loadProductionModules();

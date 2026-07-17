@@ -29,6 +29,14 @@ const expectedMigrationLedger = [
     filename: "0003_reconciliation_bytewise_order.sql",
     checksum: "46fb6ab301eb4362dc4c74c186a432e59bcf00736e78ab3d5d8ea8e7359885c4",
   },
+  {
+    filename: "0004_membership_user_identity_guard.sql",
+    checksum: "58713ceda7660aa4a5385c734744c9bb9e12ccb00272032acf9a34cdfca70c5c",
+  },
+  {
+    filename: "0005_reconciliation_typed_result_truth.sql",
+    checksum: "8fbf0ff4b506cc682b16b6d3fe4b59d69ee47040b95ed20542ff6983c496c381",
+  },
 ];
 const navigationItems = [
   ["/", "Utama", undefined],

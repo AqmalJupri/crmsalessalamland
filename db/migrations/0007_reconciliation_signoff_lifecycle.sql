@@ -1,5 +1,76 @@
 -- Bind reconciliation signing, terminal batch state, and durable effect proof.
 
+-- A full xid8 is captured by the signing trigger. Unlike 32-bit tuple metadata, it is the
+-- top-level transaction identity across savepoints and includes the wrap epoch.
+-- The remaining columns are immutable sign-time identity snapshots. Existing
+-- signed rows from the reviewed prefix remain valid as legacy all-null snapshots.
+ALTER TABLE public.reconciliation_runs
+  ADD COLUMN signed_transaction_id pg_catalog.xid8,
+  ADD COLUMN signed_actor_user_id uuid,
+  ADD COLUMN signed_actor_type text,
+  ADD COLUMN signed_user_status text,
+  ADD COLUMN signed_membership_business_unit_id uuid,
+  ADD COLUMN signed_membership_status text,
+  ADD COLUMN signed_membership_valid_from timestamptz,
+  ADD COLUMN signed_membership_valid_until timestamptz;
+
+ALTER TABLE public.reconciliation_runs
+  ADD CONSTRAINT reconciliation_runs_sign_snapshot_consistent CHECK (
+    (
+      status = 'SIGNED'
+      AND (
+        (
+          signed_transaction_id IS NULL
+          AND signed_actor_user_id IS NULL
+          AND signed_actor_type IS NULL
+          AND signed_user_status IS NULL
+          AND signed_membership_business_unit_id IS NULL
+          AND signed_membership_status IS NULL
+          AND signed_membership_valid_from IS NULL
+          AND signed_membership_valid_until IS NULL
+        )
+        OR
+        (
+          signed_transaction_id IS NOT NULL
+          AND signed_actor_user_id IS NOT NULL
+          AND signed_actor_type IN ('USER', 'SERVICE')
+          AND signed_user_status = 'ACTIVE'
+          AND signed_membership_status = 'ACTIVE'
+          AND signed_membership_valid_from IS NOT NULL
+          AND (
+            signed_membership_valid_until IS NULL
+            OR signed_membership_valid_until > signed_membership_valid_from
+          )
+        )
+      )
+    )
+    OR
+    (
+      status <> 'SIGNED'
+      AND signed_transaction_id IS NULL
+      AND signed_actor_user_id IS NULL
+      AND signed_actor_type IS NULL
+      AND signed_user_status IS NULL
+      AND signed_membership_business_unit_id IS NULL
+      AND signed_membership_status IS NULL
+      AND signed_membership_valid_from IS NULL
+      AND signed_membership_valid_until IS NULL
+    )
+  ) NOT VALID;
+
+ALTER TABLE public.reconciliation_runs
+  VALIDATE CONSTRAINT reconciliation_runs_sign_snapshot_consistent;
+
+CREATE INDEX reconciliation_runs_sign_transaction_idx
+  ON public.reconciliation_runs (
+    organization_id, signed_transaction_id, signed_by_membership_id
+  )
+  WHERE status = 'SIGNED' AND signed_transaction_id IS NOT NULL;
+
+CREATE INDEX reconciliation_runs_sign_actor_transaction_idx
+  ON public.reconciliation_runs (signed_actor_user_id, signed_transaction_id)
+  WHERE status = 'SIGNED' AND signed_transaction_id IS NOT NULL;
+
 CREATE UNIQUE INDEX reconciliation_sign_audit_once
   ON public.audit_events (organization_id, business_unit_id, target_id)
   WHERE action = 'MIGRATION_RECONCILIATION_RUN_SIGNED'
@@ -28,6 +99,7 @@ DECLARE
   signer_membership_status text;
   signer_valid_from timestamptz;
   signer_valid_until timestamptz;
+  signer_user_type text;
   signer_user_status text;
 BEGIN
   SELECT batch.status, batch.approved_by_membership_id, batch.applied_by_membership_id
@@ -77,13 +149,8 @@ BEGIN
       USING ERRCODE = '55000';
   END IF;
 
-  IF NEW.signed_by_membership_id IS NULL OR NEW.signed_at IS NULL THEN
-    RAISE EXCEPTION 'reconciliation signing requires signer and timestamp provenance'
-      USING ERRCODE = '23514';
-  END IF;
-
-  IF NEW.signed_at IS DISTINCT FROM pg_catalog.transaction_timestamp() THEN
-    RAISE EXCEPTION 'reconciliation signed timestamp must be the current transaction timestamp'
+  IF NEW.signed_by_membership_id IS NULL THEN
+    RAISE EXCEPTION 'reconciliation signing requires signer provenance'
       USING ERRCODE = '23514';
   END IF;
 
@@ -91,6 +158,12 @@ BEGIN
     RAISE EXCEPTION 'only an APPLIED import batch can enter reconciliation sign-off'
       USING ERRCODE = '55000';
   END IF;
+
+  IF NEW.signed_at IS NOT NULL THEN
+    RAISE EXCEPTION 'reconciliation signed timestamp is database-owned wall time'
+      USING ERRCODE = '23514';
+  END IF;
+  NEW.signed_at := pg_catalog.clock_timestamp();
 
   IF EXISTS (
     SELECT 1
@@ -112,6 +185,9 @@ BEGIN
       USING ERRCODE = '23514';
   END IF;
 
+  -- Lock order: parent batch, memberships by UUID, then signer user. Every
+  -- acquisition is NOWAIT so a caller that already holds identity locks fails
+  -- closed instead of forming the reverse edge of a deadlock cycle.
   PERFORM membership.id
     FROM public.memberships membership
    WHERE membership.organization_id = NEW.organization_id
@@ -121,14 +197,14 @@ BEGIN
        NEW.signed_by_membership_id
      ])
    ORDER BY membership.id
-   FOR SHARE;
+   FOR SHARE NOWAIT;
 
   SELECT approver.user_id, applier.user_id, signer.user_id,
          signer.business_unit_id, signer.status, signer.valid_from, signer.valid_until,
-         signer_user.status
+         signer_user.user_type, signer_user.status
     INTO approver_user_id, applier_user_id, signer_user_id,
          signer_business_unit_id, signer_membership_status,
-         signer_valid_from, signer_valid_until, signer_user_status
+         signer_valid_from, signer_valid_until, signer_user_type, signer_user_status
     FROM public.memberships approver
     JOIN public.memberships applier
       ON applier.organization_id = NEW.organization_id
@@ -140,7 +216,7 @@ BEGIN
       ON signer_user.id = signer.user_id
    WHERE approver.organization_id = NEW.organization_id
      AND approver.id = parent_approved_by_membership_id
-   FOR SHARE OF signer_user;
+   FOR SHARE OF signer_user NOWAIT;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'reconciliation approval, apply, or signer provenance is missing'
@@ -158,13 +234,13 @@ BEGIN
   IF
     signer_membership_status <> 'ACTIVE'
     OR signer_user_status <> 'ACTIVE'
-    OR signer_valid_from > pg_catalog.transaction_timestamp()
+    OR signer_valid_from > NEW.signed_at
     OR (
       signer_valid_until IS NOT NULL
-      AND signer_valid_until <= pg_catalog.transaction_timestamp()
+      AND signer_valid_until <= NEW.signed_at
     )
   THEN
-    RAISE EXCEPTION 'reconciliation signer membership is not active at sign-off'
+    RAISE EXCEPTION 'reconciliation signer membership is not active at wall-clock sign-off'
       USING ERRCODE = '23514';
   END IF;
 
@@ -172,6 +248,18 @@ BEGIN
     RAISE EXCEPTION 'reconciliation signer must be a different person from approver and applier'
       USING ERRCODE = '23514';
   END IF;
+
+  NEW.signed_transaction_id := pg_catalog.pg_current_xact_id();
+  NEW.signed_actor_user_id := signer_user_id;
+  NEW.signed_actor_type := CASE signer_user_type
+    WHEN 'SERVICE' THEN 'SERVICE'
+    ELSE 'USER'
+  END;
+  NEW.signed_user_status := signer_user_status;
+  NEW.signed_membership_business_unit_id := signer_business_unit_id;
+  NEW.signed_membership_status := signer_membership_status;
+  NEW.signed_membership_valid_from := signer_valid_from;
+  NEW.signed_membership_valid_until := signer_valid_until;
 
   RETURN NEW;
 END;
@@ -240,6 +328,15 @@ DECLARE
   signed_run_no integer;
   signed_run_version bigint;
   signed_by_membership_id uuid;
+  signed_at timestamptz;
+  signed_transaction_id pg_catalog.xid8;
+  signed_actor_user_id uuid;
+  signed_actor_type text;
+  signed_user_status text;
+  signed_membership_business_unit_id uuid;
+  signed_membership_status text;
+  signed_membership_valid_from timestamptz;
+  signed_membership_valid_until timestamptz;
   signed_run_is_current_transaction boolean;
   approver_user_id uuid;
   applier_user_id uuid;
@@ -250,7 +347,6 @@ DECLARE
   signer_membership_status text;
   signer_valid_from timestamptz;
   signer_valid_until timestamptz;
-  expected_actor_type text;
   expected_effect jsonb;
   audit_count bigint;
   audit_organization_id uuid;
@@ -260,6 +356,9 @@ DECLARE
   audit_reason text;
   audit_correlation_id uuid;
   audit_change_summary jsonb;
+  audit_occurred_at timestamptz;
+  audit_recorded_at timestamptz;
+  audit_created_at timestamptz;
   outbox_count bigint;
   outbox_organization_id uuid;
   outbox_business_unit_id uuid;
@@ -269,6 +368,8 @@ DECLARE
   outbox_actor_user_id uuid;
   outbox_correlation_id uuid;
   outbox_payload jsonb;
+  outbox_occurred_at timestamptz;
+  outbox_created_at timestamptz;
 BEGIN
   SELECT batch.organization_id, batch.business_unit_id, batch.status,
          batch.approved_by_membership_id, batch.applied_by_membership_id
@@ -291,17 +392,19 @@ BEGIN
      AND run.batch_id = checked_batch_id;
 
   IF signed_run_count = 1 THEN
-    -- Other transactions' in-progress tuples are MVCC-invisible here. An in-progress
-    -- visible xmin therefore belongs to this transaction, including a released savepoint.
     SELECT run.id, run.run_no, run.version, run.signed_by_membership_id,
-           (
-             run.xmin = (pg_catalog.pg_current_xact_id()::text)::pg_catalog.xid
-             OR pg_catalog.pg_xact_status(
-               (run.xmin::text)::pg_catalog.xid8
-             ) = 'in progress'
-           )
+           run.signed_at, run.signed_transaction_id, run.signed_actor_user_id,
+           run.signed_actor_type, run.signed_user_status,
+           run.signed_membership_business_unit_id,
+           run.signed_membership_status, run.signed_membership_valid_from,
+           run.signed_membership_valid_until,
+           run.signed_transaction_id = pg_catalog.pg_current_xact_id()
       INTO signed_run_id, signed_run_no, signed_run_version, signed_by_membership_id,
-           signed_run_is_current_transaction
+           signed_at, signed_transaction_id, signed_actor_user_id,
+           signed_actor_type, signed_user_status,
+           signed_membership_business_unit_id,
+           signed_membership_status, signed_membership_valid_from,
+           signed_membership_valid_until, signed_run_is_current_transaction
       FROM public.reconciliation_runs run
      WHERE run.organization_id = batch_organization_id
        AND run.business_unit_id = batch_business_unit_id
@@ -361,30 +464,56 @@ BEGIN
       USING ERRCODE = '23514';
   END IF;
 
-  IF signed_run_is_current_transaction THEN
+  IF signed_transaction_id IS NOT NULL THEN
     IF
-      signer_membership_status <> 'ACTIVE'
-      OR signer_user_status <> 'ACTIVE'
-      OR signer_valid_from > pg_catalog.transaction_timestamp()
+      signed_actor_user_id IS NULL
+      OR signed_actor_type NOT IN ('USER', 'SERVICE')
+      OR signed_user_status <> 'ACTIVE'
       OR (
-        signer_valid_until IS NOT NULL
-        AND signer_valid_until <= pg_catalog.transaction_timestamp()
+        signed_membership_business_unit_id IS NOT NULL
+        AND signed_membership_business_unit_id IS DISTINCT FROM batch_business_unit_id
+      )
+      OR signed_membership_status <> 'ACTIVE'
+      OR signed_membership_valid_from IS NULL
+      OR signed_membership_valid_from > signed_at
+      OR (
+        signed_membership_valid_until IS NOT NULL
+        AND signed_membership_valid_until <= signed_at
       )
     THEN
-      RAISE EXCEPTION 'reconciliation signer is not active at transaction sign-off'
+      RAISE EXCEPTION 'reconciliation sign-time identity snapshot is invalid'
         USING ERRCODE = '23514';
     END IF;
   END IF;
 
-  expected_actor_type := CASE signer_user_type
-    WHEN 'SERVICE' THEN 'SERVICE'
-    ELSE 'USER'
-  END;
+  IF signed_run_is_current_transaction THEN
+    IF
+      signer_user_id IS DISTINCT FROM signed_actor_user_id
+      OR (
+        CASE signer_user_type WHEN 'SERVICE' THEN 'SERVICE' ELSE 'USER' END
+      ) IS DISTINCT FROM signed_actor_type
+      OR signer_user_status IS DISTINCT FROM signed_user_status
+      OR signer_business_unit_id IS DISTINCT FROM signed_membership_business_unit_id
+      OR signer_membership_status IS DISTINCT FROM signed_membership_status
+      OR signer_valid_from IS DISTINCT FROM signed_membership_valid_from
+      OR signer_valid_until IS DISTINCT FROM signed_membership_valid_until
+      OR signer_valid_from > pg_catalog.clock_timestamp()
+      OR (
+        signer_valid_until IS NOT NULL
+        AND signer_valid_until <= pg_catalog.clock_timestamp()
+      )
+    THEN
+      RAISE EXCEPTION 'reconciliation signer identity changed during sign-off'
+        USING ERRCODE = '23514';
+    END IF;
+  END IF;
 
   SELECT pg_catalog.count(*)
     INTO audit_count
     FROM public.audit_events audit
-   WHERE audit.action = 'MIGRATION_RECONCILIATION_RUN_SIGNED'
+   WHERE audit.organization_id = batch_organization_id
+     AND audit.business_unit_id = batch_business_unit_id
+     AND audit.action = 'MIGRATION_RECONCILIATION_RUN_SIGNED'
      AND audit.target_type = 'RECONCILIATION_RUN'
      AND audit.target_id = signed_run_id
      AND audit.outcome = 'SUCCESS';
@@ -395,11 +524,15 @@ BEGIN
   END IF;
 
   SELECT audit.organization_id, audit.business_unit_id, audit.actor_type,
-         audit.actor_user_id, audit.reason, audit.correlation_id, audit.change_summary
+         audit.actor_user_id, audit.reason, audit.correlation_id, audit.change_summary,
+         audit.occurred_at, audit.recorded_at, audit.created_at
     INTO audit_organization_id, audit_business_unit_id, audit_actor_type,
-         audit_actor_user_id, audit_reason, audit_correlation_id, audit_change_summary
+         audit_actor_user_id, audit_reason, audit_correlation_id, audit_change_summary,
+         audit_occurred_at, audit_recorded_at, audit_created_at
     FROM public.audit_events audit
-   WHERE audit.action = 'MIGRATION_RECONCILIATION_RUN_SIGNED'
+   WHERE audit.organization_id = batch_organization_id
+     AND audit.business_unit_id = batch_business_unit_id
+     AND audit.action = 'MIGRATION_RECONCILIATION_RUN_SIGNED'
      AND audit.target_type = 'RECONCILIATION_RUN'
      AND audit.target_id = signed_run_id
      AND audit.outcome = 'SUCCESS';
@@ -410,6 +543,18 @@ BEGIN
     OR audit_reason IS DISTINCT FROM pg_catalog.btrim(audit_reason)
   THEN
     RAISE EXCEPTION 'signed reconciliation audit reason is invalid'
+      USING ERRCODE = '23514';
+  END IF;
+
+  IF
+    signed_transaction_id IS NOT NULL
+    AND (
+      audit_occurred_at IS DISTINCT FROM signed_at
+      OR audit_recorded_at IS DISTINCT FROM signed_at
+      OR audit_created_at IS DISTINCT FROM signed_at
+    )
+  THEN
+    RAISE EXCEPTION 'signed reconciliation proof timestamp is divergent'
       USING ERRCODE = '23514';
   END IF;
 
@@ -428,10 +573,10 @@ BEGIN
     OR audit_business_unit_id IS DISTINCT FROM batch_business_unit_id
     OR audit_actor_type NOT IN ('USER', 'SERVICE')
     OR (
-      signed_run_is_current_transaction
-      AND audit_actor_type IS DISTINCT FROM expected_actor_type
+      signed_transaction_id IS NOT NULL
+      AND audit_actor_type IS DISTINCT FROM signed_actor_type
     )
-    OR audit_actor_user_id IS DISTINCT FROM signer_user_id
+    OR audit_actor_user_id IS DISTINCT FROM COALESCE(signed_actor_user_id, signer_user_id)
     OR audit_correlation_id IS DISTINCT FROM checked_batch_id
     OR audit_change_summary IS DISTINCT FROM expected_effect
   THEN
@@ -442,7 +587,9 @@ BEGIN
   SELECT pg_catalog.count(*)
     INTO outbox_count
     FROM public.outbox_events event
-   WHERE event.event_type = 'crm.migration.reconciliation_run_signed'
+   WHERE event.organization_id = batch_organization_id
+     AND event.business_unit_id = batch_business_unit_id
+     AND event.event_type = 'crm.migration.reconciliation_run_signed'
      AND event.aggregate_type = 'RECONCILIATION_RUN'
      AND event.aggregate_id = signed_run_id;
 
@@ -453,14 +600,27 @@ BEGIN
 
   SELECT event.organization_id, event.business_unit_id, event.event_version,
          event.aggregate_version, event.actor_type, event.actor_user_id,
-         event.correlation_id, event.payload
+         event.correlation_id, event.payload, event.occurred_at, event.created_at
     INTO outbox_organization_id, outbox_business_unit_id, outbox_event_version,
          outbox_aggregate_version, outbox_actor_type, outbox_actor_user_id,
-         outbox_correlation_id, outbox_payload
+         outbox_correlation_id, outbox_payload, outbox_occurred_at, outbox_created_at
     FROM public.outbox_events event
-   WHERE event.event_type = 'crm.migration.reconciliation_run_signed'
+   WHERE event.organization_id = batch_organization_id
+     AND event.business_unit_id = batch_business_unit_id
+     AND event.event_type = 'crm.migration.reconciliation_run_signed'
      AND event.aggregate_type = 'RECONCILIATION_RUN'
      AND event.aggregate_id = signed_run_id;
+
+  IF
+    signed_transaction_id IS NOT NULL
+    AND (
+      outbox_occurred_at IS DISTINCT FROM signed_at
+      OR outbox_created_at IS DISTINCT FROM signed_at
+    )
+  THEN
+    RAISE EXCEPTION 'signed reconciliation proof timestamp is divergent'
+      USING ERRCODE = '23514';
+  END IF;
 
   IF
     outbox_organization_id IS DISTINCT FROM batch_organization_id
@@ -468,7 +628,7 @@ BEGIN
     OR outbox_event_version IS DISTINCT FROM 1
     OR outbox_aggregate_version IS DISTINCT FROM signed_run_version
     OR outbox_actor_type IS DISTINCT FROM audit_actor_type
-    OR outbox_actor_user_id IS DISTINCT FROM signer_user_id
+    OR outbox_actor_user_id IS DISTINCT FROM COALESCE(signed_actor_user_id, signer_user_id)
     OR outbox_correlation_id IS DISTINCT FROM checked_batch_id
     OR outbox_payload IS DISTINCT FROM expected_effect
   THEN
@@ -487,6 +647,7 @@ DECLARE
   old_data jsonb;
   new_data jsonb;
   affected_batch_ids uuid[] := ARRAY[]::uuid[];
+  affected_organization_ids uuid[] := ARRAY[]::uuid[];
   affected_membership_ids uuid[] := ARRAY[]::uuid[];
   affected_user_ids uuid[] := ARRAY[]::uuid[];
   proof_run_id uuid;
@@ -540,7 +701,9 @@ BEGIN
     SELECT run.batch_id, run.status
       INTO affected_batch_id, proof_run_status
       FROM public.reconciliation_runs run
-     WHERE run.id = proof_run_id;
+     WHERE run.organization_id = (new_data ->> 'organization_id')::uuid
+       AND run.business_unit_id = (new_data ->> 'business_unit_id')::uuid
+       AND run.id = proof_run_id;
     IF NOT FOUND OR proof_run_status <> 'SIGNED' THEN
       RAISE EXCEPTION 'orphan successful reconciliation sign audit proof'
         USING ERRCODE = '23514';
@@ -563,37 +726,126 @@ BEGIN
     SELECT run.batch_id, run.status
       INTO affected_batch_id, proof_run_status
       FROM public.reconciliation_runs run
-     WHERE run.id = proof_run_id;
+     WHERE run.organization_id = (
+             COALESCE(new_data, old_data) ->> 'organization_id'
+           )::uuid
+       AND run.business_unit_id = (
+             COALESCE(new_data, old_data) ->> 'business_unit_id'
+           )::uuid
+       AND run.id = proof_run_id;
     IF NOT FOUND OR proof_run_status <> 'SIGNED' THEN
       RAISE EXCEPTION 'orphan reconciliation sign outbox proof'
         USING ERRCODE = '23514';
     END IF;
     affected_batch_ids := pg_catalog.array_append(affected_batch_ids, affected_batch_id);
   ELSIF TG_TABLE_NAME = 'memberships' THEN
+    IF
+      old_data IS NOT NULL
+      AND new_data IS NOT NULL
+      AND (old_data ->> 'id')::uuid IS NOT DISTINCT FROM (new_data ->> 'id')::uuid
+      AND (old_data ->> 'organization_id')::uuid
+        IS NOT DISTINCT FROM (new_data ->> 'organization_id')::uuid
+      AND (old_data ->> 'business_unit_id')::uuid
+        IS NOT DISTINCT FROM (new_data ->> 'business_unit_id')::uuid
+      AND (old_data ->> 'user_id')::uuid
+        IS NOT DISTINCT FROM (new_data ->> 'user_id')::uuid
+      AND old_data ->> 'status' IS NOT DISTINCT FROM new_data ->> 'status'
+      AND (old_data ->> 'valid_from')::timestamptz
+        IS NOT DISTINCT FROM (new_data ->> 'valid_from')::timestamptz
+      AND (old_data ->> 'valid_until')::timestamptz
+        IS NOT DISTINCT FROM (new_data ->> 'valid_until')::timestamptz
+    THEN
+      RETURN NULL;
+    END IF;
+
     IF old_data IS NOT NULL THEN
       affected_membership_ids := pg_catalog.array_append(
         affected_membership_ids, (old_data ->> 'id')::uuid
+      );
+      affected_organization_ids := pg_catalog.array_append(
+        affected_organization_ids, (old_data ->> 'organization_id')::uuid
       );
     END IF;
     IF new_data IS NOT NULL THEN
       affected_membership_ids := pg_catalog.array_append(
         affected_membership_ids, (new_data ->> 'id')::uuid
       );
+      affected_organization_ids := pg_catalog.array_append(
+        affected_organization_ids, (new_data ->> 'organization_id')::uuid
+      );
     END IF;
+
+    IF EXISTS (
+      SELECT 1
+        FROM public.reconciliation_runs run
+       WHERE run.status = 'SIGNED'
+         AND run.signed_transaction_id = pg_catalog.pg_current_xact_id()
+         AND (
+           (
+             old_data IS NOT NULL
+             AND run.organization_id = (old_data ->> 'organization_id')::uuid
+             AND run.signed_by_membership_id = (old_data ->> 'id')::uuid
+           )
+           OR
+           (
+             new_data IS NOT NULL
+             AND run.organization_id = (new_data ->> 'organization_id')::uuid
+             AND run.signed_by_membership_id = (new_data ->> 'id')::uuid
+           )
+         )
+         AND (
+           old_data IS NULL
+           OR (old_data ->> 'id')::uuid IS DISTINCT FROM run.signed_by_membership_id
+           OR (old_data ->> 'organization_id')::uuid IS DISTINCT FROM run.organization_id
+           OR (old_data ->> 'business_unit_id')::uuid
+                IS DISTINCT FROM run.signed_membership_business_unit_id
+           OR (old_data ->> 'user_id')::uuid IS DISTINCT FROM run.signed_actor_user_id
+           OR old_data ->> 'status' IS DISTINCT FROM run.signed_membership_status
+           OR (old_data ->> 'valid_from')::timestamptz
+                IS DISTINCT FROM run.signed_membership_valid_from
+           OR (old_data ->> 'valid_until')::timestamptz
+                IS DISTINCT FROM run.signed_membership_valid_until
+           OR new_data IS NULL
+           OR (new_data ->> 'id')::uuid IS DISTINCT FROM run.signed_by_membership_id
+           OR (new_data ->> 'organization_id')::uuid IS DISTINCT FROM run.organization_id
+           OR (new_data ->> 'business_unit_id')::uuid
+                IS DISTINCT FROM run.signed_membership_business_unit_id
+           OR (new_data ->> 'user_id')::uuid IS DISTINCT FROM run.signed_actor_user_id
+           OR new_data ->> 'status' IS DISTINCT FROM run.signed_membership_status
+           OR (new_data ->> 'valid_from')::timestamptz
+                IS DISTINCT FROM run.signed_membership_valid_from
+           OR (new_data ->> 'valid_until')::timestamptz
+                IS DISTINCT FROM run.signed_membership_valid_until
+         )
+    ) THEN
+      RAISE EXCEPTION 'reconciliation signer identity changed during sign-off'
+        USING ERRCODE = '23514';
+    END IF;
+
     SELECT COALESCE(
              pg_catalog.array_agg(DISTINCT run.batch_id), ARRAY[]::uuid[]
            )
       INTO affected_batch_ids
-      FROM public.reconciliation_runs run
+     FROM public.reconciliation_runs run
      WHERE run.status = 'SIGNED'
-       AND (
-         run.xmin = (pg_catalog.pg_current_xact_id()::text)::pg_catalog.xid
-         OR pg_catalog.pg_xact_status(
-           (run.xmin::text)::pg_catalog.xid8
-         ) = 'in progress'
-       )
+       AND run.organization_id = ANY(affected_organization_ids)
+       AND run.signed_transaction_id = pg_catalog.pg_current_xact_id()
        AND run.signed_by_membership_id = ANY(affected_membership_ids);
   ELSIF TG_TABLE_NAME = 'users' THEN
+    IF
+      old_data IS NOT NULL
+      AND new_data IS NOT NULL
+      AND (old_data ->> 'id')::uuid IS NOT DISTINCT FROM (new_data ->> 'id')::uuid
+      AND (
+        CASE old_data ->> 'user_type' WHEN 'SERVICE' THEN 'SERVICE' ELSE 'USER' END
+      ) IS NOT DISTINCT FROM (
+        CASE new_data ->> 'user_type' WHEN 'SERVICE' THEN 'SERVICE' ELSE 'USER' END
+      )
+      AND old_data ->> 'status' IS NOT DISTINCT FROM new_data ->> 'status'
+    THEN
+      RETURN NULL;
+    END IF;
+
     IF old_data IS NOT NULL THEN
       affected_user_ids := pg_catalog.array_append(
         affected_user_ids, (old_data ->> 'id')::uuid
@@ -604,22 +856,46 @@ BEGIN
         affected_user_ids, (new_data ->> 'id')::uuid
       );
     END IF;
+
+    IF EXISTS (
+      SELECT 1
+        FROM public.reconciliation_runs run
+       WHERE run.status = 'SIGNED'
+         AND run.signed_transaction_id = pg_catalog.pg_current_xact_id()
+         AND run.signed_actor_user_id = ANY(affected_user_ids)
+         AND (
+           old_data IS NULL
+           OR (old_data ->> 'id')::uuid IS DISTINCT FROM run.signed_actor_user_id
+           OR (
+             CASE old_data ->> 'user_type'
+               WHEN 'SERVICE' THEN 'SERVICE'
+               ELSE 'USER'
+             END
+           ) IS DISTINCT FROM run.signed_actor_type
+           OR old_data ->> 'status' IS DISTINCT FROM run.signed_user_status
+           OR new_data IS NULL
+           OR (new_data ->> 'id')::uuid IS DISTINCT FROM run.signed_actor_user_id
+           OR (
+             CASE new_data ->> 'user_type'
+               WHEN 'SERVICE' THEN 'SERVICE'
+               ELSE 'USER'
+             END
+           ) IS DISTINCT FROM run.signed_actor_type
+           OR new_data ->> 'status' IS DISTINCT FROM run.signed_user_status
+         )
+    ) THEN
+      RAISE EXCEPTION 'reconciliation signer identity changed during sign-off'
+        USING ERRCODE = '23514';
+    END IF;
+
     SELECT COALESCE(
              pg_catalog.array_agg(DISTINCT run.batch_id), ARRAY[]::uuid[]
            )
       INTO affected_batch_ids
       FROM public.reconciliation_runs run
-      JOIN public.memberships signer
-        ON signer.organization_id = run.organization_id
-       AND signer.id = run.signed_by_membership_id
      WHERE run.status = 'SIGNED'
-       AND (
-         run.xmin = (pg_catalog.pg_current_xact_id()::text)::pg_catalog.xid
-         OR pg_catalog.pg_xact_status(
-           (run.xmin::text)::pg_catalog.xid8
-         ) = 'in progress'
-       )
-       AND signer.user_id = ANY(affected_user_ids);
+       AND run.signed_transaction_id = pg_catalog.pg_current_xact_id()
+       AND run.signed_actor_user_id = ANY(affected_user_ids);
   END IF;
 
   FOR affected_batch_id IN
@@ -686,7 +962,9 @@ BEGIN
     INTO invalid_proof_id
     FROM public.audit_events audit
     LEFT JOIN public.reconciliation_runs run
-      ON run.id = audit.target_id
+      ON run.organization_id = audit.organization_id
+     AND run.business_unit_id = audit.business_unit_id
+     AND run.id = audit.target_id
    WHERE audit.action = 'MIGRATION_RECONCILIATION_RUN_SIGNED'
      AND audit.outcome = 'SUCCESS'
      AND (
@@ -705,7 +983,9 @@ BEGIN
     INTO invalid_proof_id
     FROM public.outbox_events event
     LEFT JOIN public.reconciliation_runs run
-      ON run.id = event.aggregate_id
+      ON run.organization_id = event.organization_id
+     AND run.business_unit_id = event.business_unit_id
+     AND run.id = event.aggregate_id
    WHERE event.event_type = 'crm.migration.reconciliation_run_signed'
      AND (
        event.aggregate_type <> 'RECONCILIATION_RUN'
@@ -725,7 +1005,9 @@ BEGIN
         OR EXISTS (
           SELECT 1
             FROM public.reconciliation_runs run
-           WHERE run.batch_id = batch.id
+           WHERE run.organization_id = batch.organization_id
+             AND run.business_unit_id = batch.business_unit_id
+             AND run.batch_id = batch.id
              AND run.status = 'SIGNED'
         )
      ORDER BY batch.id

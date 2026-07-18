@@ -23,6 +23,9 @@ type JsonObject = Record<string, unknown>;
 const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
   dataType: () => "bytea",
 });
+const xid8 = customType<{ data: string; driverData: string }>({
+  dataType: () => "xid8",
+});
 
 const createdAt = () =>
   timestamp("created_at", { withTimezone: true }).default(sql`clock_timestamp()`).notNull();
@@ -728,6 +731,19 @@ export const reconciliationRuns = pgTable(
     version: version(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
+    // Migration 0007 appends these database-owned sign-time snapshots.
+    signedTransactionId: xid8("signed_transaction_id"),
+    signedActorUserId: uuid("signed_actor_user_id"),
+    signedActorType: text("signed_actor_type").$type<"USER" | "SERVICE">(),
+    signedUserStatus: text("signed_user_status").$type<"ACTIVE">(),
+    signedMembershipBusinessUnitId: uuid("signed_membership_business_unit_id"),
+    signedMembershipStatus: text("signed_membership_status").$type<"ACTIVE">(),
+    signedMembershipValidFrom: timestamp("signed_membership_valid_from", {
+      withTimezone: true,
+    }),
+    signedMembershipValidUntil: timestamp("signed_membership_valid_until", {
+      withTimezone: true,
+    }),
   },
   (table) => [
     foreignKey({

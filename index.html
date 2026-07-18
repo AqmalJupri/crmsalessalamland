@@ -1,0 +1,1228 @@
+<!doctype html>
+<html lang="ms">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CRM Salam Fortress</title>
+    <meta name="theme-color" content="#111827">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./styles.css?v=20260524-infotech-clean-v10">
+  </head>
+  <body data-company="salam-land" data-auth-layer="gate">
+    <section id="entryGate" class="entry-gate">
+      <div class="entry-shell">
+        <article class="entry-hero-card">
+          <div class="entry-brand-row">
+            <span class="fortress-mark">SF</span>
+            <div>
+              <p class="eyebrow">Private operating system</p>
+              <h1>CRM Salam Fortress</h1>
+            </div>
+          </div>
+          <div class="entry-copy">
+            <span class="entry-badge">Secure access only</span>
+            <h2>Workspace CRM untuk akses yang dibenarkan sahaja.</h2>
+            <p>
+              Semua data lead, sales, campaign, report dan integration disimpan di layer sistem selepas login.
+              Front page ini tidak memaparkan maklumat dalaman company.
+            </p>
+          </div>
+          <div class="entry-proof-grid" aria-label="System readiness">
+            <span>HTTPS live</span>
+            <span>Role-based access</span>
+            <span>Backup ready</span>
+          </div>
+        </article>
+
+        <article class="entry-login-card">
+          <p class="eyebrow">Authentication layer</p>
+          <h2>Sign in to open dashboard</h2>
+          <p>
+            Masuk menggunakan username group yang diberikan. Dashboard company, lead dan order hanya dibuka selepas login berjaya.
+          </p>
+          <button class="primary-button entry-login-button" id="entryLoginButton" type="button">Sign in</button>
+          <small>Protected production system</small>
+        </article>
+      </div>
+    </section>
+
+    <div id="fortressShell" class="fortress-shell" hidden>
+      <aside class="fortress-sidebar">
+        <div class="fortress-brand">
+          <span class="fortress-mark">SF</span>
+          <div>
+            <p class="eyebrow">Multi-company operating system</p>
+            <h1>CRM Salam Fortress</h1>
+          </div>
+        </div>
+
+        <p class="sidebar-copy">
+          Satu sistem operasi untuk pantau lead, jualan, follow-up dan report setiap company secara berasingan.
+        </p>
+
+        <section class="sidebar-block">
+          <p class="side-title">Company</p>
+          <nav class="company-rail" id="companyRail" aria-label="Company workspaces"></nav>
+        </section>
+
+        <section class="sidebar-block">
+          <p class="side-title">Menu</p>
+          <nav id="sectionNav" class="section-nav" aria-label="Workspace sections"></nav>
+        </section>
+      </aside>
+
+      <main class="fortress-main">
+        <header class="topbar">
+          <div class="topbar-copy">
+            <p class="eyebrow" id="systemLabel">Command center</p>
+            <h2 id="workspaceHeading">CRM Salam Fortress</h2>
+            <div id="topbarStatus" class="topbar-status" aria-label="System status"></div>
+          </div>
+          <div class="topbar-actions">
+            <div class="action-cluster">
+              <button class="ghost-button" id="authButton" type="button">Sign in</button>
+              <button class="ghost-button" id="notificationButton" type="button">Enable noti</button>
+              <button class="ghost-button" id="themeToggleButton" type="button" hidden>Dark mode</button>
+              <button class="ghost-button" id="controlButton" type="button">Control centre</button>
+              <button class="ghost-button" id="integrationButton" type="button">Integrations</button>
+              <button class="ghost-button" id="exportButton" type="button">Export backup</button>
+              <button class="ghost-button" id="reportButton" type="button">PDF report</button>
+            </div>
+            <div class="action-cluster action-cluster-main">
+              <button class="ghost-button" id="campaignButton" type="button">Add spend</button>
+              <button class="ghost-button" id="orderButton" type="button">Add order</button>
+              <button class="primary-button" id="leadButton" type="button">Add lead</button>
+            </div>
+          </div>
+        </header>
+
+        <section id="overviewSection" class="hero-panel" data-workspace-section="overview">
+          <div id="heroBrand" class="hero-brand">
+            <div id="companyLogoWrap" class="hero-logo-wrap">
+              <img id="companyLogo" class="hero-logo" alt="">
+            </div>
+            <div class="hero-copy">
+              <p class="eyebrow" id="companyBusiness">Company module</p>
+              <h3 id="companyName">Salam Land Development</h3>
+              <p id="companyTagline" class="company-tagline"></p>
+              <div id="heroPills" class="hero-pills"></div>
+            </div>
+          </div>
+
+          <div class="hero-right">
+            <article class="pulse-card">
+              <p class="card-label">Lead today</p>
+              <strong id="todayLeadsCount">0</strong>
+              <span>Leads masuk hari ini</span>
+            </article>
+            <article class="pulse-card">
+              <p class="card-label">Due today</p>
+              <strong id="followUpDueCount">0</strong>
+              <span>Perlu tindakan hari ini</span>
+            </article>
+            <article class="pulse-card">
+              <p class="card-label">Month closed</p>
+              <strong id="monthClosedValue">RM0</strong>
+              <span>Jumlah jualan bulan ini</span>
+            </article>
+          </div>
+        </section>
+
+        <section id="flowSection" class="flow-panel" data-workspace-section="flow" hidden>
+          <div class="flow-shell">
+            <div class="flow-copy">
+              <p class="eyebrow" id="flowEyebrow">Fortress flow map</p>
+              <h3 id="flowHeading">Operational flow architecture</h3>
+              <p id="flowSummary" class="flow-summary"></p>
+              <div id="flowMeta" class="flow-meta" aria-label="Operational flow summary"></div>
+            </div>
+            <div id="flowRail" class="flow-rail" aria-label="Workspace operational flow"></div>
+          </div>
+        </section>
+
+        <section class="metric-strip" id="metricStrip" aria-label="Workspace metrics"></section>
+
+        <section id="dashboardAnalytics" class="dashboard-analytics" data-workspace-section="overview" aria-label="Dashboard analytics"></section>
+
+        <section id="publishSection" class="main-grid ops-grid" data-workspace-section="publish" hidden>
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Publish pulse</p>
+                <h3>System engine & health</h3>
+              </div>
+              <span id="systemModeBadge" class="panel-badge">Browser mode</span>
+            </div>
+            <div id="systemBoard" class="system-board"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Connection cockpit</p>
+                <h3>Meta Ads, TikTok Ads & webhook layer</h3>
+              </div>
+              <span id="connectionBadge" class="panel-badge">Sync-ready</span>
+            </div>
+            <div id="integrationBoard" class="integration-board"></div>
+          </article>
+        </section>
+
+        <section id="whatsappSection" class="main-grid ops-grid" data-workspace-section="whatsapp" hidden>
+          <article class="panel span-2">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Official WhatsApp Cloud API</p>
+                <h3>WhatsApp Command Centre</h3>
+              </div>
+              <span class="panel-badge">Cloud API</span>
+            </div>
+            <div id="whatsappApiBoard" class="integration-board"></div>
+          </article>
+        </section>
+
+        <section id="showcaseSection" class="main-grid" data-workspace-section="showcase" hidden>
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow" id="showcaseEyebrow">Workspace showcase</p>
+                <h3 id="showcaseHeading">Featured portfolio</h3>
+              </div>
+              <span id="showcaseBadge" class="panel-badge">Live content</span>
+            </div>
+            <div id="showcaseBoard" class="showcase-board"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Reference centre</p>
+                <h3 id="documentHeading">Document & brand reference</h3>
+              </div>
+            </div>
+            <div id="documentBoard" class="document-board"></div>
+          </article>
+        </section>
+
+        <section id="designSection" class="main-grid" data-workspace-section="design" hidden>
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Operating flow</p>
+                <h3>Company workflow</h3>
+              </div>
+              <span id="themeBadge" class="panel-badge">Company module</span>
+            </div>
+            <div id="workflowGrid" class="workflow-grid"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Staff input</p>
+                <h3>Ringkas, laju, auto-heavy</h3>
+              </div>
+            </div>
+            <div id="inputPlan" class="input-plan"></div>
+          </article>
+        </section>
+
+        <section id="performanceSection" class="main-grid" data-workspace-section="performance" hidden>
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Staff / team sales</p>
+                <h3>Performance scoreboard</h3>
+              </div>
+              <div class="chip-group" role="group" aria-label="Order period">
+                <button class="chip active" type="button" data-period="daily">Daily</button>
+                <button class="chip" type="button" data-period="weekly">Weekly</button>
+                <button class="chip" type="button" data-period="monthly">Monthly</button>
+              </div>
+            </div>
+            <div id="staffBoard" class="staff-board"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Marketing cockpit</p>
+                <h3>Lead source, spend & CPL</h3>
+              </div>
+            </div>
+            <div id="marketingBoard" class="marketing-board"></div>
+          </article>
+        </section>
+
+        <section id="automationSection" class="main-grid" data-workspace-section="automation" hidden>
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Auto control</p>
+                <h3>Automation board</h3>
+              </div>
+            </div>
+            <div id="automationBoard" class="automation-board"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Order centre</p>
+                <h3>Produk & sales summary</h3>
+              </div>
+            </div>
+            <div id="orderBoard" class="order-board"></div>
+          </article>
+        </section>
+
+        <section id="paymentSection" class="panel" data-workspace-section="payments" hidden>
+          <div class="panel-head table-head">
+            <div>
+              <p class="eyebrow">Payment collection</p>
+              <h3>Bayaran berfasa & collection graph</h3>
+              <p class="panel-note">Pantau deposit, jumlah sudah bayar, balance dan tarikh bayaran sebenar ikut staff / team sales.</p>
+            </div>
+          </div>
+          <div id="paymentSummary" class="metric-strip compact-metrics" aria-label="Payment summary"></div>
+          <div class="main-grid payment-grid">
+            <article class="payment-graph-card">
+              <div class="panel-head compact">
+                <div>
+                  <p class="eyebrow">Staff collection</p>
+                  <h3>Graph bayaran setiap team sales</h3>
+                </div>
+              </div>
+              <div id="paymentStaffGraph" class="payment-graph"></div>
+            </article>
+            <article class="payment-board-card">
+              <div class="panel-head compact">
+                <div>
+                  <p class="eyebrow">Client payment list</p>
+                  <h3>Order yang perlu follow payment</h3>
+                </div>
+              </div>
+              <div id="paymentBoard" class="payment-board"></div>
+            </article>
+          </div>
+        </section>
+
+        <section id="reportSection" class="panel report-centre-panel" data-workspace-section="reports" hidden>
+          <div class="panel-head table-head">
+            <div>
+              <p class="eyebrow">Executive reports</p>
+              <h3>Report centre</h3>
+              <p class="panel-note">Ringkasan report ikut company aktif sahaja. Export PDF masih guna engine report sedia ada.</p>
+            </div>
+            <button class="primary-button" id="reportInlineButton" type="button">Generate PDF report</button>
+          </div>
+          <div id="reportCentreSummary" class="metric-strip compact-metrics" aria-label="Report summary"></div>
+          <div id="reportCentreBoard" class="report-centre-board"></div>
+        </section>
+
+        <section id="controlSection" class="main-grid" data-workspace-section="control" hidden>
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Access & settings</p>
+                <h3>Control centre</h3>
+              </div>
+              <span class="panel-badge">Ops ready</span>
+            </div>
+            <div id="accessBoard" class="access-board"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Reminder & audit</p>
+                <h3>Due queue & activity log</h3>
+              </div>
+            </div>
+            <div id="controlBoard" class="control-board"></div>
+          </article>
+        </section>
+
+        <section id="recordsSection" class="panel" data-workspace-section="records" hidden>
+          <div class="lead-calendar-panel">
+            <div class="panel-head compact calendar-head">
+              <div>
+                <p class="eyebrow">Daily lead drilldown</p>
+                <h3>Semak lead ikut tarikh</h3>
+                <p class="panel-note">Pilih bulan atau tarikh untuk tengok berapa lead masuk dan siapa staff yang pegang lead hari itu.</p>
+              </div>
+              <div class="table-filters calendar-filters">
+                <label>
+                  Bulan
+                  <input id="leadMonthInput" type="month">
+                </label>
+                <label>
+                  Tarikh
+                  <input id="leadDateInput" type="date">
+                </label>
+              </div>
+            </div>
+            <div id="leadDateSummary" class="metric-strip compact-metrics" aria-label="Lead date summary"></div>
+            <div id="leadCalendarGrid" class="lead-calendar-grid" aria-label="Lead calendar"></div>
+            <div id="leadDateBreakdown" class="lead-date-breakdown"></div>
+          </div>
+
+          <div id="lotStatusShell" class="lot-status-shell" hidden>
+            <div class="lot-status-head">
+              <div>
+                <p class="eyebrow">Lot availability board</p>
+                <h3>Live lot status finder</h3>
+                <p id="lotStatusSummary" class="panel-note">Semak cepat status lot semasa untuk kegunaan sales di tapak.</p>
+              </div>
+              <div class="lot-status-toolbar">
+                <label>
+                  Lot status
+                  <select id="lotStatusFilter">
+                    <option value="all">Semua</option>
+                    <option value="Available">Available</option>
+                    <option value="Reserved">Reserved</option>
+                    <option value="Booking">Booking</option>
+                    <option value="Closed">Closed</option>
+                    <option value="Lead Hold">Lead Hold</option>
+                  </select>
+                </label>
+                <label>
+                  Search lot
+                  <input id="lotSearchInput" type="search" placeholder="Lot, lokasi, customer, staff">
+                </label>
+              </div>
+            </div>
+            <div id="lotStatusMetrics" class="metric-strip lot-status-metrics" aria-label="Lot status metrics"></div>
+            <div id="lotStatusLegend" class="lot-status-legend" aria-label="Lot status legend"></div>
+            <div id="lotStatusDeck" class="lot-status-deck" aria-label="Visual lot status lanes"></div>
+            <div id="lotStatusBoard" class="lot-board"></div>
+          </div>
+
+          <div class="panel-head table-head">
+            <div>
+              <p class="eyebrow">Company records</p>
+              <h3>Lead & order list</h3>
+            </div>
+            <div class="table-filters">
+              <label>
+                Jenis rekod
+                <select id="kindFilter">
+                  <option value="all">Semua</option>
+                  <option value="lead">Lead</option>
+                  <option value="order">Order</option>
+                </select>
+              </label>
+              <label>
+                Status
+                <select id="statusFilter"></select>
+              </label>
+              <label>
+                Staff
+                <select id="staffFilter"></select>
+              </label>
+              <label>
+                Source
+                <select id="sourceFilter"></select>
+              </label>
+              <label>
+                Kerja staff
+                <select id="actionFilter">
+                  <option value="all">Semua kerja</option>
+                  <option value="newToday">Lead baru hari ini</option>
+                  <option value="belumWs">Belum WhatsApp</option>
+                  <option value="followUpDue">Follow-up due</option>
+                  <option value="noReply">Dah WS belum reply</option>
+                  <option value="siteVisit">Site visit</option>
+                  <option value="booking">Booking</option>
+                  <option value="closed">Closed</option>
+                </select>
+              </label>
+              <label>
+                Tempoh
+                <select id="dateFilter">
+                  <option value="all">Semua</option>
+                  <option value="today">Hari ini</option>
+                  <option value="yesterday">Semalam</option>
+                  <option value="selected">Tarikh dipilih</option>
+                  <option value="week">7 hari</option>
+                  <option value="month">31 hari</option>
+                </select>
+              </label>
+              <label>
+                Search
+                <input id="searchInput" type="search" placeholder="Nama, phone, produk, lot">
+              </label>
+            </div>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Customer</th>
+                  <th>Ringkasan</th>
+                  <th>Source</th>
+                  <th>Staff</th>
+                  <th>Status</th>
+                  <th>Value</th>
+                  <th>Tarikh / Next action</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="recordTable"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="detailDialog" class="detail-dialog">
+      <div class="detail-drawer">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow" id="detailEyebrow">Record detail</p>
+            <h3 id="detailTitle">Details</h3>
+          </div>
+          <button class="icon-button" type="button" data-close-detail aria-label="Close">x</button>
+        </div>
+        <div id="detailContent" class="detail-content"></div>
+      </div>
+    </dialog>
+
+    <dialog id="leadDialog">
+      <form id="leadForm" class="modal-form" method="dialog">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Lead capture</p>
+            <h3>Add lead</h3>
+          </div>
+          <button class="icon-button" type="submit" value="cancel" formnovalidate aria-label="Close">x</button>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            Company
+            <select id="leadCompanyInput" name="companyId" required></select>
+          </label>
+          <label>
+            Staff / team sales
+            <select id="leadStaffInput" name="staff" required></select>
+          </label>
+          <label>
+            Customer name
+            <input name="customerName" required placeholder="Nama customer">
+          </label>
+          <label>
+            Phone
+            <input name="phone" required placeholder="6012xxxxxxx">
+          </label>
+          <label>
+            Source
+            <select id="leadSourceInput" name="source" required></select>
+          </label>
+          <label>
+            Campaign
+            <select id="leadCampaignInput" name="campaignId"></select>
+          </label>
+          <label>
+            Produk / minat
+            <select id="leadProductInput" name="product" required></select>
+          </label>
+          <label>
+            Status
+            <select id="leadStatusInput" name="status" required></select>
+          </label>
+          <label>
+            Next follow-up
+            <input name="nextFollowUp" type="date">
+          </label>
+        </div>
+
+        <div class="quick-card">
+          <div class="panel-head compact">
+            <div>
+              <p class="eyebrow">Company quick fields</p>
+              <h3 id="leadQuickTitle">Lead essentials</h3>
+            </div>
+          </div>
+          <div id="leadQuickFields" class="form-grid"></div>
+        </div>
+
+        <div class="quick-card duplicate-card">
+          <div class="panel-head compact">
+            <div>
+              <p class="eyebrow">Duplicate shield</p>
+              <h3>Semakan nombor telefon</h3>
+            </div>
+          </div>
+          <div id="leadDuplicateState" class="duplicate-state">
+            <div class="empty-state">Masukkan phone untuk semak duplicate lead secara automatik.</div>
+          </div>
+          <label class="inline-check">
+            <input id="leadAllowDuplicateInput" name="allowDuplicate" type="checkbox">
+            Benarkan duplicate kalau memang inquiry baru untuk customer sama.
+          </label>
+        </div>
+
+        <label class="full-label">
+          Remark ringkas / next action
+          <textarea name="notes" rows="4" placeholder="Apa jadi selepas call / mesej pertama"></textarea>
+        </label>
+
+        <label class="full-label">
+          Lampiran lead
+          <input id="leadFilesInput" name="attachments" type="file" accept=".jpg,.jpeg,.png,.pdf" multiple>
+          <span class="field-note">Sesuai untuk IC, dokumen atau screenshot. Simpan ringan, fail kecil lebih digalakkan.</span>
+        </label>
+
+        <p class="consent-note">
+          Dengan menghantar borang ini, saya bersetuju untuk dihubungi oleh pihak Salam Land melalui WhatsApp, panggilan telefon atau SMS bagi tujuan maklumat projek tanah, semakan lot dan follow-up berkaitan pembelian.
+        </p>
+
+        <div class="form-actions">
+          <button class="ghost-button" type="submit" value="cancel" formnovalidate>Cancel</button>
+          <button class="primary-button" id="saveLeadButton" type="button">Save lead</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="orderDialog">
+      <form id="orderForm" class="modal-form" method="dialog">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Order capture</p>
+            <h3 id="orderDialogTitle">Add order</h3>
+          </div>
+          <button class="icon-button" type="submit" value="cancel" formnovalidate aria-label="Close">x</button>
+        </div>
+        <input id="orderRecordIdInput" name="recordId" type="hidden">
+
+        <div class="form-grid order-core-grid">
+          <label data-order-field="company">
+            Company
+            <select id="orderCompanyInput" name="companyId" required></select>
+          </label>
+          <label data-order-field="staff">
+            Staff / team sales
+            <select id="orderStaffInput" name="staff" required></select>
+          </label>
+          <label data-order-field="customerName">
+            Customer name
+            <input name="customerName" required placeholder="Nama customer">
+          </label>
+          <label data-order-field="phone">
+            Phone
+            <input name="phone" required placeholder="6012xxxxxxx">
+          </label>
+          <label data-order-field="product">
+            Produk / item
+            <select id="orderProductInput" name="product" required></select>
+          </label>
+          <label data-order-field="status">
+            Status
+            <select id="orderStatusInput" name="status" required></select>
+          </label>
+          <label data-order-field="value">
+            Value (RM)
+            <input name="value" type="number" min="0" step="1">
+          </label>
+          <label data-order-field="units">
+            Quantity / unit
+            <input name="units" type="number" min="0" step="1">
+          </label>
+          <label data-order-field="paymentStatus">
+            Payment status
+            <select name="detail:paymentStatus">
+              <option value="Unpaid">Unpaid</option>
+              <option value="Deposit">Deposit</option>
+              <option value="Partial">Partial</option>
+              <option value="Paid">Paid</option>
+              <option value="Installment">Installment</option>
+            </select>
+          </label>
+          <label data-order-field="paymentMethod">
+            Payment method
+            <select name="detail:paymentMethod">
+              <option value="Bank transfer">Bank transfer</option>
+              <option value="Cash">Cash</option>
+              <option value="QR / DuitNow">QR / DuitNow</option>
+              <option value="Card">Card</option>
+              <option value="Installment">Installment</option>
+            </select>
+          </label>
+          <label data-order-field="paidAmount">
+            Paid amount (RM)
+            <input name="detail:paidAmount" type="number" min="0" step="1">
+          </label>
+          <label data-order-field="paymentReference">
+            Receipt / payment ref
+            <input name="detail:paymentReference" placeholder="No resit / ref bank">
+          </label>
+        </div>
+
+        <div class="quick-card">
+          <div class="panel-head compact">
+            <div>
+              <p class="eyebrow">Company order fields</p>
+              <h3 id="orderQuickTitle">Order essentials</h3>
+            </div>
+          </div>
+          <div id="orderQuickFields" class="form-grid"></div>
+        </div>
+
+        <div class="quick-card payment-schedule-card">
+          <div class="panel-head compact">
+            <div>
+              <p class="eyebrow">Payment phase schedule</p>
+              <h3>Bayaran fasa by fasa</h3>
+              <p class="panel-note">Sistem auto kira total paid dan balance ikut payment date sebenar yang staff key-in.</p>
+            </div>
+            <div class="schedule-actions">
+              <button class="ghost-button" id="importPaymentScheduleButton" type="button">Auto setup</button>
+              <button class="ghost-button" id="pastePaymentScheduleButton" type="button">Import text</button>
+              <button class="primary-button" id="addPaymentPhaseButton" type="button">Add phase</button>
+            </div>
+          </div>
+          <textarea id="paymentSchedulePasteInput" class="payment-schedule-paste" rows="4" placeholder="Paste jadual bayaran dari WhatsApp, contoh: PAY 1 : RM5,000 (20/1/2026)"></textarea>
+          <div class="payment-guide">
+            <strong>Payment mode</strong>
+            <span><b>Auto setup</b> Quick schedule</span>
+            <span><b>Import text</b> WhatsApp payment plan</span>
+            <span><b>Add phase</b> Custom payment row</span>
+          </div>
+          <div id="paymentScheduleSummary" class="payment-schedule-summary"></div>
+          <div id="paymentScheduleRows" class="payment-schedule-rows"></div>
+        </div>
+
+        <div id="orderDuplicateState" class="duplicate-state">
+          <div class="empty-state">Duplicate guard aktif: sistem akan semak phone, lot, staff dan tarikh sebelum save.</div>
+        </div>
+
+        <label class="full-label">
+          Remark ringkas
+          <textarea name="notes" rows="4" placeholder="Maklumat order / payment / pickup"></textarea>
+        </label>
+
+        <div class="quick-card order-camera-card">
+          <div class="panel-head compact">
+            <div>
+              <p class="eyebrow">IC camera upload</p>
+              <h3>IC customer</h3>
+              <p class="panel-note">Team boleh terus tekan kamera di phone. Fail akan simpan dalam rekod order, bukan perlu letak link Google Drive.</p>
+            </div>
+          </div>
+          <div class="camera-upload-grid">
+            <label class="capture-input">
+              IC depan
+              <input id="orderIcFrontInput" name="icFrontImage" type="file" accept="image/*" capture="environment">
+              <span>Tekan untuk ambil gambar depan IC</span>
+            </label>
+            <label class="capture-input">
+              IC belakang
+              <input id="orderIcBackInput" name="icBackImage" type="file" accept="image/*" capture="environment">
+              <span>Tekan untuk ambil gambar belakang IC</span>
+            </label>
+          </div>
+        </div>
+
+        <label class="full-label">
+          Lampiran tambahan
+          <input id="orderFilesInput" name="attachments" type="file" accept=".jpg,.jpeg,.png,.pdf" multiple>
+          <span class="field-note">Untuk resit, agreement, bukti bayaran atau dokumen tambahan sahaja.</span>
+        </label>
+
+        <div class="form-actions">
+          <button class="ghost-button" type="submit" value="cancel" formnovalidate>Cancel</button>
+          <button class="primary-button" id="saveOrderButton" type="button">Save order</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="campaignDialog">
+      <form id="campaignForm" class="modal-form compact" method="dialog">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Marketing spend</p>
+            <h3>Add campaign spend</h3>
+          </div>
+          <button class="icon-button" type="submit" value="cancel" formnovalidate aria-label="Close">x</button>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            Company
+            <select id="campaignCompanyInput" name="companyId" required></select>
+          </label>
+          <label>
+            Platform
+            <select name="platform" required>
+              <option>Meta Ads</option>
+              <option>TikTok Ads</option>
+              <option>TikTok Live</option>
+              <option>Google Ads</option>
+              <option>Referral</option>
+            </select>
+          </label>
+          <label>
+            Campaign name
+            <input name="name" required placeholder="Nama kempen">
+          </label>
+          <label>
+            Spend (RM)
+            <input name="spend" type="number" min="0" step="1" required>
+          </label>
+          <label>
+            Ads Manager leads
+            <input name="adsManagerLeads" type="number" min="0" step="1" placeholder="Jumlah lead dalam Ads Manager">
+          </label>
+        </div>
+
+        <div class="form-actions">
+          <button class="ghost-button" type="submit" value="cancel" formnovalidate>Cancel</button>
+          <button class="primary-button" id="saveCampaignButton" type="button">Save spend</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="reportDialog">
+      <form id="reportForm" class="modal-form compact" method="dialog">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">PDF export</p>
+            <h3>Download sales report</h3>
+          </div>
+          <button class="icon-button" type="submit" value="cancel" formnovalidate aria-label="Close">x</button>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            Company
+            <select id="reportCompanyInput" name="companyId" required></select>
+          </label>
+          <label>
+            Staff / team sales
+            <select id="reportStaffInput" name="staff"></select>
+          </label>
+          <label>
+            Scope
+            <select id="reportScopeInput" name="scope" required>
+              <option value="day">Daily report</option>
+              <option value="week">Weekly report</option>
+              <option value="month">Monthly report</option>
+              <option value="range">Custom date range</option>
+            </select>
+          </label>
+          <label id="reportMonthWrap">
+            Bulan report
+            <input id="reportMonthInput" name="month" type="month" required>
+          </label>
+          <label id="reportDateFromWrap" hidden>
+            Tarikh mula
+            <input id="reportDateFromInput" name="dateFrom" type="date">
+          </label>
+          <label id="reportDateToWrap" hidden>
+            Tarikh akhir
+            <input id="reportDateToInput" name="dateTo" type="date">
+          </label>
+        </div>
+
+        <div class="quick-card">
+          <div class="panel-head compact">
+            <div>
+              <p class="eyebrow">Report preview</p>
+              <h3 id="reportQuickTitle">Sales, leads & staff breakdown</h3>
+            </div>
+          </div>
+          <p id="reportHint" class="modal-note">
+            PDF akan masukkan summary company, leads, orders, closed sales, spend, CPL, breakdown ikut status dan performance staff/team sales.
+          </p>
+        </div>
+
+        <div class="form-actions">
+          <button class="ghost-button" type="submit" value="cancel" formnovalidate>Cancel</button>
+          <button class="primary-button" id="downloadReportButton" type="button">Download PDF</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="integrationDialog">
+      <form id="integrationForm" class="modal-form" method="dialog">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Publish & integrations</p>
+            <h3>Meta Ads / TikTok Ads connector settings</h3>
+          </div>
+          <button class="icon-button" type="submit" value="cancel" formnovalidate aria-label="Close">x</button>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            Company
+            <select id="integrationCompanyInput" name="companyId" required></select>
+          </label>
+          <label>
+            Public base URL
+            <input id="integrationBaseUrlInput" name="publicBaseUrl" placeholder="https://crm.yourdomain.com">
+          </label>
+          <label>
+            Meta webhook verify token
+            <input id="integrationMetaVerifyTokenInput" name="metaVerifyToken" type="password" placeholder="Meta verify token">
+          </label>
+          <label>
+            Meta API version
+            <input id="integrationMetaApiVersionInput" name="metaApiVersion" placeholder="v22.0">
+          </label>
+          <label>
+            Meta connection
+            <select id="integrationMetaEnabledInput" name="metaEnabled">
+              <option value="false">Off</option>
+              <option value="true">On</option>
+            </select>
+          </label>
+          <label>
+            Meta Page ID
+            <input id="integrationMetaPageIdInput" name="metaPageId" placeholder="Page ID untuk lead form">
+          </label>
+          <label>
+            Meta Ad Account ID
+            <input id="integrationMetaAdAccountIdInput" name="metaAdAccountId" placeholder="Contoh: 573344855853053">
+          </label>
+          <label>
+            Meta form IDs
+            <input id="integrationMetaFormIdsInput" name="metaFormIds" placeholder="Pisah dengan koma">
+          </label>
+          <label>
+            Meta default campaign
+            <select id="integrationMetaCampaignInput" name="metaCampaignId"></select>
+          </label>
+          <label>
+            Meta auto spend sync
+            <select id="integrationMetaSpendSyncInput" name="metaSpendSyncEnabled">
+              <option value="false">Off</option>
+              <option value="true">On</option>
+            </select>
+          </label>
+          <label>
+            Meta page access token
+            <input id="integrationMetaAccessTokenInput" name="metaAccessToken" type="password" placeholder="Page access token">
+          </label>
+          <label>
+            Meta ads spend token
+            <input id="integrationMetaSpendAccessTokenInput" name="metaSpendAccessToken" type="password" placeholder="Optional. Guna jika token spend lain dari page token">
+          </label>
+          <label>
+            Meta auto-assign start staff
+            <select id="integrationMetaStaffInput" name="metaDefaultStaff"></select>
+          </label>
+          <label>
+            Meta default lead status
+            <select id="integrationMetaStatusInput" name="metaLeadStatus"></select>
+          </label>
+          <label>
+            TikTok connection
+            <select id="integrationTikTokEnabledInput" name="tiktokEnabled">
+              <option value="false">Off</option>
+              <option value="true">On</option>
+            </select>
+          </label>
+          <label>
+            TikTok advertiser ID
+            <input id="integrationTikTokAdvertiserIdInput" name="tiktokAdvertiserId" placeholder="Advertiser / business account ID">
+          </label>
+          <label>
+            TikTok form IDs
+            <input id="integrationTikTokFormIdsInput" name="tiktokFormIds" placeholder="Pisah dengan koma">
+          </label>
+          <label>
+            TikTok default campaign
+            <select id="integrationTikTokCampaignInput" name="tiktokCampaignId"></select>
+          </label>
+          <label>
+            TikTok auto spend sync
+            <select id="integrationTikTokSpendSyncInput" name="tiktokSpendSyncEnabled">
+              <option value="false">Off</option>
+              <option value="true">On</option>
+            </select>
+          </label>
+          <label>
+            TikTok lead mode
+            <select id="integrationTikTokLeadModeInput" name="tiktokLeadMode">
+              <option value="instant-form">Instant form</option>
+              <option value="business-account">Business account lead gen</option>
+              <option value="website-form">Website form redirect</option>
+            </select>
+          </label>
+          <label>
+            TikTok callback token
+            <input id="integrationTikTokCallbackTokenInput" name="tiktokCallbackToken" type="password" placeholder="Webhook token / secret ref">
+          </label>
+          <label>
+            TikTok ads access token
+            <input id="integrationTikTokAccessTokenInput" name="tiktokAccessToken" type="password" placeholder="Optional. Untuk payload / API spend sync akan datang">
+          </label>
+          <label>
+            TikTok auto-assign start staff
+            <select id="integrationTikTokStaffInput" name="tiktokDefaultStaff"></select>
+          </label>
+          <label>
+            TikTok default lead status
+            <select id="integrationTikTokStatusInput" name="tiktokLeadStatus"></select>
+          </label>
+        </div>
+
+        <label class="full-label">
+          Mapping notes
+          <textarea id="integrationNotesInput" name="notes" rows="4" placeholder="Contoh: Salam Land page A untuk Semenyih, assign terus dekat Nureen atau Wafi."></textarea>
+        </label>
+
+        <div class="quick-card">
+          <div class="panel-head compact">
+            <div>
+              <p class="eyebrow">Connection preview</p>
+              <h3 id="integrationQuickTitle">Webhook & publish map</h3>
+            </div>
+          </div>
+          <div class="preview-grid">
+            <div class="preview-row">
+              <span>Meta webhook</span>
+              <code id="metaWebhookPreview">/api/webhooks/meta</code>
+            </div>
+            <div class="preview-row">
+              <span>TikTok webhook</span>
+              <code id="tiktokWebhookPreview">/api/webhooks/tiktok</code>
+            </div>
+            <div class="preview-row">
+              <span>Storage mode</span>
+              <code id="storageModePreview">Browser mode</code>
+            </div>
+          </div>
+          <p id="integrationHint" class="modal-note">
+            Untuk live publish, run server mode supaya webhook boleh terima lead terus dan token tak hanya tersimpan dalam browser.
+          </p>
+        </div>
+
+        <div class="form-actions">
+          <button class="ghost-button" type="submit" value="cancel" formnovalidate>Cancel</button>
+          <button class="primary-button" id="saveIntegrationButton" type="button">Save integration</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="whatsappDialog">
+      <form id="whatsappForm" class="modal-form" method="dialog">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Official WhatsApp Cloud API</p>
+            <h3>WhatsApp settings</h3>
+          </div>
+          <button class="icon-button" type="submit" value="cancel" formnovalidate aria-label="Close">x</button>
+        </div>
+
+        <div class="quick-card">
+          <div class="panel-head compact">
+            <div>
+              <p class="eyebrow">Connection status</p>
+              <h3>Backend ENV protected</h3>
+            </div>
+          </div>
+          <div id="whatsappStatusPreview" class="integration-meta"></div>
+          <div class="preview-row">
+            <span>Webhook URL</span>
+            <code id="whatsappWebhookPreview">/api/webhooks/whatsapp</code>
+          </div>
+          <p id="whatsappHint" class="modal-note">
+            Access token tidak disimpan di frontend. Letak token sebenar dalam ENV server menggunakan nama key di bawah.
+          </p>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            WABA ID
+            <input id="whatsappWabaIdInput" name="waba_id" placeholder="WhatsApp Business Account ID">
+          </label>
+          <label>
+            Phone Number ID
+            <input id="whatsappPhoneNumberIdInput" name="phone_number_id" placeholder="Meta Phone Number ID">
+          </label>
+          <label>
+            Access token ENV key
+            <input id="whatsappAccessTokenEnvInput" name="access_token_env_key" placeholder="WHATSAPP_ACCESS_TOKEN">
+          </label>
+          <label>
+            Webhook verify token
+            <input id="whatsappVerifyTokenInput" name="webhook_verify_token" type="password" placeholder="Strong random verify token">
+          </label>
+          <label>
+            Default template name
+            <input id="whatsappTemplateInput" name="default_template_name" placeholder="approved_template_name">
+          </label>
+          <label>
+            Default language code
+            <input id="whatsappLanguageInput" name="default_language_code" placeholder="ms">
+          </label>
+          <label>
+            Test recipient number
+            <input id="whatsappTestRecipientInput" name="test_recipient_number" placeholder="60123456789">
+          </label>
+          <label>
+            Auto send intro
+            <select id="whatsappActiveInput" name="is_active">
+              <option value="false">Off</option>
+              <option value="true">On</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="form-actions">
+          <button class="ghost-button" type="submit" value="cancel" formnovalidate>Cancel</button>
+          <button class="ghost-button" id="sendWhatsAppTestButton" type="button">Send test message</button>
+          <button class="primary-button" id="saveWhatsAppButton" type="button">Save WhatsApp settings</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="controlDialog">
+      <form id="controlForm" class="modal-form compact" method="dialog">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Access & system ops</p>
+            <h3>Control centre settings</h3>
+          </div>
+          <button class="icon-button" type="submit" value="cancel" formnovalidate aria-label="Close">x</button>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            Access profile
+            <select id="controlProfileInput" name="profileId"></select>
+          </label>
+          <label>
+            Default follow-up days
+            <input id="controlFollowUpDaysInput" name="defaultFollowUpDays" type="number" min="0" max="30">
+          </label>
+          <label>
+            Dedupe window (hari)
+            <input id="controlDedupeDaysInput" name="dedupeWindowDays" type="number" min="1" max="365">
+          </label>
+          <label>
+            Reminder lookout (hari)
+            <input id="controlReminderDaysInput" name="reminderAheadDays" type="number" min="1" max="30">
+          </label>
+          <label>
+            Auto backup
+            <select id="controlAutoBackupInput" name="autoBackupEnabled">
+              <option value="true">On</option>
+              <option value="false">Off</option>
+            </select>
+          </label>
+          <label>
+            Backup retention (hari)
+            <input id="controlBackupRetentionInput" name="backupRetentionDays" type="number" min="1" max="90">
+          </label>
+        </div>
+
+        <div class="quick-card">
+          <div class="panel-head compact">
+            <div>
+              <p class="eyebrow">Control preview</p>
+              <h3 id="controlQuickTitle">Profile & ops summary</h3>
+            </div>
+          </div>
+          <div id="controlPreview" class="preview-grid"></div>
+          <p id="controlHint" class="modal-note">
+            Gunakan profile untuk simulasi role access. Untuk production penuh nanti, layer auth sebenar boleh disambung atas struktur ini.
+          </p>
+        </div>
+
+        <div class="form-actions">
+          <button class="ghost-button" type="submit" value="cancel" formnovalidate>Cancel</button>
+          <button class="primary-button" id="saveControlButton" type="button">Save control</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="loginDialog" class="login-dialog">
+      <form id="loginForm" class="login-form">
+        <aside class="login-brand-panel" aria-label="CRM Salam Fortress secure access">
+          <span class="login-brand-mark">SF</span>
+          <div>
+            <p class="eyebrow">Secure access</p>
+            <h3>CRM Salam Fortress</h3>
+            <p class="login-brand-copy">
+              Satu akses untuk lead, campaign, lot status, report dan backup production.
+            </p>
+          </div>
+          <div class="login-proof-grid">
+            <span>HTTPS live</span>
+            <span>Role access</span>
+            <span>Webhook ready</span>
+          </div>
+        </aside>
+
+        <section class="login-auth-panel">
+          <div class="modal-head login-head">
+            <div>
+              <p class="eyebrow">Server mode authentication</p>
+              <h3 class="modal-title-light">Sign in to continue</h3>
+            </div>
+            <button class="icon-button" type="button" data-close-login="true" aria-label="Close">x</button>
+          </div>
+
+          <div class="login-message-card">
+            <p id="loginHint" class="modal-note">
+              Gunakan username dan password server mode untuk buka data live, backup, integrations dan upload fail.
+            </p>
+            <div id="loginError" class="login-access-list">
+              <span class="login-access-label">Access prepared by group</span>
+              <span class="login-chip">Admin</span>
+              <span class="login-chip">Management</span>
+              <span class="login-chip">Salam Land</span>
+              <span class="login-chip">Bumi Hayat</span>
+              <span class="login-chip">Barakah Emas</span>
+            </div>
+          </div>
+
+          <div class="form-grid login-form-grid">
+            <label>
+              Username
+              <input id="loginUsernameInput" name="username" required placeholder="Masukkan username group" autocomplete="username">
+            </label>
+            <label>
+              Password
+              <input id="loginPasswordInput" name="password" type="password" required placeholder="Masukkan password" autocomplete="current-password">
+            </label>
+          </div>
+
+          <div class="form-actions login-actions">
+            <button class="ghost-button" type="button" data-close-login="true">Cancel</button>
+            <button class="primary-button" id="loginSubmitButton" type="submit">Sign in</button>
+          </div>
+        </section>
+      </form>
+    </dialog>
+
+    <dialog id="notificationStaffDialog">
+      <form class="modal-form compact" method="dialog">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Device notification</p>
+            <h3>Pilih team sales untuk device ini</h3>
+          </div>
+          <button class="icon-button" type="button" data-close-notification-staff="true" aria-label="Close">x</button>
+        </div>
+        <p class="modal-note">
+          Pilih satu nama staff untuk device team sales, atau pilih All Salam team untuk device admin/management.
+          iPhone paling stabil bila CRM dibuka dari icon Home Screen.
+        </p>
+        <div id="notificationStaffOptions" class="notification-staff-grid"></div>
+        <div class="form-actions">
+          <button class="ghost-button" type="button" data-close-notification-staff="true">Cancel</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="./app.js?v=20260524-infotech-clean-v5"></script>
+  </body>
+</html>

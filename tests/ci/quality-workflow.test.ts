@@ -479,23 +479,28 @@ describe("Quality workflow browser evidence", () => {
     expect(uploadStep).toContain("retention-days: 1");
   });
 
-  it("lets manual capture regenerate stale reviewed evidence without weakening normal runs", () => {
-    const result = spawnSync(
-      "pnpm",
-      ["exec", "vitest", "run", "tests/ui/visual-evidence-contract.test.ts"],
-      {
-        cwd: repositoryRoot,
-        encoding: "utf8",
-        env: { ...process.env, VISUAL_CAPTURE_REQUESTED: "true" },
-      },
-    );
+  it(
+    "lets manual capture regenerate stale reviewed evidence without weakening normal runs",
+    () => {
+      const result = spawnSync(
+        "pnpm",
+        ["exec", "vitest", "run", "tests/ui/visual-evidence-contract.test.ts"],
+        {
+          cwd: repositoryRoot,
+          encoding: "utf8",
+          env: { ...process.env, VISUAL_CAPTURE_REQUESTED: "true" },
+          timeout: 20_000,
+        },
+      );
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/1 skipped/);
-    expect(visualEvidenceContractSource).toContain(
-      'it.skipIf(process.env.VISUAL_CAPTURE_REQUESTED === "true")(',
-    );
-  });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toMatch(/1 skipped/);
+      expect(visualEvidenceContractSource).toContain(
+        'it.skipIf(process.env.VISUAL_CAPTURE_REQUESTED === "true")(',
+      );
+    },
+    25_000,
+  );
 });
 
 describe("Quality workflow deployment artifacts", () => {

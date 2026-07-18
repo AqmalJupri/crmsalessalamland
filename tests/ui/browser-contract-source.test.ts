@@ -20,7 +20,7 @@ describe("B1 browser contract sources", () => {
   });
 
   it.each([
-    ["tests/e2e/crm.spec.ts", 8],
+    ["tests/e2e/crm.spec.ts", 9],
     ["tests/e2e/task6-ui.spec.ts", 4],
   ] as const)("keeps every CRM test in %s behind one file-level surface gate", (path, count) => {
     const specSource = source(path);

@@ -678,7 +678,7 @@ a {
 
   .crm-toolbar__filters {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 8.5rem;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .crm-toolbar__search,

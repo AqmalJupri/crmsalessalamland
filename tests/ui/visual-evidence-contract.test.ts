@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { extname, join, relative } from "node:path";
@@ -109,6 +110,31 @@ function expectedAssets(): string[] {
 }
 
 describe("UI visual evidence contract", () => {
+  it("loads the executable visual spec in Playwright's CommonJS transform mode", () => {
+    const result = spawnSync(
+      "pnpm",
+      ["exec", "playwright", "test", "tests/e2e/ui-visual.spec.ts", "--list"],
+      {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          APP_URL: "http://127.0.0.1:3201",
+          DATABASE_URL:
+            "postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_ui",
+          DEPLOYMENT_ENVIRONMENT: "local",
+          E2E_PORT: "3201",
+          E2E_PRODUCT_SURFACE: "crm",
+          PRODUCT_SURFACE: "crm",
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/Total: [1-9]\d* tests? in 1 file/);
+    expect(result.stderr).not.toMatch(/import\.meta|failed to load the ES module/i);
+  });
+
   it("defines only reviewed five-width scenes with explicit antialiasing tolerance", () => {
     const source = readRequired(visualSpecPath);
     const style = readRequired(visualStylePath);

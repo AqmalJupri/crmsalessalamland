@@ -37,7 +37,7 @@ const screenshotProjects = new Set([
   "desktop-chromium-1024x768",
   "desktop-chromium-1440x900",
 ]);
-const require = createRequire(import.meta.url);
+const require = createRequire(resolve(process.cwd(), "package.json"));
 
 test.use({ serviceWorkers: "block" });
 

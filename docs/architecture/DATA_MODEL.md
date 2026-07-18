@@ -1,9 +1,9 @@
 # CRM Salam Fortress V2 — Canonical Data Model
 
-- **Status:** Product model direction approved 16 July 2026; schema detail, D-19 RLS design, implementation, and every production gate remain pending/not passed
+- **Status:** Product model direction approved 16 July 2026; transactional core and synthetic migration control-plane implementation are reviewed, while remaining schema detail, D-19 RLS design, production deployment, and every production gate remain pending/not passed
 - **Database:** PostgreSQL 16+ proposed compatibility floor; production version remains open under `D-13`
-- **Foundation migration:** `db/migrations/0001_foundation.sql`
-- **Local PostgreSQL evidence:** source has 46 `CREATE TABLE`, 66 explicit `CREATE [UNIQUE] INDEX`, 50 total trigger declarations (46 ordinary plus 4 constraint triggers), and 8 `crm_*` function declarations. A clean first apply and second no-op pass on PostgreSQL 16.14; the fresh catalog has 47 public base tables including `schema_migrations`, 182 catalog indexes, 50 non-internal trigger rows (64 `information_schema` event rows), 8 `crm_*` functions, and one migration-ledger row. The ledger/source/manifest checksum is `169f78b45d72a1119969defafee5c2ab6934bb21682ebc53e90850e7651ea0de`; 57 PostgreSQL/API integration tests pass across 5 files
+- **Reviewed migration ledger:** `db/migrations/0001_foundation.sql` through `0007_reconciliation_signoff_lifecycle.sql`; exact filename, byte length, order and SHA-256 are locked by the manifest
+- **Local PostgreSQL evidence:** the original `0001` source declares 46 tables, 66 explicit indexes, 50 triggers and 8 `crm_*` functions. Additive `0002`–`0007` provide the synthetic migration/import/reconciliation control plane and sign-off guards. A fresh seven-migration catalog has 59 public tables, 247 indexes, 112 non-internal triggers and 30 `crm_*` functions; the integrated database suite passes 601 tests across 15 files. This is engineering evidence, not RLS, HA, PITR, off-site restore, capacity or production-cutover evidence
 - **Architecture decision:** `docs/architecture/ADR-001-MODULAR-MONOLITH.md`
 
 ## 1. Purpose
@@ -364,7 +364,7 @@ All tenant tables already contain the required ownership columns and indexes, so
 
 ### 12.1 Foundation migration runner
 
-The runner admits only the registered `0001_foundation.sql`. Discovery requires `NNNN_lowercase_words.sql`; non-zero-padded, duplicate-version, missing, or unregistered files fail before apply. The manifest checksum is exactly `169f78b45d72a1119969defafee5c2ab6934bb21682ebc53e90850e7651ea0de`, matching the source and fresh ledger.
+The runner admits exactly the reviewed `0001`–`0007` sequence. Discovery requires `NNNN_lowercase_words.sql`; non-zero-padded, duplicate-version, missing, extra, reordered, byte-length-mismatched, checksum-mismatched or ledger-divergent files fail before apply. The final reviewed migration is `0007_reconciliation_signoff_lifecycle.sql`, 38,328 bytes at SHA-256 `377718a38cd3af63d0e2eeceecdb2c979fa912714b6d5fc131a79a687a20a6de`.
 
 Application connects with a 10-second connect timeout. Migration execution takes a named PostgreSQL advisory lock, sets `lock_timeout = '10s'` and `statement_timeout = '5min'`, applies a new migration and ledger record transactionally, treats an exact existing checksum as a no-op, and rejects ledger/source tampering. The focused runner test covers first apply, replay no-op, and tampered-checksum failure. Readiness is migration-aware: valid configuration and database connectivity are insufficient unless the exact expected ledger is present.
 
@@ -388,7 +388,7 @@ No historical snapshot is canonical merely because it is newest or largest.
 
 ## 13. Foundation scope and deferred modules
 
-`0001_foundation.sql` creates the cross-cutting and highest-risk transactional core requested for the first production foundation. Later migrations will add:
+`0001_foundation.sql` creates the cross-cutting and highest-risk transactional core requested for the first production foundation. Reviewed migrations `0002`–`0007` add the source-neutral migration/import/reconciliation control plane and immutable sign-off safeguards. Later product migrations still must add:
 
 - branches, products/catalog/quotes and business document sequences;
 - printing job/work-order/artwork/delivery detail;

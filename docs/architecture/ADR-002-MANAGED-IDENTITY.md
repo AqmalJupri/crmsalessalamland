@@ -25,7 +25,7 @@ Use an approved managed identity provider through OpenID Connect Authorization C
 
 ## Current implementation evidence
 
-The working tree contains OIDC start/callback, state/nonce/PKCE validation, canonical safe return-path handling, pre-provisioned active human User/Membership checks, an opaque PostgreSQL session hash, current-session logout, durable resolved CRM access-decision evidence, anonymous-callback write containment, production HTTPS/origin/callback coherence checks and local database/API tests. Bounded edge/provider telemetry and rate limiting are still release work, not completed application controls. This is engineering evidence only: no managed provider, MFA/assurance policy, recovery/offboarding process, break-glass route, production secret, hosted CI run or real-provider callback has been approved or exercised. Every gate remains **Not passed**.
+The working tree contains OIDC start/callback, state/nonce/PKCE validation, canonical safe return-path handling, pre-provisioned active human User/Membership checks, an opaque PostgreSQL session hash, current-session logout, durable resolved CRM access-decision evidence, anonymous-callback write containment, production HTTPS/origin/callback coherence checks and local database/API tests. Bounded edge/provider telemetry and rate limiting are still release work, not completed application controls. This is engineering evidence only: no final green promoted release, approved managed provider/MFA policy, production secret, recovery/offboarding process, break-glass route or real-provider callback has been approved or exercised. Every gate remains **Not passed**.
 
 ## Consequences
 

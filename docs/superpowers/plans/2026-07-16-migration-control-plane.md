@@ -4,9 +4,11 @@
 
 **Goal:** Build the source-neutral, checksum-idempotent migration control plane required to import Salam CRM JSON, Tasha SQLite, Niagawan CSV, and Barakah Sheet snapshots without guessing mappings, losing lineage, or permitting dual writable authority.
 
-**Architecture:** Add the forward-compatible `0002_migration_platform.sql` control-plane migration, the narrowly scoped `0003_reconciliation_bytewise_order.sql` locale-independence correction, the `0004_membership_user_identity_guard.sql` immutable-provenance guard, the `0005_reconciliation_typed_result_truth.sql` database truth constraint, the `0006_reconciliation_finite_amounts.sql` non-finite numeric guard, and a separate Drizzle migration schema. The control plane registers source/domain authority scopes and immutable transform versions, records artifact checksums, stages protected row evidence, quarantines ambiguous/invalid rows, applies approved rows through canonical transactional writers, records source-to-target lineage, reconciles typed metrics, and permits one-way signed authority transitions. Source adapters remain separate sub-projects and consume these contracts.
+**Architecture:** Add the forward-compatible `0002_migration_platform.sql` control-plane migration, the narrowly scoped `0003_reconciliation_bytewise_order.sql` locale-independence correction, the `0004_membership_user_identity_guard.sql` immutable-provenance guard, the `0005_reconciliation_typed_result_truth.sql` database truth constraint, the `0006_reconciliation_finite_amounts.sql` non-finite numeric guard, the `0007_reconciliation_signoff_lifecycle.sql` transaction-identity, sign-time actor snapshot and durable-effect-proof guard, and a separate Drizzle migration schema. The control plane registers source/domain authority scopes and immutable transform versions, records artifact checksums, stages protected row evidence, quarantines ambiguous/invalid rows, applies approved rows through canonical transactional writers, records source-to-target lineage, reconciles typed metrics, and permits one-way signed authority transitions. Source adapters remain separate sub-projects and consume these contracts.
 
 **Tech Stack:** PostgreSQL 16.14, Drizzle ORM 0.45.2, TypeScript 6.0.3, Zod 4.4.3, Node.js streams/crypto, Vitest 4.1.10, and the existing checksum-locked migration runner.
+
+**Tracking note:** The unchecked boxes below preserve the original RED/GREEN acceptance contracts and implementation sequence; they are not the current execution status. Use each task's explicit **Execution status** and the tracked `.superpowers/sdd/progress.md` ledger for current evidence. A task marked complete means its implementation and task-level review are complete, while Task 11 still owns combined hosted closure.
 
 ## Global Constraints
 
@@ -626,6 +628,8 @@ export async function completeDryRun(
 
 ## Task 8: Apply approved rows with canonical lineage
 
+**Execution status:** Complete in `1ef39b5`; final combined hosted release verification remains part of Task 11.
+
 **Files:**
 
 - Create: `src/server/migration/apply-batch.ts`
@@ -718,6 +722,8 @@ export async function applyImportBatch<TTransaction, TValue>(
 
 ## Task 9: Reconcile and sign imported evidence
 
+**Execution status:** Complete in `d77fcc0..63188b2`; final independent spec and quality reviews approved after concurrency, historical replay and bounded-history corrections.
+
 **Files:**
 
 - Create: `src/server/migration/reconcile-batch.ts`
@@ -808,6 +814,8 @@ export async function signReconciliationRun(
 
 ## Task 9A: Make reconciliation ordering locale-independent
 
+**Execution status:** Complete in `17dc01e`; `0003` is checksum-frozen.
+
 **Files:**
 
 - Create: `db/migrations/0003_reconciliation_bytewise_order.sql`
@@ -826,6 +834,8 @@ export async function signReconciliationRun(
 
 ## Task 9B: Make actor provenance and typed reconciliation truth immutable
 
+**Execution status:** Complete in `b2f534b..469ef9f`; `0004`–`0006` are checksum-frozen.
+
 **Files:**
 
 - Create: `db/migrations/0004_membership_user_identity_guard.sql`
@@ -842,12 +852,20 @@ export async function signReconciliationRun(
 - [ ] Add RED direct-SQL regressions proving typed reconciliation truth is derived in both directions: unequal COUNT/amount/checksum values cannot claim `passed=true`, and equal values cannot claim `passed=false`.
 - [ ] Add `0005_reconciliation_typed_result_truth.sql` as a validated additive CHECK constraint over `COUNT`, `AMOUNT`, `FINANCE_BALANCE`, and `CHECKSUM`. Existing and future rows must pass before the migration ledger advances.
 - [ ] Add RED AMOUNT and FINANCE_BALANCE regressions for PostgreSQL `NaN`, `Infinity`, and `-Infinity`, then add `0006_reconciliation_finite_amounts.sql` as a validated additive CHECK. PostgreSQL numeric special values must never satisfy financial reconciliation equality.
-- [ ] Register and checksum-lock both migrations, update runtime ledger evidence, and prove upgrade from the exact `0001`-`0003` prefix applies only `0004` and `0005` without changing earlier ledger timestamps.
+- [ ] Register and checksum-lock all three migrations, update runtime ledger evidence, and prove upgrade from the exact `0001`–`0003` prefix applies only `0004`, `0005`, and `0006` without changing earlier ledger timestamps.
 - [ ] Update the verifier-race test that previously reassigned `memberships.user_id`: the database must now reject that mutation itself, while capability/status/validity races remain service recheck coverage.
-- [ ] Independently review both forward migrations and rerun every migration/import/reconciliation integration suite.
+- [ ] Independently review all three forward migrations and rerun every migration/import/reconciliation integration suite.
 - [ ] Commit: `fix(migration): lock provenance and reconciliation truth`
 
+### Reviewed forward correction: `0007_reconciliation_signoff_lifecycle.sql`
+
+**Execution status:** Complete in `31dd049..25afbc3`; frozen at 38,328 bytes and SHA-256 `377718a38cd3af63d0e2eeceecdb2c979fa912714b6d5fc131a79a687a20a6de`.
+
+The additive correction binds sign-off to the full top-level `xid8`, database-owned `clock_timestamp()`, immutable user/membership snapshots, tenant-scoped proof indexes and exact audit/outbox timestamps. It serializes batch → membership → user in deterministic order with fail-fast contention, rejects same-transaction transient authority changes, preserves later legitimate offboarding, and retains compatibility only for legacy all-null snapshots from the reviewed prefix.
+
 ## Task 10: Add safe non-production inspection commands and synthetic contracts
+
+**Execution status:** Complete in `ae72341..8935521`; final combined hosted release verification remains part of Task 11.
 
 **Files:**
 
@@ -879,6 +897,8 @@ export async function signReconciliationRun(
 - [ ] Commit: `feat(migration): add safe operator workflow`
 
 ## Task 11: Verify the complete control plane
+
+**Execution status:** Implementation and independent review are complete in `ac07905..985e1cf`; closure remains pending the frozen combined SHA, reviewed Linux visual evidence/provenance and a fully green hosted Quality run.
 
 **Files:**
 

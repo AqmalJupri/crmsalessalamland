@@ -134,7 +134,7 @@ Stage histories, consent decisions, finance ledger entries, and audit events are
 
 All runtime roles use the same immutable release version. Database migrations run once as a controlled deployment job before compatible application traffic is enabled. A release must remain backward compatible during rolling deployment or use an approved maintenance/cutover window.
 
-The current foundation runner registers only `0001_foundation.sql` at checksum `169f78b45d72a1119969defafee5c2ab6934bb21682ebc53e90850e7651ea0de`, rejects non-zero-padded/unregistered/changed files, uses an advisory lock with a 10-second lock timeout and five-minute statement timeout, and proves first apply, exact no-op replay and tampered-ledger failure. Application readiness also requires the exact expected ledger. These controls reduce local migration ambiguity but are not hosted deployment, rollback, HA/PITR or restore evidence.
+The reviewed runner now admits exactly seven checksum- and byte-length-locked migrations, `0001` through `0007`, under bounded advisory locking. Engineering tests prove transactional first apply, exact timestamp-preserving replay, ledger tamper rejection and isolated CI dump/restore identity. These controls are not hosted promotion, rollback compatibility, HA, PITR, off-site backup, RPO/RTO or production restore evidence.
 
 The web/API role holds no unique state and can scale horizontally. Worker queues are separated by latency and risk. Scheduler singleton behavior is guaranteed through a durable lock. Readiness verifies required database/Redis/object-store dependencies for the role; liveness only verifies process health.
 

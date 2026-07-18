@@ -822,6 +822,8 @@ Modules interact through defined service interfaces and domain events, not cross
 
 ### 13.4 Current hardened-foundation evidence boundary
 
+The reviewed migration manifest now locks the exact filename, byte length and SHA-256 sequence for `0001` through `0007`. Local execution proves transactional apply, exact no-op replay with unchanged timestamped ledger, tamper rejection, isolated dump/restore ledger identity, and readiness rejection on ledger drift; hosted workflow contract tests require the same sequence, but a final green hosted run remains open. The synthetic source-neutral control plane covers source registration, staging, quarantine, approval, canonical apply, lineage, reconciliation and signed proof. This is not evidence that any real source adapter, mapping, final extract, business reconciliation or production cutover has passed.
+
 The current migration runner admits only strictly zero-padded registered filenames, validates the exact manifest/source/ledger checksum, uses a PostgreSQL advisory lock with bounded lock/statement timeouts, applies first-run changes transactionally, treats an exact replay as a no-op, and fails on ledger tampering. Readiness requires the expected migration ledger rather than database connectivity alone. Production environment parsing requires coherent HTTPS `APP_URL`, OIDC issuer and exact callback origin/path. Per-request CSP nonces are enforced on normal pages, dynamic 404 responses, purpose-prefetch HTML and unexpected prefetch-header values. Exact framework RSC prefetches intentionally skip nonce rendering but retain a non-executable `default-src 'none'` fallback CSP and `no-store`. A `beforeFiles` contract guard rewrites `next-router-prefetch=1` without exact `rsc=1` to a bounded non-cacheable `400`, preventing the malformed request from occupying the Next renderer; production ingress must still enforce independent rate limits and origin request timeouts.
 
 These are local foundation controls, not proof of the target topology. No production environment, worker, queue dispatcher, object store, telemetry pipeline, backup/PITR automation, restore rehearsal, or remotely promoted release is evidenced.
@@ -1137,7 +1139,19 @@ No archive is declared canonical solely because it is newest or largest.
 - missing/renamed/deleted Barakah Sheet/tab/range and post-snapshot row change;
 - both UIs reading/updating one canonical record and simultaneous-cutover smoke/rollback-forward rehearsal.
 
-### 20.3 Latest settled local evidence
+### 20.3 Evidence ledger
+
+#### 19 July 2026 Round 1 integrated checkpoint
+
+| Evidence | Settled result | Boundary |
+|---|---|---|
+| Lint and TypeScript | PASS on integrated Round 1 | Local shell uses Node 24.x and emits the expected engine warning; exact Node 22.22.0 remains a hosted-workflow proof |
+| High-confidence coverage | 75 files; 918 passed and one visual-provenance assertion skipped only in explicit capture mode; 92.22% statements, 85.87% branches, 95.19% functions, 93.24% lines | Normal mode correctly rejects the stale reviewed visual provenance until Linux recapture and manual review |
+| All-production-source coverage | 75 files, 1,355/1,355 pass; 82.56% statements, 77.99% branches, 90.41% functions, 83.86% lines | Coverage is engineering evidence, not UAT, capacity, penetration, privacy or production approval |
+| PostgreSQL 16 migration/control plane | 15 files, 601/601 pass; exact seven-row apply/replay ledger; separate custom dump/restore has identical ledger; fresh catalog has 59 tables, 247 indexes, 112 non-internal triggers and 30 `crm_*` functions | Synthetic source-neutral evidence only; not real-adapter reconciliation, RLS, HA, production PITR/off-site restore or cutover proof |
+| Dual-surface runtime | CRM and Tasha production builds plus runtime/security/readiness smoke pass; non-visual browser contracts pass CRM 155 with 20 inapplicable skips and Tasha 88 with 101 inapplicable skips | Final Linux 60-image capture/review, named screen-reader sign-off and final green hosted Quality remain open |
+
+#### 15 July 2026 foundation baseline (historical)
 
 | Evidence | Settled result | Boundary |
 |---|---|---|
@@ -1148,7 +1162,7 @@ No archive is declared canonical solely because it is newest or largest.
 | Demo browser | 7 pass, 1 intentional desktop skip | Proves responsive demo journeys, no Lead value, dynamic client totals, modal interaction and mobile-drawer containment; unit/route evidence separately proves seeded read models and synthetic counts are absent for non-demo viewers. Lead reads and Opportunity writes remain unimplemented |
 | Dependency audit | `pnpm audit --audit-level moderate` is clean with one resolved PostCSS `8.5.16` version | A package audit is not a full application, container, IaC, DAST or penetration review |
 
-Reproducibility is authored around Node.js `22.22.0`, pnpm `11.9.0`, Next.js `16.2.10`, React `19.2.7`, TypeScript `6.0.3`; commit-pinned checkout `34e114876b0b11c390a56381ad16ebd13914f8d5`, pnpm setup `b906affcce14559ad1aafd4ab0e942779e9f58b1`, and Node setup `49933ea5288caeca8642d1e84afbd3f7d6820020`; and PostgreSQL image `postgres:16.14-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777`. The pinned GitHub Actions workflow is authored but has not run remotely.
+Reproducibility is authored around Node.js `22.22.0`, pnpm `11.9.0`, Next.js `16.2.10`, React `19.2.7`, TypeScript `6.0.3`; commit-pinned checkout `34e114876b0b11c390a56381ad16ebd13914f8d5`, pnpm setup `b906affcce14559ad1aafd4ab0e942779e9f58b1`, and Node setup `49933ea5288caeca8642d1e84afbd3f7d6820020`; and PostgreSQL image `postgres:16.14-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777`. The pinned workflow has executed remotely, but no final green combined-source release run, immutable promoted artifact or production deployment exists. Earlier runs intentionally failed closed on stale visual provenance while final Linux baselines remained unreviewed.
 
 The explicit module `403` boundary currently relies on pinned Next.js `experimental.authInterrupts`. Local production build/runtime coverage reduces regression risk but does not replace a release-time framework-risk decision or migration to a stable equivalent.
 

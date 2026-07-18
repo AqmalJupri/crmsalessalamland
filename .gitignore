@@ -20,7 +20,12 @@ test-results/
 
 # generated/database
 drizzle/meta/
-.superpowers/
+# Keep local superpowers state ignored, except the reviewed SDD evidence ledger.
+.superpowers/*
+!.superpowers/sdd/
+.superpowers/sdd/*
+!.superpowers/sdd/.gitignore
+!.superpowers/sdd/progress.md
 .worktrees/
 *.sqlite
 *.sqlite-*

@@ -207,6 +207,8 @@ flowchart LR
 
 Internal UAT may be phased. Production go-live is simultaneous for all three approved business-unit slices; no unit is declared production-live early.
 
+**Engineering checkpoint — 19 July 2026:** The generic synthetic migration control plane and its seven checksum-frozen migrations are implemented and independently reviewed. This checkpoint does not register or approve the four real adapters, source mappings, final extracts/cutoffs, business reconciliation, authority switch or production cutover.
+
 ## 8. Production infrastructure and security
 
 ### 8.1 Isolation decision
@@ -341,6 +343,11 @@ These inputs do not change the approved architecture but block later design/impo
 - provider sender/account/form ownership, consent purposes, templates, and credentials through a secret channel;
 - IdP provider/tenant/region and security/privacy/operations approvals;
 - legal controller/Business Unit relationship and retention/privacy validation.
+- dedicated production account, region, sizing, high-availability and connection-budget approval;
+- Cloudflare/DNS change authority and named cutover owner;
+- backup provider, region, retention, RPO/RTO and encryption-key custodian;
+- measured concurrency/data-volume envelope for capacity tests;
+- named Security, Operations, Finance, Privacy and cutover approvers plus the outage/hypercare roster.
 
 ## 13. Design completion criteria
 

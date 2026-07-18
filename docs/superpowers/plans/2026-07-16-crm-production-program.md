@@ -26,7 +26,7 @@
 
 ## 1. Baseline and release truth
 
-The executable baseline is branch `codex/production-foundation` at or after commit `732b80eebec22dfffa4f1555d7565229a52d53c7`. The baseline already provides:
+The historical executable baseline was branch `codex/production-foundation` at or after commit `732b80eebec22dfffa4f1555d7565229a52d53c7`. It provided:
 
 - a checksum-locked `0001_foundation.sql` migration and migration-aware readiness;
 - managed-OIDC start/callback and server-side session foundations;
@@ -34,7 +34,7 @@ The executable baseline is branch `codex/production-foundation` at or after comm
 - tested Lead create/transition slices and selected database/domain invariants;
 - a responsive demo shell and CI quality workflow.
 
-It does not yet provide production infrastructure, RLS, a migration/import control plane, live read models for most modules, the Tasha-specific surface, durable queue workers, private object storage, telemetry, PITR/restore evidence, complete business workflows, or migration/UAT/cutover evidence.
+The 19 July Round 1 checkpoint supersedes that baseline for engineering truth: two UI surfaces and the generic synthetic migration/import/reconciliation control plane are implemented and reviewed. It still does not provide production infrastructure, RLS, real-source adapters, live read models for most modules, durable queue workers, private object storage, telemetry, production PITR/off-site restore evidence, complete business workflows, or migration/UAT/cutover evidence.
 
 ## 2. Sub-project boundaries
 

@@ -22,6 +22,12 @@ test-results/
 drizzle/meta/
 .superpowers/
 .worktrees/
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
 
 # operating systems and editors
 .DS_Store
@@ -34,3 +40,15 @@ exports/
 backups/
 runtime*.json
 auth*.json
+
+# governed migration data (never repository content)
+source-data/
+source-extracts/
+source-exports/
+sheet-snapshots/
+protected-evidence/
+protected-evidence-cache/
+*.[cC][sS][vV]
+*.[tT][sS][vV]
+tests/fixtures/import/*
+!tests/fixtures/import/synthetic-source-manifest.json

@@ -35,6 +35,17 @@ Demo mode bypasses real authentication and database writes. A successful UI acti
 
 Do not use example credentials or an unapproved identity tenant outside local development.
 
+## Safe migration inspection
+
+Two read-only operator commands are available for controlled non-production checks:
+
+- `DEPLOYMENT_ENVIRONMENT=local pnpm migration:inspect` validates only the repository's fixed, unmistakably synthetic manifest. It accepts no path, source file, customer data, or actor argument.
+- `DEPLOYMENT_ENVIRONMENT=staging DATABASE_URL=... pnpm migration:status` opens one short-lived PostgreSQL connection, starts a read-only transaction, attests `transaction_read_only`, verifies the exact reviewed migration ledger, and emits a capped JSON status view containing only IDs, states, decimal-string counts, safe reason codes, timestamps, and correlation IDs.
+
+Both commands deny missing, unknown, or `production` deployment labels, deny `NODE_ENV=production`, accept exactly one named read-only command, and reduce failures to fixed reason codes without printing arguments, URLs, credentials, source rows, evidence references, PII, or database errors. `DEPLOYMENT_ENVIRONMENT` is a self-asserted safety gate, not production authorization. Staging inspection must run in a separately controlled non-production operator process with its own read-only credentials. Production CLI access remains blocked until the database target can be independently attested and an approved narrow production inspection role is available; production mutation will require authenticated command routes with derived actor identity, scoped capability checks, and audit provenance.
+
+Customer SQLite/database files, CSV/TSV extracts, source/export directories, Sheet snapshots, and protected-evidence caches are ignored. The only allowlisted import fixture is `tests/fixtures/import/synthetic-source-manifest.json`.
+
 ## Verification
 
 - `pnpm verify` runs lint, TypeScript, the high-confidence unit coverage gate, the all-production-source coverage floor, and a production build.

@@ -1,0 +1,23 @@
+{
+  "fixture_kind": "SYNTHETIC_MIGRATION_SOURCE_MANIFEST",
+  "schema_version": "1.0.0",
+  "source_id": "synthetic-source-fixture",
+  "batch_id": "synthetic-batch-fixture",
+  "correlation_id": "synthetic-correlation-fixture",
+  "state": "REGISTERED",
+  "counts": {
+    "total": "0",
+    "staged": "0",
+    "valid": "0",
+    "rejected": "0",
+    "quarantined": "0",
+    "hidden": "0",
+    "approved": "0",
+    "imported": "0",
+    "no_op": "0"
+  },
+  "reason_codes": [
+    "SYNTHETIC_FIXTURE_ONLY"
+  ],
+  "captured_at": "2000-01-01T00:00:00.000Z"
+}

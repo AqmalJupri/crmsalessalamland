@@ -188,8 +188,9 @@ jobs:
           VISUAL_BASELINE_CAPTURE: reviewed-linux
         run: |
           unset OIDC_ISSUER OIDC_CLIENT_ID OIDC_CLIENT_SECRET OIDC_REDIRECT_URI
-          pnpm test:e2e:crm tests/e2e/ui-visual.spec.ts --update-snapshots
-          pnpm test:e2e:tasha tests/e2e/ui-visual.spec.ts --update-snapshots
+          # `changed` may retain an old image when a real change is within comparison tolerance.
+          pnpm test:e2e:crm tests/e2e/ui-visual.spec.ts --update-snapshots=all
+          pnpm test:e2e:tasha tests/e2e/ui-visual.spec.ts --update-snapshots=all
           pnpm exec tsx scripts/ci/write-visual-baseline-provenance.ts
 
       - name: Upload Linux visual baseline candidates

@@ -462,11 +462,12 @@ describe("Quality workflow browser evidence", () => {
     expect(captureStep).toContain("env.VISUAL_CAPTURE_REQUESTED == 'true'");
     expect(captureStep).toContain("VISUAL_BASELINE_CAPTURE: reviewed-linux");
     expect(captureStep).toContain(
-      "pnpm test:e2e:crm tests/e2e/ui-visual.spec.ts --update-snapshots",
+      "pnpm test:e2e:crm tests/e2e/ui-visual.spec.ts --update-snapshots=all",
     );
     expect(captureStep).toContain(
-      "pnpm test:e2e:tasha tests/e2e/ui-visual.spec.ts --update-snapshots",
+      "pnpm test:e2e:tasha tests/e2e/ui-visual.spec.ts --update-snapshots=all",
     );
+    expect(captureStep).not.toMatch(/--update-snapshots(?:\s|$)/);
     expect(captureStep).toContain(
       "pnpm exec tsx scripts/ci/write-visual-baseline-provenance.ts",
     );

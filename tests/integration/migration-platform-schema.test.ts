@@ -291,6 +291,9 @@ async function signReconciliationWithProof(
   runId: string,
   options: {
     actorType?: "SERVICE" | "USER";
+    auditCreatedAtOffsetMs?: number;
+    auditOccurredAtOffsetMs?: number;
+    auditRecordedAtOffsetMs?: number;
     auditActorUserId?: string;
     auditChangeSummary?: postgres.JSONValue;
     auditCorrelationId?: string;
@@ -302,7 +305,12 @@ async function signReconciliationWithProof(
     outboxCorrelationId?: string;
     outboxEventVersion?: number;
     outboxPayload?: postgres.JSONValue;
+    outboxCreatedAtOffsetMs?: number;
+    outboxOccurredAtOffsetMs?: number;
     signerMembershipId?: string;
+    beforeProof?: (db: TestSql) => Promise<void>;
+    databaseOwnedSignedAt?: boolean;
+    deferConstraintCheck?: boolean;
   } = {},
 ): Promise<void> {
   const signerMembershipId = options.signerMembershipId ?? ids.membershipOrgWide;
@@ -312,15 +320,23 @@ async function signReconciliationWithProof(
       : ids.userBusinessUnit;
   const approvalReason = "Synthetic independent reconciliation review";
   const actorType = options.actorType ?? "USER";
-  const [signedRun] = await db<{ version: number }[]>`
-    update reconciliation_runs
-    set status = 'SIGNED', signed_by_membership_id = ${signerMembershipId},
-        signed_at = transaction_timestamp()
-    where id = ${runId}
-    returning version::int
-  `;
+  const [signedRun] = options.databaseOwnedSignedAt !== false
+    ? await db<{ version: number }[]>`
+        update reconciliation_runs
+        set status = 'SIGNED', signed_by_membership_id = ${signerMembershipId}
+        where id = ${runId}
+        returning version::int
+      `
+    : await db<{ version: number }[]>`
+        update reconciliation_runs
+        set status = 'SIGNED', signed_by_membership_id = ${signerMembershipId},
+            signed_at = statement_timestamp()
+        where id = ${runId}
+        returning version::int
+      `;
   if (!signedRun) throw new Error("Expected reconciliation run to be signed.");
   await db`update import_batches set status = 'RECONCILED' where id = ${batchId}`;
+  await options.beforeProof?.(db);
   const effect = {
     schemaVersion: 1,
     runId,
@@ -334,14 +350,27 @@ async function signReconciliationWithProof(
     await db`
       insert into audit_events (
         organization_id, business_unit_id, actor_type, actor_user_id, action,
-        target_type, target_id, outcome, reason, correlation_id, change_summary
+        target_type, target_id, outcome, reason, correlation_id, change_summary,
+        occurred_at, recorded_at, created_at
       ) values (
         ${ids.organization}, ${ids.businessUnit}, ${actorType},
         ${options.auditActorUserId ?? signerUserId},
         'MIGRATION_RECONCILIATION_RUN_SIGNED', 'RECONCILIATION_RUN', ${runId},
         'SUCCESS', ${options.auditReason ?? approvalReason},
         ${options.auditCorrelationId ?? batchId},
-        ${db.json(options.auditChangeSummary ?? effect)}
+        ${db.json(options.auditChangeSummary ?? effect)},
+        (
+          select signed_at + ${options.auditOccurredAtOffsetMs ?? 0} * interval '1 millisecond'
+          from reconciliation_runs where id = ${runId}
+        ),
+        (
+          select signed_at + ${options.auditRecordedAtOffsetMs ?? 0} * interval '1 millisecond'
+          from reconciliation_runs where id = ${runId}
+        ),
+        (
+          select signed_at + ${options.auditCreatedAtOffsetMs ?? 0} * interval '1 millisecond'
+          from reconciliation_runs where id = ${runId}
+        )
       )
     `;
   }
@@ -350,7 +379,7 @@ async function signReconciliationWithProof(
       insert into outbox_events (
         organization_id, business_unit_id, event_type, event_version,
         aggregate_type, aggregate_id, aggregate_version, actor_type, actor_user_id,
-        correlation_id, payload
+        correlation_id, payload, occurred_at, created_at
       ) values (
         ${ids.organization}, ${ids.businessUnit},
         'crm.migration.reconciliation_run_signed', ${options.outboxEventVersion ?? 1},
@@ -358,11 +387,21 @@ async function signReconciliationWithProof(
         ${options.outboxAggregateVersion ?? signedRun.version}, ${actorType},
         ${options.outboxActorUserId ?? signerUserId},
         ${options.outboxCorrelationId ?? batchId},
-        ${db.json(options.outboxPayload ?? effect)}
+        ${db.json(options.outboxPayload ?? effect)},
+        (
+          select signed_at + ${options.outboxOccurredAtOffsetMs ?? 0} * interval '1 millisecond'
+          from reconciliation_runs where id = ${runId}
+        ),
+        (
+          select signed_at + ${options.outboxCreatedAtOffsetMs ?? 0} * interval '1 millisecond'
+          from reconciliation_runs where id = ${runId}
+        )
       )
     `;
   }
-  await db.unsafe("set constraints all immediate");
+  if (options.deferConstraintCheck !== true) {
+    await db.unsafe("set constraints all immediate");
+  }
 }
 
 async function promoteLiveBatch(
@@ -500,7 +539,7 @@ describe("migration control-plane catalog", () => {
       import_rows: ["id", "organization_id", "business_unit_id", "batch_id", "source_row_key", "row_number", "source_object_type", "source_record_id", "source_locator", "row_sha256", "raw_evidence_ref", "normalized_evidence_ref", "normalized_sha256", "outcome", "error_code", "error_metadata", "resolved_link_id", "version", "created_at", "updated_at"],
       legacy_object_links: ["id", "organization_id", "business_unit_id", "migration_source_id", "import_row_id", "source_object_type", "source_row_key", "link_version", "supersedes_link_id", "destination_entity_type", "destination_entity_id", "correction_reason", "created_by_membership_id", "created_at"],
       quarantine_items: ["id", "organization_id", "business_unit_id", "import_row_id", "reason_code", "reason_metadata", "status", "resolution", "resolved_by_membership_id", "resolved_at", "resolution_reason", "version", "created_at", "updated_at"],
-      reconciliation_runs: ["id", "organization_id", "business_unit_id", "batch_id", "run_no", "status", "plan_artifact_ref", "plan_sha256", "required_checks", "required_checks_sha256", "required_check_count", "passed_check_count", "failed_check_count", "signed_by_membership_id", "signed_at", "version", "created_at", "updated_at"],
+      reconciliation_runs: ["id", "organization_id", "business_unit_id", "batch_id", "run_no", "status", "plan_artifact_ref", "plan_sha256", "required_checks", "required_checks_sha256", "required_check_count", "passed_check_count", "failed_check_count", "signed_by_membership_id", "signed_at", "signed_transaction_id", "signed_actor_user_id", "signed_actor_type", "signed_user_status", "signed_membership_business_unit_id", "signed_membership_status", "signed_membership_valid_from", "signed_membership_valid_until", "version", "created_at", "updated_at"],
       reconciliation_results: ["id", "organization_id", "business_unit_id", "run_id", "check_kind", "check_key", "scope_key", "source_count", "target_count", "source_amount", "target_amount", "measure_unit", "decimal_scale", "source_checksum", "target_checksum", "passed", "evidence_metadata", "created_at"],
     };
     for (const [tableName, names] of Object.entries(requiredColumns)) {
@@ -1389,6 +1428,63 @@ describe("migration control-plane deferred invariants", () => {
     }
   });
 
+  it("uses an exact full transaction id instead of lossy tuple xmin inference", async () => {
+    const [column] = await sql<{ data_type: string; udt_name: string }[]>`
+      select data_type, udt_name
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'reconciliation_runs'
+        and column_name = 'signed_transaction_id'
+    `;
+    expect(column).toEqual({ data_type: "xid8", udt_name: "xid8" });
+
+    const [assertion] = await sql<{ definition: string }[]>`
+      select pg_get_functiondef(
+        'crm_assert_reconciliation_sign_lifecycle(uuid)'::regprocedure
+      ) as definition
+    `;
+    const [validator] = await sql<{ definition: string }[]>`
+      select pg_get_functiondef(
+        'crm_validate_reconciliation_sign_lifecycle()'::regprocedure
+      ) as definition
+    `;
+    for (const definition of [assertion?.definition, validator?.definition]) {
+      expect(definition).toContain("signed_transaction_id");
+      expect(definition).toContain("pg_current_xact_id()");
+      expect(definition).not.toMatch(/\bxmin\b/);
+      expect(definition).not.toContain("pg_xact_status");
+      expect(definition).not.toMatch(/::(?:pg_catalog\.)?xid(?!8)/);
+    }
+  });
+
+  it("requires exact proof timestamps only for database-owned sign snapshots", async () => {
+    const [assertion] = await sql<{ definition: string }[]>`
+      select pg_get_functiondef(
+        'crm_assert_reconciliation_sign_lifecycle(uuid)'::regprocedure
+      ) as definition
+    `;
+    expect(assertion?.definition).toMatch(
+      /IF\s+signed_transaction_id IS NOT NULL\s+AND\s+\(\s*audit_occurred_at IS DISTINCT FROM signed_at/,
+    );
+    expect(assertion?.definition).toMatch(
+      /IF\s+signed_transaction_id IS NOT NULL\s+AND\s+\(\s*outbox_occurred_at IS DISTINCT FROM signed_at/,
+    );
+  });
+
+  it("tenant-scopes signed proof lookups to the reviewed partial indexes", async () => {
+    const [assertion] = await sql<{ definition: string }[]>`
+      select pg_get_functiondef(
+        'crm_assert_reconciliation_sign_lifecycle(uuid)'::regprocedure
+      ) as definition
+    `;
+    expect(assertion?.definition).toMatch(
+      /audit\.organization_id = batch_organization_id[\s\S]*audit\.business_unit_id = batch_business_unit_id[\s\S]*audit\.target_id = signed_run_id/,
+    );
+    expect(assertion?.definition).toMatch(
+      /event\.organization_id = batch_organization_id[\s\S]*event\.business_unit_id = batch_business_unit_id[\s\S]*event\.aggregate_id = signed_run_id/,
+    );
+  });
+
   it("requires exact reconciliation tuples before sign-off and freezes signed evidence", async () => {
     const fixture = await insertSourceAuthority(sql);
     const transformId = await insertTransform(sql, fixture.sourceId);
@@ -1477,7 +1573,7 @@ describe("migration control-plane deferred invariants", () => {
     await expect(sql`
       update reconciliation_runs
       set status = 'SIGNED', signed_by_membership_id = ${ids.membershipOrgWide},
-          signed_at = transaction_timestamp()
+          signed_at = statement_timestamp()
       where id = ${runId}
     `).rejects.toMatchObject({ code: "55000" });
   });
@@ -1498,6 +1594,74 @@ describe("migration control-plane deferred invariants", () => {
           signed_at = transaction_timestamp() + ${offsetHours} * interval '1 hour'
       where id = ${runId}
     `).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("rejects a transaction timestamp after wall time has advanced", async () => {
+    const fixture = await insertSourceAuthority(sql);
+    const transformId = await insertTransform(sql, fixture.sourceId);
+    const { liveBatchId } = await insertDryRunAndLiveBatch(sql, fixture.sourceId, transformId);
+    await promoteLiveBatch(sql, liveBatchId, "APPLIED");
+    const runId = await insertPassedCountReconciliation(sql, liveBatchId);
+
+    await expect(sql.begin(async (transaction) => {
+      await transaction.unsafe("select pg_sleep(0.02)");
+      await transaction`
+        update reconciliation_runs
+        set status = 'SIGNED', signed_by_membership_id = ${ids.membershipOrgWide},
+            signed_at = transaction_timestamp()
+        where id = ${runId}
+      `;
+    })).rejects.toMatchObject({
+      code: "23514",
+      message: expect.stringMatching(/database-owned wall time/i),
+    });
+  });
+
+  it("evaluates signer expiry against sign statement wall time", async () => {
+    const fixture = await insertSourceAuthority(sql);
+    const transformId = await insertTransform(sql, fixture.sourceId);
+    const { liveBatchId } = await insertDryRunAndLiveBatch(sql, fixture.sourceId, transformId);
+    await promoteLiveBatch(sql, liveBatchId, "APPLIED");
+    const runId = await insertPassedCountReconciliation(sql, liveBatchId);
+
+    await expect(sql.begin(async (transaction) => {
+      await transaction`
+        update memberships
+        set valid_until = clock_timestamp() + interval '10 milliseconds'
+        where id = ${ids.membershipOrgWide}
+      `;
+      await transaction.unsafe("select pg_sleep(0.03)");
+      await signReconciliationWithProof(transaction, liveBatchId, runId);
+    })).rejects.toMatchObject({
+      code: "23514",
+      message: expect.stringMatching(/wall-clock sign-off/i),
+    });
+  });
+
+  it("owns the exact sign timestamp inside the database wall clock", async () => {
+    const fixture = await insertSourceAuthority(sql);
+    const transformId = await insertTransform(sql, fixture.sourceId);
+    const { liveBatchId } = await insertDryRunAndLiveBatch(sql, fixture.sourceId, transformId);
+    await promoteLiveBatch(sql, liveBatchId, "APPLIED");
+    const runId = await insertPassedCountReconciliation(sql, liveBatchId);
+
+    await expect(sql.begin(async (transaction) => {
+      await signReconciliationWithProof(transaction, liveBatchId, runId, {
+        databaseOwnedSignedAt: true,
+      });
+    })).resolves.not.toThrow();
+
+    const [signedRun] = await sql<{
+      signed_at: Date;
+      transaction_time: Date;
+    }[]>`
+      select signed_at, transaction_timestamp() as transaction_time
+      from reconciliation_runs where id = ${runId}
+    `;
+    expect(signedRun?.signed_at).toBeInstanceOf(Date);
+    expect(signedRun?.signed_at.getTime()).toBeLessThanOrEqual(
+      signedRun?.transaction_time.getTime() ?? 0,
+    );
   });
 
   it("rejects a bare APPLIED to RECONCILED batch transition", async () => {
@@ -1611,6 +1775,76 @@ describe("migration control-plane deferred invariants", () => {
 
   it.each([
     [
+      "membership revoke then restore",
+      "update memberships set status = 'REVOKED' where id = $1",
+      "update memberships set status = 'ACTIVE' where id = $1",
+      ids.membershipOrgWide,
+    ],
+    [
+      "user type change then restore",
+      "update users set user_type = 'SERVICE' where id = $1",
+      "update users set user_type = 'HUMAN' where id = $1",
+      ids.userOrgWide,
+    ],
+    [
+      "user suspension then restore",
+      "update users set status = 'SUSPENDED' where id = $1",
+      "update users set status = 'ACTIVE' where id = $1",
+      ids.userOrgWide,
+    ],
+  ] as const)(
+    "rejects transient %s in the signing transaction",
+    async (_label, mutation, restore, targetId) => {
+      const fixture = await insertSourceAuthority(sql);
+      const transformId = await insertTransform(sql, fixture.sourceId);
+      const { liveBatchId } = await insertDryRunAndLiveBatch(
+        sql,
+        fixture.sourceId,
+        transformId,
+      );
+      await promoteLiveBatch(sql, liveBatchId, "APPLIED");
+      const runId = await insertPassedCountReconciliation(sql, liveBatchId);
+
+      await expect(sql.begin(async (transaction) => {
+        await signReconciliationWithProof(transaction, liveBatchId, runId, {
+          deferConstraintCheck: true,
+        });
+        await transaction.unsafe(mutation, [targetId]);
+        await transaction.unsafe(restore, [targetId]);
+        await transaction.unsafe("set constraints all immediate");
+        throw new Error("transient signer identity change was restored undetected");
+      })).rejects.toMatchObject({
+        code: "23514",
+        message: expect.stringMatching(/identity changed during sign-off/i),
+      });
+    },
+  );
+
+  it("allows transient signer profile changes unrelated to sign-off identity", async () => {
+    const fixture = await insertSourceAuthority(sql);
+    const transformId = await insertTransform(sql, fixture.sourceId);
+    const { liveBatchId } = await insertDryRunAndLiveBatch(sql, fixture.sourceId, transformId);
+    await promoteLiveBatch(sql, liveBatchId, "APPLIED");
+    const runId = await insertPassedCountReconciliation(sql, liveBatchId);
+
+    await expect(sql.begin(async (transaction) => {
+      await signReconciliationWithProof(transaction, liveBatchId, runId, {
+        deferConstraintCheck: true,
+      });
+      await transaction`
+        update users set display_name = 'Temporary Signer Name'
+        where id = ${ids.userOrgWide}
+      `;
+      await transaction`
+        update users set display_name = 'Synthetic Org Wide'
+        where id = ${ids.userOrgWide}
+      `;
+      await transaction.unsafe("set constraints all immediate");
+    })).resolves.not.toThrow();
+  });
+
+  it.each([
+    [
       "membership revoke",
       "update memberships set status = 'REVOKED' where id = $1",
       ids.membershipOrgWide,
@@ -1670,6 +1904,50 @@ describe("migration control-plane deferred invariants", () => {
         where id = ${ids.userOrgWide}
       `;
     }
+  });
+
+  it("rejects HUMAN to SERVICE in the signing transaction even with matching SERVICE proof", async () => {
+    const fixture = await insertSourceAuthority(sql);
+    const transformId = await insertTransform(sql, fixture.sourceId);
+    const { liveBatchId } = await insertDryRunAndLiveBatch(sql, fixture.sourceId, transformId);
+    await promoteLiveBatch(sql, liveBatchId, "APPLIED");
+    const runId = await insertPassedCountReconciliation(sql, liveBatchId);
+
+    await expect(sql.begin(async (transaction) => {
+      await signReconciliationWithProof(transaction, liveBatchId, runId, {
+        actorType: "SERVICE",
+        beforeProof: async (proofTransaction) => {
+          await proofTransaction`
+            update users set user_type = 'SERVICE'
+            where id = ${ids.userOrgWide}
+          `;
+        },
+      });
+    })).rejects.toMatchObject({
+      code: "23514",
+      message: expect.stringMatching(/identity changed during sign-off/i),
+    });
+  });
+
+  it.each([
+    ["audit occurred_at", { auditOccurredAtOffsetMs: -1 }],
+    ["audit recorded_at", { auditRecordedAtOffsetMs: 1 }],
+    ["audit created_at", { auditCreatedAtOffsetMs: 1 }],
+    ["outbox occurred_at", { outboxOccurredAtOffsetMs: 1 }],
+    ["outbox created_at", { outboxCreatedAtOffsetMs: 1 }],
+  ] as const)("rejects signed proof timestamp drift: %s", async (_label, timestampOverride) => {
+    const fixture = await insertSourceAuthority(sql);
+    const transformId = await insertTransform(sql, fixture.sourceId);
+    const { liveBatchId } = await insertDryRunAndLiveBatch(sql, fixture.sourceId, transformId);
+    await promoteLiveBatch(sql, liveBatchId, "APPLIED");
+    const runId = await insertPassedCountReconciliation(sql, liveBatchId);
+
+    await expect(sql.begin(async (transaction) => {
+      await signReconciliationWithProof(transaction, liveBatchId, runId, timestampOverride);
+    })).rejects.toMatchObject({
+      code: "23514",
+      message: expect.stringMatching(/proof timestamp/i),
+    });
   });
 
   it("permits only the latest reconciliation attempt to be signed", async () => {
@@ -1956,6 +2234,37 @@ describe("migration control-plane deferred invariants", () => {
       await suspender.unsafe("rollback").catch(() => undefined);
       await signer.unsafe("rollback").catch(() => undefined);
       await Promise.all([signer.end({ timeout: 1 }), suspender.end({ timeout: 1 })]);
+    }
+  });
+
+  it("fails fast instead of deadlocking when the signer user is locked before the batch", async () => {
+    const fixture = await insertSourceAuthority(sql);
+    const transformId = await insertTransform(sql, fixture.sourceId);
+    const { liveBatchId } = await insertDryRunAndLiveBatch(sql, fixture.sourceId, transformId);
+    await promoteLiveBatch(sql, liveBatchId, "APPLIED");
+    const runId = await insertPassedCountReconciliation(sql, liveBatchId);
+    const identityHolder = postgres(databaseUrl, {
+      max: 1, prepare: false, onnotice: () => undefined,
+    });
+    const signer = postgres(databaseUrl, { max: 1, prepare: false, onnotice: () => undefined });
+
+    try {
+      await identityHolder.unsafe("begin");
+      await identityHolder`
+        update users set display_name = display_name
+        where id = ${ids.userOrgWide}
+      `;
+      await signer.unsafe("begin");
+      await signer.unsafe("set local lock_timeout = '2s'");
+      const startedAt = Date.now();
+      await expect(
+        signReconciliationWithProof(signer, liveBatchId, runId),
+      ).rejects.toMatchObject({ code: "55P03" });
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+    } finally {
+      await signer.unsafe("rollback").catch(() => undefined);
+      await identityHolder.unsafe("rollback").catch(() => undefined);
+      await Promise.all([identityHolder.end({ timeout: 1 }), signer.end({ timeout: 1 })]);
     }
   });
 

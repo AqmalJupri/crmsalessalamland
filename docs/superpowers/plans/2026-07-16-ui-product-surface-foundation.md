@@ -476,7 +476,7 @@ robots: "noindex, nofollow, noarchive"
 
 ## Task 9: Expand responsive, keyboard, and visual regression evidence
 
-**Execution status:** Automated responsive/keyboard/visual contracts, forced-fresh Linux capture, manual review of all 60 PNGs and provenance promotion are complete through `9f2c8cd`. The task remains open only for the named human screen-reader evidence required below.
+**Execution status:** Automated responsive/keyboard/visual contracts, fail-closed hydration diagnostics, clean forced-fresh Linux capture, manual review of all 60 PNGs and provenance promotion are complete through `2ed7379`. Fifty-five assets were byte-identical and five contained accepted antialias-only differences; standard comparison run `29661378588` passed with zero real hydration/caret diagnostic, flaky test, retry or screenshot mismatch. The task remains open only for the named human screen-reader evidence required below.
 
 **Files:**
 
@@ -516,7 +516,7 @@ robots: "noindex, nofollow, noarchive"
 
 ## Task 10: Verify the complete UI foundation
 
-**Execution status:** Local engineering verification, independent code/design/provenance reviews and forced-fresh hosted capture are complete through `9f2c8cd`. Standard run `29658551712` passed all jobs but disclosed one retry-only pre-hydration E2E test mutation; a zero-flaky rerun after the deterministic correction and Task 9's named human screen-reader sign-off remain open. No production release gate is implied.
+**Execution status:** Engineering verification, independent code/design/provenance reviews, hydration-clean forced-fresh hosted capture and standard comparison are complete through `2ed7379`; standard run `29661378588` passed every job with unit 937/937, production 1,367/1,367, database 601/601, CRM browser 200 pass/38 skip and Tasha browser 113 pass/125 skip, with zero real hydration/caret diagnostic, flaky test, retry or screenshot mismatch. Task 9's named human screen-reader sign-off remains a separate open human acceptance item. No production release gate is implied.
 
 **Files:**
 

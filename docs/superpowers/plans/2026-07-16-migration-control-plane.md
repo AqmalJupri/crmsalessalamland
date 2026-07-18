@@ -898,7 +898,7 @@ The additive correction binds sign-off to the full top-level `xid8`, database-ow
 
 ## Task 11: Verify the complete control plane
 
-**Execution status:** Implementation, independent review, the frozen reviewed Linux evidence/provenance and forced-fresh hosted capture are complete in `ac07905..9f2c8cd`. Standard run `29658551712` passed every job but disclosed one retry-only pre-hydration E2E test mutation; closure now depends on a zero-flaky hosted rerun after the deterministic correction.
+**Execution status:** Complete in `ac07905..2ed7379`. Implementation, independent review, exact seven-row apply/replay and dump/restore identity, production coverage, fail-closed hydration diagnostics, clean forced-fresh hosted capture, reviewed Linux evidence/provenance and standard comparison run `29661378588` all pass. The standard log contains zero real hydration/caret diagnostic, flaky test, retry or screenshot mismatch. This is engineering closure only and does not pass a production release gate.
 
 **Files:**
 

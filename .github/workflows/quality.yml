@@ -54,6 +54,27 @@ jobs:
       OIDC_REDIRECT_URI: https://crm-ci.example.test/api/v1/auth/oidc/callback
       VISUAL_CAPTURE_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.capture_visual_baselines }}
     steps:
+      - name: Preflight exact migration database targets
+        run: |
+          node -e "
+            const expectedDatabaseUrl = 'postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_migration_platform';
+            for (const key of ['DATABASE_URL', 'TEST_DATABASE_URL']) {
+              const raw = process.env[key];
+              if (!raw) throw new Error(key + ' is required.');
+              const target = new URL(raw);
+              if (raw !== expectedDatabaseUrl ||
+                  target.protocol !== 'postgresql:' ||
+                  target.hostname !== '127.0.0.1' ||
+                  target.port !== '5432' ||
+                  target.pathname !== '/crm_salam_codex_migration_platform' ||
+                  target.username !== 'crm' ||
+                  target.password !== 'crm_local_only' ||
+                  target.search !== '' || target.hash !== '') {
+                throw new Error('Unsafe ' + key + ' migration target.');
+              }
+            }
+          "
+
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -89,15 +110,6 @@ jobs:
 
       - name: Attest isolated migration database
         run: |
-          node -e "
-            const expectedDatabaseUrl = 'postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_migration_platform';
-            if (process.env.DATABASE_URL !== expectedDatabaseUrl) {
-              throw new Error('Unsafe DATABASE_URL migration target.');
-            }
-            if (process.env.TEST_DATABASE_URL !== expectedDatabaseUrl) {
-              throw new Error('Unsafe TEST_DATABASE_URL migration target.');
-            }
-          "
           identity="$(psql "$DATABASE_URL" --no-align --tuples-only --field-separator='|' \
             --command="select current_database(), current_user, current_setting('server_encoding')")"
           test "$identity" = "crm_salam_codex_migration_platform|crm|UTF8"
@@ -107,6 +119,9 @@ jobs:
 
       - name: Apply production migrations
         run: pnpm db:migrate
+
+      - name: Verify exact migration ledger before replay
+        run: pnpm exec tsx scripts/ci/verify-migration-ledger.ts
 
       - name: Capture migration ledger before replay
         run: |
@@ -118,6 +133,9 @@ jobs:
 
       - name: Replay production migrations
         run: pnpm db:migrate
+
+      - name: Verify exact migration ledger after replay
+        run: pnpm exec tsx scripts/ci/verify-migration-ledger.ts
 
       - name: Verify replay preserved migration ledger
         run: |
@@ -295,6 +313,7 @@ jobs:
           --health-retries 10
     env:
       NEXT_TELEMETRY_DISABLED: "1"
+      NODE_ENV: production
       PRODUCT_SURFACE: ${{ matrix.surface }}
       DEPLOYMENT_ENVIRONMENT: ci
       DATABASE_URL: postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_migration_platform
@@ -308,6 +327,27 @@ jobs:
       OIDC_REDIRECT_URI: ${{ matrix.app_url }}/api/v1/auth/oidc/callback
       CRM_DEMO_MODE: "false"
     steps:
+      - name: Preflight exact migration database targets
+        run: |
+          node -e "
+            const expectedDatabaseUrl = 'postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_migration_platform';
+            for (const key of ['DATABASE_URL', 'TEST_DATABASE_URL']) {
+              const raw = process.env[key];
+              if (!raw) throw new Error(key + ' is required.');
+              const target = new URL(raw);
+              if (raw !== expectedDatabaseUrl ||
+                  target.protocol !== 'postgresql:' ||
+                  target.hostname !== '127.0.0.1' ||
+                  target.port !== '5432' ||
+                  target.pathname !== '/crm_salam_codex_migration_platform' ||
+                  target.username !== 'crm' ||
+                  target.password !== 'crm_local_only' ||
+                  target.search !== '' || target.hash !== '') {
+                throw new Error('Unsafe ' + key + ' migration target.');
+              }
+            }
+          "
+
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:

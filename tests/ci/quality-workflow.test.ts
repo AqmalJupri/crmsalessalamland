@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { PlaywrightTestConfig } from "@playwright/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +12,10 @@ const productionCoverageConfig = readFileSync(
   `${repositoryRoot}vitest.production-coverage.config.ts`,
   "utf8",
 );
+const migrationLedgerGatePath = `${repositoryRoot}scripts/ci/verify-migration-ledger.ts`;
+const migrationLedgerGateSource = existsSync(migrationLedgerGatePath)
+  ? readFileSync(migrationLedgerGatePath, "utf8")
+  : "";
 const packageJson = JSON.parse(
   readFileSync(`${repositoryRoot}package.json`, "utf8"),
 ) as {
@@ -474,6 +478,51 @@ describe("Quality workflow deployment artifacts", () => {
     }
   });
 
+  it("rejects unsafe database targets before either job can touch PostgreSQL", () => {
+    const checksJob = workflowJob("checks");
+    const smokeJob = workflowJob("runtime-smoke");
+
+    for (const [job, firstDatabaseStep] of [
+      [checksJob, "Bootstrap isolated migration database"],
+      [smokeJob, "Bootstrap runtime migration database"],
+    ] as const) {
+      const preflightStep = jobStep(job, "Preflight exact migration database targets");
+      const preflightIndex = job.indexOf("- name: Preflight exact migration database targets");
+
+      expect(preflightStep).toContain(
+        `const expectedDatabaseUrl = '${migrationDatabaseUrl}'`,
+      );
+      expect(preflightStep).toContain("['DATABASE_URL', 'TEST_DATABASE_URL']");
+      expect(preflightStep).toContain("new URL(raw)");
+      expect(preflightStep).toContain("raw !== expectedDatabaseUrl");
+      expect(preflightStep).toContain("target.protocol !== 'postgresql:'");
+      expect(preflightStep).toContain("target.hostname !== '127.0.0.1'");
+      expect(preflightStep).toContain("target.port !== '5432'");
+      expect(preflightStep).toContain("target.pathname !== '/crm_salam_codex_migration_platform'");
+      expect(preflightStep).toContain("target.username !== 'crm'");
+      expect(preflightStep).toContain("target.password !== 'crm_local_only'");
+      expect(preflightStep).not.toMatch(
+        /\bpsql\b|\bpg_restore\b|\bpg_dump\b|\bcreatedb\b|\bdropdb\b|docker\s+exec|db:migrate/,
+      );
+      expect(preflightIndex).toBeGreaterThanOrEqual(0);
+      expect(preflightIndex).toBe(job.indexOf("- name:"));
+      expect(preflightIndex).toBeLessThan(job.indexOf("- name: Checkout"));
+      expect(preflightIndex).toBeLessThan(job.indexOf(`- name: ${firstDatabaseStep}`));
+      for (const databaseOperation of [
+        "CREATE ROLE crm",
+        "dropdb --if-exists",
+        "createdb --username=postgres",
+        "psql --username=postgres",
+        "pg_restore",
+        "pg_dump",
+        "pnpm db:migrate",
+      ]) {
+        const operationIndex = job.indexOf(databaseOperation);
+        if (operationIndex >= 0) expect(preflightIndex).toBeLessThan(operationIndex);
+      }
+    }
+  });
+
   it("bootstraps and attests both exact application URLs before migrations", () => {
     const checksJob = workflowJob("checks");
     const smokeJob = workflowJob("runtime-smoke");
@@ -506,9 +555,6 @@ describe("Quality workflow deployment artifacts", () => {
       bootstrapStep.indexOf(`createdb --username=postgres --owner=crm ${migrationDatabaseName}`),
     );
 
-    expect(attestationStep).toContain(`const expectedDatabaseUrl = '${migrationDatabaseUrl}'`);
-    expect(attestationStep).toContain("process.env.DATABASE_URL !== expectedDatabaseUrl");
-    expect(attestationStep).toContain("process.env.TEST_DATABASE_URL !== expectedDatabaseUrl");
     expect(attestationStep).toMatch(
       /select current_database\(\), current_user, current_setting\('server_encoding'\)/i,
     );
@@ -526,24 +572,59 @@ describe("Quality workflow deployment artifacts", () => {
     const checksJob = workflowJob("checks");
     const buildJob = workflowJob("build");
     const firstMigrationIndex = checksJob.indexOf("- name: Apply production migrations");
+    const firstExactGateIndex = checksJob.indexOf(
+      "- name: Verify exact migration ledger before replay",
+    );
     const beforeLedgerIndex = checksJob.indexOf("- name: Capture migration ledger before replay");
     const replayIndex = checksJob.indexOf("- name: Replay production migrations");
+    const replayExactGateIndex = checksJob.indexOf(
+      "- name: Verify exact migration ledger after replay",
+    );
     const compareIndex = checksJob.indexOf("- name: Verify replay preserved migration ledger");
+    const dumpIndex = checksJob.indexOf("- name: Capture migrated database");
+    const firstExactGateStep = jobStep(
+      checksJob,
+      "Verify exact migration ledger before replay",
+    );
+    const replayExactGateStep = jobStep(
+      checksJob,
+      "Verify exact migration ledger after replay",
+    );
     const compareStep = jobStep(checksJob, "Verify replay preserved migration ledger");
 
     expect(qualityWorkflow.match(/pnpm db:migrate/g) ?? []).toHaveLength(2);
     expect(checksJob).toMatch(/- name: Apply production migrations\s+run: pnpm db:migrate/);
     expect(checksJob).toMatch(/- name: Replay production migrations\s+run: pnpm db:migrate/);
+    for (const exactGateStep of [firstExactGateStep, replayExactGateStep]) {
+      expect(exactGateStep).toContain(
+        "pnpm exec tsx scripts/ci/verify-migration-ledger.ts",
+      );
+    }
     expect(compareStep).toMatch(
       /select filename, checksum, applied_at from schema_migrations order by filename/i,
     );
     expect(compareStep).toContain("migration-ledger-before.csv");
     expect(compareStep).toContain("migration-ledger-after.csv");
     expect(compareStep).toMatch(/cmp\s+--silent/);
-    expect(firstMigrationIndex).toBeLessThan(beforeLedgerIndex);
+    expect(firstMigrationIndex).toBeLessThan(firstExactGateIndex);
+    expect(firstExactGateIndex).toBeLessThan(beforeLedgerIndex);
     expect(beforeLedgerIndex).toBeLessThan(replayIndex);
+    expect(replayIndex).toBeLessThan(replayExactGateIndex);
+    expect(replayExactGateIndex).toBeLessThan(compareIndex);
     expect(replayIndex).toBeLessThan(compareIndex);
+    expect(compareIndex).toBeLessThan(dumpIndex);
     expect(buildJob).toContain("needs: checks");
+  });
+
+  it("binds the executable ledger gate to the frozen migration manifest", () => {
+    expect(migrationLedgerGateSource).toMatch(
+      /import\s*\{[\s\S]*EXPECTED_MIGRATIONS[\s\S]*assertMigrationLedgerCurrent[\s\S]*\}\s*from\s*"\.\.\/\.\.\/src\/server\/db\/migration-manifest"/,
+    );
+    expect(migrationLedgerGateSource).toMatch(
+      /select\s+filename,\s*checksum\s+from\s+schema_migrations\s+order\s+by\s+filename/i,
+    );
+    expect(migrationLedgerGateSource).toContain("assertMigrationLedgerCurrent(rows)");
+    expect(migrationLedgerGateSource).toContain("EXPECTED_MIGRATIONS.length");
   });
 
   it("uses the application identity for migration, tests, dump, restore, and runtime smoke", () => {
@@ -637,6 +718,7 @@ describe("Quality workflow deployment artifacts", () => {
     expect(smokeJob).toContain("needs: [checks, build]");
     expect(smokeBindings).toEqual(buildBindings);
     expect(smokeJob).toContain('PRODUCT_SURFACE: ${{ matrix.surface }}');
+    expect(smokeJob).toContain("NODE_ENV: production");
     expect(smokeJob).toContain('APP_URL: ${{ matrix.app_url }}');
     expect(smokeJob).toContain('OIDC_CLIENT_ID: ${{ matrix.oidc_client_id }}');
     expect(smokeJob).toContain(

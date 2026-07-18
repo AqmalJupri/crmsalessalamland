@@ -55,6 +55,10 @@ const reconciliationSignoffLifecycleMigrationSource = existsSync(
 )
   ? readFileSync(reconciliationSignoffLifecycleMigrationPath, "utf8")
   : "";
+const productionRuntimeSmokeSource = readFileSync(
+  new URL("../../../tests/production/runtime-smoke.mjs", import.meta.url),
+  "utf8",
+);
 
 function reconciliationRequirementGuard(source: string): string {
   const marker = "CREATE OR REPLACE FUNCTION crm_validate_reconciliation_requirements()";
@@ -86,6 +90,20 @@ describe("migration manifest", () => {
       "0006_reconciliation_finite_amounts.sql",
       "0007_reconciliation_signoff_lifecycle.sql",
     ]);
+  });
+
+  it("keeps the production runtime ledger pinned to the canonical manifest", () => {
+    const ledgerBlock = productionRuntimeSmokeSource.match(
+      /const expectedMigrationLedger = \[([\s\S]*?)\n\];/,
+    )?.[1];
+    expect(ledgerBlock).toBeDefined();
+    const runtimeLedger = Array.from(
+      ledgerBlock?.matchAll(
+        /filename: "([^"]+)",\s+checksum: "([a-f0-9]{64})",/g,
+      ) ?? [],
+      ([, filename, checksum]) => ({ filename, checksum }),
+    );
+    expect(runtimeLedger).toEqual(expectedLedger);
   });
 
   it("replaces only the reconciliation requirement guard with bytewise ordering", () => {

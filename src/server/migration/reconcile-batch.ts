@@ -37,12 +37,17 @@ const MAX_CANONICAL_REQUIREMENT_BYTES = 512_000;
 const MAX_POSTGRES_INTEGER = 2_147_483_647;
 const MAX_POSTGRES_BIGINT = 9_223_372_036_854_775_807n;
 const MAX_REASON_LENGTH = 2_000;
-const TERMINAL_RECORD_REFRESH_CODES = new Set([
+const TERMINAL_AUTHORITY_REFRESH_CODES = new Set([
   "MIGRATION_CAPABILITY_REQUIRED",
   "MIGRATION_MEMBERSHIP_INVALID",
   "MIGRATION_SCOPE_FORBIDDEN",
   "MIGRATION_SOURCE_NOT_ACTIVE",
   "MIGRATION_SOURCE_NOT_FOUND",
+]);
+const TERMINAL_RECORD_REFRESH_CODES = new Set([
+  ...TERMINAL_AUTHORITY_REFRESH_CODES,
+  "IMPORT_BATCH_STATE_INVALID",
+  "IMPORT_BATCH_VERSION_CONFLICT",
 ]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CHECK_KEY_PATTERN = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$/;
@@ -835,6 +840,10 @@ function canRefreshTerminalRecordReplay(error: unknown): error is ApiError {
   return error instanceof ApiError && TERMINAL_RECORD_REFRESH_CODES.has(error.code);
 }
 
+function canRefreshTerminalAuthorityReplay(error: unknown): error is ApiError {
+  return error instanceof ApiError && TERMINAL_AUTHORITY_REFRESH_CODES.has(error.code);
+}
+
 async function locateBatch(
   database: Database,
   actor: MigrationActor,
@@ -954,10 +963,12 @@ async function preflightRecord(
       await requireMigrationActorCapability(transaction, command.actor, SIGN_CAPABILITY);
     });
   } catch (error: unknown) {
-    if (
-      canRefreshTerminalRecordReplay(error) &&
-      await hasTerminalRecordReplay(database, command, migrationSourceId)
-    ) {
+    if (await shouldRefreshTerminalRecordReplay(
+      database,
+      command,
+      migrationSourceId,
+      error,
+    )) {
       return "TERMINAL_REPLAY";
     }
     throw error;
@@ -987,13 +998,26 @@ async function hasTerminalRecordReplay(
         eq(reconciliationRuns.businessUnitId, command.actor.businessUnitId),
         eq(reconciliationRuns.batchId, command.batchId),
         eq(reconciliationRuns.runNo, command.runNo),
-        eq(reconciliationRuns.status, "SIGNED"),
         eq(importBatches.migrationSourceId, migrationSourceId),
         eq(importBatches.status, "RECONCILED"),
       ),
     )
     .limit(1);
   return terminal !== undefined;
+}
+
+async function shouldRefreshTerminalRecordReplay(
+  database: Database,
+  command: RecordCommand,
+  migrationSourceId: string,
+  error: unknown,
+): Promise<boolean> {
+  if (!canRefreshTerminalRecordReplay(error)) return false;
+  try {
+    return await hasTerminalRecordReplay(database, command, migrationSourceId);
+  } catch {
+    return false;
+  }
 }
 
 function assertExactResultSet(
@@ -1461,10 +1485,10 @@ export async function recordReconciliationRun(
         .limit(1);
       if (
         terminalReplay &&
-        (batch.status !== "RECONCILED" || existing?.status !== "SIGNED")
+        (batch.status !== "RECONCILED" || existing === undefined)
       ) {
         replayConflict(
-          "The terminal reconciliation record replay no longer has a signed run and reconciled batch.",
+          "The terminal reconciliation record replay no longer has its requested run and reconciled batch.",
         );
       }
       if (existing) {
@@ -1663,11 +1687,11 @@ export async function recordReconciliationRun(
     } catch (error: unknown) {
       if (
         attemptMode !== "TERMINAL_REPLAY" &&
-        canRefreshTerminalRecordReplay(error) &&
-        await hasTerminalRecordReplay(
+        await shouldRefreshTerminalRecordReplay(
           database,
           command,
           locator.migrationSourceId,
+          error,
         )
       ) {
         finalMode = "TERMINAL_REPLAY";
@@ -1745,11 +1769,11 @@ export async function signReconciliationRun(
   const command = validateSignCommand(actorInput, input);
   const database: Database = getDatabase();
   const locator = await locateRun(database, command.actor, command.runId);
-  const terminalReplay =
+  const initialTerminalReplay =
     locator.runStatus === "SIGNED" && locator.batchStatus === "RECONCILED";
 
-  try {
-    await database.transaction(async (transaction) => {
+  const executeFinalSign = (terminalReplay: boolean) =>
+    database.transaction(async (transaction) => {
       let eventActorType: "USER" | "SERVICE" | null = null;
       await requireActiveMigrationTenant(transaction, command.actor);
       if (!terminalReplay) {
@@ -2015,34 +2039,34 @@ export async function signReconciliationRun(
       );
       await transaction.execute(sql.raw("set constraints all immediate"));
     });
-  } catch (error: unknown) {
-    if (
-      !terminalReplay &&
-      error instanceof ApiError &&
-      error.code === "MIGRATION_SOURCE_NOT_ACTIVE"
-    ) {
-      let refreshed: Awaited<ReturnType<typeof locateRun>>;
-      try {
-        refreshed = await locateRun(database, command.actor, command.runId);
-      } catch {
-        throw error;
+
+  let terminalReplay = initialTerminalReplay;
+  for (;;) {
+    try {
+      await executeFinalSign(terminalReplay);
+      return;
+    } catch (error: unknown) {
+      if (!terminalReplay && canRefreshTerminalAuthorityReplay(error)) {
+        let refreshed: Awaited<ReturnType<typeof locateRun>>;
+        try {
+          refreshed = await locateRun(database, command.actor, command.runId);
+        } catch {
+          throw error;
+        }
+        if (
+          refreshed.runStatus === "SIGNED" &&
+          refreshed.batchStatus === "RECONCILED"
+        ) {
+          terminalReplay = true;
+          continue;
+        }
       }
-      if (
-        refreshed.runStatus === "SIGNED" &&
-        refreshed.batchStatus === "RECONCILED"
-      ) {
-        return signReconciliationRun(command.actor, {
-          runId: command.runId,
-          expectedRunVersion: command.expectedRunVersion,
-          approvalReason: command.approvalReason,
-        });
-      }
+      if (error instanceof ApiError) throw error;
+      throw new ApiError(
+        500,
+        "RECONCILIATION_SIGN_FAILED",
+        "The reconciliation sign-off could not be recorded.",
+      );
     }
-    if (error instanceof ApiError) throw error;
-    throw new ApiError(
-      500,
-      "RECONCILIATION_SIGN_FAILED",
-      "The reconciliation sign-off could not be recorded.",
-    );
   }
 }

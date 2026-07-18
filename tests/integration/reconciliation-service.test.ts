@@ -1255,6 +1255,85 @@ describe("recordReconciliationRun", () => {
     });
   });
 
+  it.each(["PASSED", "FAILED"] as const)(
+    "replays an older %s run after a later run is signed",
+    async (historicalStatus) => {
+      const fixture = await seedFixture();
+      const bundle = planBundle();
+      const historicalResults = resultsFor(bundle.requirements);
+      if (historicalStatus === "FAILED") {
+        historicalResults[3] = { ...historicalResults[3]!, passed: false };
+      }
+      const historicalInput = recordInput(fixture, bundle, {
+        results: historicalResults,
+      });
+      const historical = await recordReconciliationRun(
+        fixture.signerActor,
+        historicalInput,
+        verifierFor(bundle),
+      );
+      const latest = await recordReconciliationRun(
+        fixture.signerActor,
+        recordInput(fixture, bundle, { runNo: 2 }),
+        verifierFor(bundle),
+      );
+      await signReconciliationRun(fixture.signerActor, {
+        runId: latest.runId,
+        expectedRunVersion: 1,
+        approvalReason: "Independent reconciliation review complete",
+      });
+      await archiveCanonicalSource(fixture);
+      await sql`
+        delete from membership_roles
+        where organization_id = ${fixture.organizationId}
+          and membership_id = ${fixture.signerMembershipId}
+      `;
+      const replayVerifier = verifierFor(bundle);
+
+      await expect(
+        recordReconciliationRun(
+          fixture.signerActor,
+          historicalInput,
+          replayVerifier,
+        ),
+      ).resolves.toEqual(historical);
+      expect(replayVerifier.verify).toHaveBeenCalledTimes(1);
+      const [stored] = await sql<{
+        runs: number;
+        historical_status: string;
+        latest_status: string;
+        historical_record_audits: number;
+        historical_record_outbox: number;
+        historical_sign_audits: number;
+      }[]>`
+        select
+          (select count(*)::int from reconciliation_runs
+            where batch_id = ${fixture.batchId}) as runs,
+          (select status from reconciliation_runs
+            where id = ${historical.runId}) as historical_status,
+          (select status from reconciliation_runs
+            where id = ${latest.runId}) as latest_status,
+          (select count(*)::int from audit_events where target_id = ${historical.runId}
+            and action = 'MIGRATION_RECONCILIATION_RUN_RECORDED')
+              as historical_record_audits,
+          (select count(*)::int from outbox_events where aggregate_id = ${historical.runId}
+            and event_type = 'crm.migration.reconciliation_run_recorded')
+              as historical_record_outbox,
+          (select count(*)::int from audit_events where target_id = ${historical.runId}
+            and action = 'MIGRATION_RECONCILIATION_RUN_SIGNED')
+              as historical_sign_audits
+      `;
+      expect(stored).toEqual({
+        runs: 2,
+        historical_status: historicalStatus,
+        latest_status: "SIGNED",
+        historical_record_audits: 1,
+        historical_record_outbox: 1,
+        historical_sign_audits: 0,
+      });
+    },
+  );
+
   it("binds the original batch version into terminal record replay proof", async () => {
     const fixture = await seedFixture();
     const bundle = planBundle();
@@ -1519,6 +1598,94 @@ describe("recordReconciliationRun", () => {
       record_outbox: 1,
       sign_audits: 1,
       sign_outbox: 1,
+    });
+  });
+
+  it("refreshes a MUTATION preflight after sign-off while authority remains active", async () => {
+    const fixture = await seedFixture();
+    const bundle = planBundle();
+    const input = recordInput(fixture, bundle);
+    const database = databaseClient.getDatabase();
+    const originalTransaction = database.transaction.bind(database);
+    let transactionCalls = 0;
+    let signalSecondPreflightStarted!: () => void;
+    const secondPreflightStarted = new Promise<void>((resolve) => {
+      signalSecondPreflightStarted = resolve;
+    });
+    let releaseSecondPreflight!: () => void;
+    const secondPreflightReleased = new Promise<void>((resolve) => {
+      releaseSecondPreflight = resolve;
+    });
+    const gatedDatabase = new Proxy(database, {
+      get(target, property, receiver) {
+        if (property !== "transaction") return Reflect.get(target, property, receiver);
+        return async (...args: Parameters<typeof database.transaction>) => {
+          transactionCalls += 1;
+          if (transactionCalls === 2) {
+            signalSecondPreflightStarted();
+            await secondPreflightReleased;
+          }
+          return originalTransaction(...args);
+        };
+      },
+    });
+    const databaseSpy = vi
+      .spyOn(databaseClient, "getDatabase")
+      .mockReturnValueOnce(gatedDatabase);
+    const blockedVerifier = verifierFor(bundle);
+    const writerB = recordReconciliationRun(
+      fixture.signerActor,
+      input,
+      blockedVerifier,
+    );
+    await secondPreflightStarted;
+    expect(blockedVerifier.verify).not.toHaveBeenCalled();
+
+    databaseSpy.mockRestore();
+    let writerA!: { runId: string; passed: boolean };
+    try {
+      writerA = await recordReconciliationRun(
+        fixture.signerActor,
+        input,
+        verifierFor(bundle),
+      );
+      await signReconciliationRun(fixture.signerActor, {
+        runId: writerA.runId,
+        expectedRunVersion: 1,
+        approvalReason: "Independent reconciliation review complete",
+      });
+    } finally {
+      databaseSpy.mockRestore();
+      releaseSecondPreflight();
+    }
+
+    await expect(writerB).resolves.toEqual(writerA);
+    expect(blockedVerifier.verify).toHaveBeenCalledTimes(1);
+    const [stored] = await sql<{
+      runs: number;
+      record_audits: number;
+      record_outbox: number;
+      source_status: string;
+      grants: number;
+    }[]>`
+      select
+        (select count(*)::int from reconciliation_runs
+          where batch_id = ${fixture.batchId}) as runs,
+        (select count(*)::int from audit_events where target_id = ${writerA.runId}
+          and action = 'MIGRATION_RECONCILIATION_RUN_RECORDED') as record_audits,
+        (select count(*)::int from outbox_events where aggregate_id = ${writerA.runId}
+          and event_type = 'crm.migration.reconciliation_run_recorded') as record_outbox,
+        (select status from migration_sources where id = ${fixture.sourceId}) as source_status,
+        (select count(*)::int from membership_roles
+          where organization_id = ${fixture.organizationId}
+            and membership_id = ${fixture.signerMembershipId}) as grants
+    `;
+    expect(stored).toEqual({
+      runs: 1,
+      record_audits: 1,
+      record_outbox: 1,
+      source_status: "ACTIVE",
+      grants: 1,
     });
   });
 
@@ -2041,6 +2208,110 @@ describe("signReconciliationRun", () => {
 
     await expect(staleReplay).resolves.toBeUndefined();
   });
+
+  it.each([
+    {
+      authorityChange: "the sign grant is removed",
+      revokeCurrentAuthority: async (fixture: Fixture) => {
+        await sql`
+          delete from membership_roles
+          where organization_id = ${fixture.organizationId}
+            and membership_id = ${fixture.signerMembershipId}
+        `;
+      },
+    },
+    {
+      authorityChange: "the signer membership is revoked",
+      revokeCurrentAuthority: async (fixture: Fixture) => {
+        await sql`
+          update memberships set status = 'REVOKED'
+          where organization_id = ${fixture.organizationId}
+            and id = ${fixture.signerMembershipId}
+        `;
+      },
+    },
+    {
+      authorityChange: "the signer user is suspended",
+      revokeCurrentAuthority: async (fixture: Fixture) => {
+        await sql`
+          update users set status = 'SUSPENDED'
+          where id = ${fixture.signerActor.userId}
+        `;
+      },
+    },
+  ])(
+    "converges a stale sign replay after $authorityChange",
+    async ({ revokeCurrentAuthority }) => {
+      const fixture = await seedFixture();
+      const { runId } = await recordPassedRun(fixture);
+      const input = {
+        runId,
+        expectedRunVersion: 1,
+        approvalReason: "Independent reconciliation review complete",
+      };
+      const database = databaseClient.getDatabase();
+      const originalTransaction = database.transaction.bind(database);
+      let signalTransactionStarted!: () => void;
+      const transactionStarted = new Promise<void>((resolve) => {
+        signalTransactionStarted = resolve;
+      });
+      let releaseTransaction!: () => void;
+      const transactionReleased = new Promise<void>((resolve) => {
+        releaseTransaction = resolve;
+      });
+      const gatedDatabase = new Proxy(database, {
+        get(target, property, receiver) {
+          if (property !== "transaction") return Reflect.get(target, property, receiver);
+          return async (...args: Parameters<typeof database.transaction>) => {
+            signalTransactionStarted();
+            await transactionReleased;
+            return originalTransaction(...args);
+          };
+        },
+      });
+      const databaseSpy = vi
+        .spyOn(databaseClient, "getDatabase")
+        .mockReturnValueOnce(gatedDatabase);
+
+      const staleReplay = signReconciliationRun(fixture.signerActor, input);
+      await transactionStarted;
+      databaseSpy.mockRestore();
+      try {
+        await signReconciliationRun(fixture.signerActor, input);
+        await revokeCurrentAuthority(fixture);
+      } finally {
+        databaseSpy.mockRestore();
+        releaseTransaction();
+      }
+
+      await expect(staleReplay).resolves.toBeUndefined();
+      const [stored] = await sql<{
+        run_status: string;
+        batch_status: string;
+        audits: number;
+        outbox: number;
+        source_status: string;
+      }[]>`
+        select run.status as run_status, batch.status as batch_status,
+               (select count(*)::int from audit_events where target_id = run.id
+                 and action = 'MIGRATION_RECONCILIATION_RUN_SIGNED') as audits,
+               (select count(*)::int from outbox_events where aggregate_id = run.id
+                 and event_type = 'crm.migration.reconciliation_run_signed') as outbox,
+               (select status from migration_sources where id = ${fixture.sourceId})
+                 as source_status
+        from reconciliation_runs run
+        join import_batches batch on batch.id = run.batch_id
+        where run.id = ${runId}
+      `;
+      expect(stored).toEqual({
+        run_status: "SIGNED",
+        batch_status: "RECONCILED",
+        audits: 1,
+        outbox: 1,
+        source_status: "ACTIVE",
+      });
+    },
+  );
 
   it("keeps exact record and sign replays available after canonical source archival", async () => {
     const fixture = await seedFixture();

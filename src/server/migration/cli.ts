@@ -1,4 +1,4 @@
-import { constants as fileConstants } from "node:fs";
+import { constants as fileConstants, writeSync } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -466,6 +466,7 @@ async function inspectStatus(databaseUrl: string): Promise<MigrationStatusSnapsh
   let reserved: ReservedSql | undefined;
   let transactionOpen = false;
   let deadlineTriggered = false;
+  let inspectionFailed = false;
   const inspection = (async (): Promise<MigrationStatusSnapshot> => {
     try {
     reserved = await sql.reserve();
@@ -574,6 +575,7 @@ async function inspectStatus(databaseUrl: string): Promise<MigrationStatusSnapsh
       })),
     };
     } catch (error: unknown) {
+      inspectionFailed = true;
       if (!deadlineTriggered && transactionOpen && reserved) {
         try {
           await reserved.unsafe("rollback");
@@ -587,15 +589,19 @@ async function inspectStatus(databaseUrl: string): Promise<MigrationStatusSnapsh
       if (error instanceof MigrationCliError) throw error;
       throw new MigrationCliError("DATABASE_INSPECTION_FAILED");
     } finally {
+      let cleanupFailed = false;
       try {
         reserved?.release();
       } catch {
-        // A failed release is contained by the bounded client shutdown below.
+        cleanupFailed = true;
       }
       try {
         await sql.end({ timeout: 1 });
       } catch {
-        // The command has no safe diagnostic detail to expose for cleanup failures.
+        cleanupFailed = true;
+      }
+      if (cleanupFailed && !inspectionFailed) {
+        throw new MigrationCliError("DATABASE_INSPECTION_FAILED");
       }
     }
   })();
@@ -706,9 +712,19 @@ if (entryPoint && import.meta.url === pathToFileURL(resolve(entryPoint)).href) {
   void runMigrationCli({
     args: process.argv.slice(2),
     environment: process.env,
-    stdout: (line) => process.stdout.write(`${line}\n`),
-    stderr: (line) => process.stderr.write(`${line}\n`),
-  }).then((exitCode) => {
-    process.exitCode = exitCode;
-  });
+    stdout: (line) => writeSync(process.stdout.fd, `${line}\n`),
+    stderr: (line) => writeSync(process.stderr.fd, `${line}\n`),
+  }).then(
+    (exitCode) => process.exit(exitCode),
+    () => {
+      try {
+        writeSync(
+          process.stderr.fd,
+          `${safeFailure("DATABASE_INSPECTION_FAILED")}\n`,
+        );
+      } finally {
+        process.exit(1);
+      }
+    },
+  );
 }

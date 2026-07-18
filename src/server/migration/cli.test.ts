@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { constants as fileConstants } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -19,6 +20,13 @@ const fixtureDirectory = fileURLToPath(
 const fixturePath = fileURLToPath(
   new URL(
     "../../../tests/fixtures/import/synthetic-source-manifest.json",
+    import.meta.url,
+  ),
+);
+const cliPath = fileURLToPath(new URL("./cli.ts", import.meta.url));
+const hangingDriverRegisterPath = fileURLToPath(
+  new URL(
+    "../../../tests/stubs/register-migration-cli-hanging-postgres.mjs",
     import.meta.url,
   ),
 );
@@ -515,6 +523,21 @@ describe("synthetic fixture repository contract", () => {
     expect(source).not.toMatch(
       /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/,
     );
+    expect(source).not.toMatch(
+      /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?(?:PRIVATE KEY|CERTIFICATE)-----/i,
+    );
+    expect(source).not.toMatch(
+      /\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?):\/\/[^\s/:@]+:[^\s/@]+@/i,
+    );
+    expect(source).not.toMatch(
+      /\b(?:password|passwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token)\b["']?\s*[:=]\s*["']?[A-Za-z0-9_./+=-]{8,}/i,
+    );
+    expect(source).not.toMatch(
+      /\b(?:AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|gh[pousr]_[A-Za-z0-9]{36,}|xox[baprs]-[A-Za-z0-9-]{20,}|sk_(?:live|test)_[A-Za-z0-9]{20,})\b/,
+    );
+    expect(source).not.toMatch(
+      /(?:\b[0-9a-f]{48,}\b|\b[A-Za-z0-9+/]{64,}={0,2}\b)/i,
+    );
   });
 });
 
@@ -825,6 +848,86 @@ describe("status transaction SQL contract", () => {
     }
   });
 
+  it.each(["reserved release", "bounded pool shutdown"] as const)(
+    "fails closed when a successful inspection has a %s failure",
+    async (failurePoint) => {
+      vi.resetModules();
+      const reserved = Object.assign(
+        vi.fn(async (strings: TemplateStringsArray) => {
+          const statement = strings.join(" ");
+          if (statement.includes("transaction_read_only")) {
+            return [{ transaction_read_only: "on" }];
+          }
+          if (statement.includes("public.schema_migrations")) {
+            return EXPECTED_MIGRATIONS.map(({ filename, checksum }) => ({
+              filename,
+              checksum,
+            }));
+          }
+          if (statement.includes("source_count")) {
+            return [
+              {
+                source_count: "0",
+                batch_count: "0",
+                inspected_at: new Date("2026-07-18T00:00:00.000Z"),
+              },
+            ];
+          }
+          return [];
+        }),
+        {
+          unsafe: vi.fn(async () => []),
+          release: vi.fn(() => {
+            if (failurePoint === "reserved release") {
+              throw new Error("postgresql://operator:secret@host/customer");
+            }
+          }),
+        },
+      );
+      const pool = Object.assign(vi.fn(), {
+        reserve: vi.fn(async () => reserved),
+        end: vi.fn(async () => {
+          if (failurePoint === "bounded pool shutdown") {
+            throw new Error("customer@example.test bearer do-not-print");
+          }
+        }),
+      });
+      vi.doMock("postgres", () => ({ default: vi.fn(() => pool) }));
+
+      try {
+        const { runMigrationCli: runWithCleanupFailure } = await import("./cli");
+        const stdout: string[] = [];
+        const stderr: string[] = [];
+
+        const exitCode = await runWithCleanupFailure({
+          args: ["status"],
+          environment: {
+            DEPLOYMENT_ENVIRONMENT: "ci",
+            NODE_ENV: "test",
+            DATABASE_URL: "postgresql://operator:never-print@127.0.0.1:5432/synthetic",
+          },
+          stdout: (line) => stdout.push(line),
+          stderr: (line) => stderr.push(line),
+        });
+
+        expect(exitCode).toBe(1);
+        expect(stdout).toEqual([]);
+        expect(stderr).toEqual([
+          JSON.stringify({
+            state: "DENIED",
+            reasonCodes: ["DATABASE_INSPECTION_FAILED"],
+          }),
+        ]);
+        expect(stderr.join("")).not.toMatch(
+          /operator|secret|customer|bearer|do-not-print|postgresql:/i,
+        );
+      } finally {
+        vi.doUnmock("postgres");
+        vi.resetModules();
+      }
+    },
+  );
+
   it("waits for driver-forced inspection cleanup before returning the deadline denial", async () => {
     vi.useFakeTimers();
     vi.resetModules();
@@ -907,5 +1010,137 @@ describe("status transaction SQL contract", () => {
 
     expect(reserved.release).toHaveBeenCalledOnce();
     expect(pool.end).toHaveBeenCalledWith({ timeout: 1 });
+  });
+
+  it("bounds grace expiry while observing a late driver rejection and only its referenced handle", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    let rejectBlockedOperation: ((reason: Error) => void) | undefined;
+    let rejectDriverShutdown: ((reason: Error) => void) | undefined;
+    const blockedOperation = new Promise<never>((_resolve, reject) => {
+      rejectBlockedOperation = reject;
+    });
+    const driverShutdown = new Promise<never>((_resolve, reject) => {
+      rejectDriverShutdown = reject;
+    });
+    const driverHandle = setInterval(() => undefined, 60_000);
+    const reserved = Object.assign(vi.fn(), {
+      unsafe: vi.fn(() => blockedOperation),
+      release: vi.fn(),
+    });
+    const pool = Object.assign(vi.fn(), {
+      reserve: vi.fn(async () => reserved),
+      end: vi.fn((options: { timeout: number }) => {
+        if (options.timeout === 0) {
+          rejectBlockedOperation?.(new Error("driver forced shutdown"));
+        }
+        return driverShutdown;
+      }),
+    });
+    vi.doMock("postgres", () => ({ default: vi.fn(() => pool) }));
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason);
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      const { runMigrationCli: runWithHungShutdown } = await import("./cli");
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const pending = runWithHungShutdown({
+        args: ["status"],
+        environment: {
+          DEPLOYMENT_ENVIRONMENT: "ci",
+          NODE_ENV: "test",
+          DATABASE_URL: "postgresql://operator:never-print@127.0.0.1:5432/synthetic",
+        },
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      });
+
+      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(pending).resolves.toBe(1);
+      expect(stdout).toEqual([]);
+      expect(stderr).toEqual([
+        JSON.stringify({
+          state: "DENIED",
+          reasonCodes: ["DATABASE_INSPECTION_DEADLINE"],
+        }),
+      ]);
+      expect(reserved.release).toHaveBeenCalledOnce();
+      expect(pool.end).toHaveBeenCalledWith({ timeout: 0 });
+      expect(pool.end).toHaveBeenCalledWith({ timeout: 1 });
+      expect(vi.getTimerCount()).toBe(1);
+
+      rejectDriverShutdown?.(
+        new Error("postgresql://operator:secret@host/customer late rejection"),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(unhandledRejections).toEqual([]);
+      expect(vi.getTimerCount()).toBe(1);
+    } finally {
+      clearInterval(driverHandle);
+      await Promise.resolve();
+      process.off("unhandledRejection", onUnhandledRejection);
+      vi.doUnmock("postgres");
+      vi.resetModules();
+      expect(vi.getTimerCount()).toBe(0);
+      vi.useRealTimers();
+    }
+  });
+
+  it("hard-exits the direct CLI after grace expiry with a referenced driver handle", async () => {
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    const child = spawn(
+      process.execPath,
+      [
+        "--import=tsx",
+        "--import",
+        hangingDriverRegisterPath,
+        cliPath,
+        "status",
+      ],
+      {
+        cwd: repositoryRoot,
+        env: {
+          ...process.env,
+          DEPLOYMENT_ENVIRONMENT: "ci",
+          NODE_ENV: "test",
+          DATABASE_URL:
+            "postgresql://operator:never-print@127.0.0.1:5432/synthetic",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    let timedOut = false;
+    const watchdog = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, 1_500);
+
+    try {
+      const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve) => {
+          child.once("exit", (code, signal) => resolve({ code, signal }));
+        },
+      );
+
+      expect(timedOut).toBe(false);
+      expect(result).toEqual({ code: 1, signal: null });
+      expect(Buffer.concat(stdout).toString("utf8")).toBe("");
+      expect(Buffer.concat(stderr).toString("utf8")).toBe(
+        `${JSON.stringify({
+          state: "DENIED",
+          reasonCodes: ["DATABASE_INSPECTION_DEADLINE"],
+        })}\n`,
+      );
+    } finally {
+      clearTimeout(watchdog);
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }
   });
 });

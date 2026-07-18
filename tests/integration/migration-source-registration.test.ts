@@ -22,6 +22,7 @@ import {
   transitionSourceAuthorityGroup,
 } from "@/server/migration/register-source";
 import { registerTransformVersion } from "@/server/migration/register-transform";
+import { seedReconciliationLifecycle } from "./reconciliation-fixture";
 
 const expectedDatabaseName = "crm_salam_codex_migration_platform";
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -367,7 +368,7 @@ async function insertReconciledBatch(
     ) values (
       ${finalBatchId}, ${tenant.organizationId}, ${businessUnitId}, ${sourceId}, ${transformId},
       ${dryRunId}, ${protectedRef("final-live")}, ${sourceDigest}, 1,
-      ${capturedAt}, ${cutoffAt}, 'sales.v1', ${terminalStatus}, false,
+      ${capturedAt}, ${cutoffAt}, 'sales.v1', 'APPLIED', false,
       1, 1, 1, ${membershipId}, clock_timestamp(), ${membershipId},
       clock_timestamp(), 'FULL', 'Reviewed full migration', ${membershipId},
       ${randomUUID()}, clock_timestamp() + interval '5 minutes', clock_timestamp(),
@@ -379,50 +380,11 @@ async function insertReconciledBatch(
     terminalStatus === "RECONCILED" &&
     (options.signed !== false || options.unsignedPassedRun === true)
   ) {
-    const runId = randomUUID();
-    const requiredChecks = [
-      {
-        check_kind: "COUNT",
-        check_key: "records.total",
-        scope_key: "all",
-        measure_unit: null,
-        decimal_scale: null,
-      },
-    ];
-    await db.begin(async (transaction) => {
-      const requiredChecksJson = transaction.json(requiredChecks);
-      await transaction`
-        insert into reconciliation_runs (
-          id, organization_id, business_unit_id, batch_id, run_no, status,
-          plan_artifact_ref, plan_sha256, required_checks, required_checks_sha256,
-          required_check_count, passed_check_count, failed_check_count,
-          signed_by_membership_id, signed_at
-        ) values (
-          ${runId}, ${tenant.organizationId}, ${businessUnitId}, ${finalBatchId}, 1, 'PASSED',
-          ${protectedRef("reconciliation-plan")}, ${sha256(`plan:${runId}`)},
-          ${requiredChecksJson},
-          digest(convert_to(${requiredChecksJson}::jsonb::text, 'UTF8'), 'sha256'),
-          1, 1, 0, null, null
-        )
-      `;
-      await transaction`
-        insert into reconciliation_results (
-          organization_id, business_unit_id, run_id, check_kind, check_key,
-          scope_key, source_count, target_count, measure_unit, decimal_scale,
-          passed, evidence_metadata
-        ) values (
-          ${tenant.organizationId}, ${businessUnitId}, ${runId}, 'COUNT',
-          'records.total', 'all', 1, 1, null, null, true, '{}'::jsonb
-        )
-      `;
-      if (options.signed !== false) {
-        await transaction`
-          update reconciliation_runs
-          set status = 'SIGNED', signed_by_membership_id = ${membershipId},
-              signed_at = clock_timestamp()
-          where organization_id = ${tenant.organizationId} and id = ${runId}
-        `;
-      }
+    await seedReconciliationLifecycle(db, {
+      organizationId: tenant.organizationId,
+      businessUnitId,
+      batchId: finalBatchId,
+      signed: options.signed !== false,
     });
   }
 

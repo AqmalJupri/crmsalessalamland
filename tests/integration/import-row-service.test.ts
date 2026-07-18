@@ -17,6 +17,7 @@ import {
   resolveQuarantineItem,
   type NormalizedEvidenceVerifier,
 } from "@/server/migration/quarantine";
+import { seedReconciliationLifecycle } from "./reconciliation-fixture";
 
 const expectedDatabaseName = "crm_salam_codex_migration_platform";
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -378,7 +379,7 @@ async function seedFinalReconciledBatch(
     ) values (
       ${finalBatchId}, ${fixture.tenant.organizationId}, ${fixture.tenant.businessUnitId},
       ${fixture.sourceId}, ${fixture.transformId}, ${dryRunId}, ${protectedRef("final-live")},
-      ${sourceSha}, 1, ${capturedAt}, ${cutoffAt}, 'sales.v1', 'RECONCILED', false,
+      ${sourceSha}, 1, ${capturedAt}, ${cutoffAt}, 'sales.v1', 'APPLIED', false,
       1, 1, 1, ${fixture.tenant.membershipId}, ${cutoffAt},
       ${fixture.tenant.membershipId}, ${new Date(cutoffAt.getTime() + 1_000)},
       'FULL', 'Synthetic reconciled cutover batch', ${fixture.tenant.membershipId},
@@ -386,6 +387,11 @@ async function seedFinalReconciledBatch(
       ${new Date(cutoffAt.getTime() + 2_000)}, ${new Date(cutoffAt.getTime() + 3_000)}
     )
   `;
+  await seedReconciliationLifecycle(sql, {
+    organizationId: fixture.tenant.organizationId,
+    businessUnitId: fixture.tenant.businessUnitId,
+    batchId: finalBatchId,
+  });
   return { finalBatchId, cutoffAt, writeFrozenAt };
 }
 

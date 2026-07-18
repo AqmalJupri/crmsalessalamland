@@ -29,13 +29,13 @@ jobs:
       postgres:
         image: postgres:16.14-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
         env:
-          POSTGRES_DB: crm_salam_test_ci
+          POSTGRES_DB: postgres
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d crm_salam_test_ci"
+          --health-cmd "pg_isready -U postgres -d postgres"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -43,8 +43,8 @@ jobs:
       NEXT_TELEMETRY_DISABLED: "1"
       PRODUCT_SURFACE: crm
       DEPLOYMENT_ENVIRONMENT: ci
-      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/crm_salam_test_ci
-      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/crm_salam_test_ci
+      DATABASE_URL: postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_migration_platform
+      TEST_DATABASE_URL: postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_migration_platform
       APP_URL: https://crm-ci.example.test
       APP_VERSION: ${{ github.sha }}
       AUTH_HASH_KEY: ci-only-auth-hash-key-at-least-32-characters
@@ -77,28 +77,75 @@ jobs:
       - name: Install browser runtime
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Lint, typecheck, and coverage gates
-        run: pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm test:coverage:production
+      - name: Bootstrap isolated migration database
+        run: |
+          docker exec "${{ job.services.postgres.id }}" \
+            psql --username=postgres --dbname=postgres --set=ON_ERROR_STOP=1 \
+            --command="CREATE ROLE crm LOGIN PASSWORD 'crm_local_only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"
+          docker exec "${{ job.services.postgres.id }}" \
+            dropdb --if-exists --username=postgres crm_salam_codex_migration_platform
+          docker exec "${{ job.services.postgres.id }}" \
+            createdb --username=postgres --owner=crm crm_salam_codex_migration_platform
+
+      - name: Attest isolated migration database
+        run: |
+          node -e "
+            const expectedDatabaseUrl = 'postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_migration_platform';
+            if (process.env.DATABASE_URL !== expectedDatabaseUrl) {
+              throw new Error('Unsafe DATABASE_URL migration target.');
+            }
+            if (process.env.TEST_DATABASE_URL !== expectedDatabaseUrl) {
+              throw new Error('Unsafe TEST_DATABASE_URL migration target.');
+            }
+          "
+          identity="$(psql "$DATABASE_URL" --no-align --tuples-only --field-separator='|' \
+            --command="select current_database(), current_user, current_setting('server_encoding')")"
+          test "$identity" = "crm_salam_codex_migration_platform|crm|UTF8"
+
+      - name: Lint, typecheck, and unit coverage gates
+        run: pnpm lint && pnpm typecheck && pnpm test:coverage
 
       - name: Apply production migrations
         run: pnpm db:migrate
 
-      - name: Capture migrated database
+      - name: Capture migration ledger before replay
         run: |
           mkdir -p "$RUNNER_TEMP/migrated-db"
-          docker exec "${{ job.services.postgres.id }}" \
-            pg_dump --format=custom --username=postgres --dbname=crm_salam_test_ci \
-            > "$RUNNER_TEMP/migrated-db/crm_salam_test_ci.dump"
+          psql "$DATABASE_URL" --quiet --no-psqlrc --set=ON_ERROR_STOP=1 \
+            --command="copy (select filename, checksum, applied_at from schema_migrations order by filename) to stdout with (format csv, header true)" \
+            > "$RUNNER_TEMP/migrated-db/migration-ledger-before.csv"
+          cat "$RUNNER_TEMP/migrated-db/migration-ledger-before.csv"
+
+      - name: Replay production migrations
+        run: pnpm db:migrate
+
+      - name: Verify replay preserved migration ledger
+        run: |
+          psql "$DATABASE_URL" --quiet --no-psqlrc --set=ON_ERROR_STOP=1 \
+            --command="copy (select filename, checksum, applied_at from schema_migrations order by filename) to stdout with (format csv, header true)" \
+            > "$RUNNER_TEMP/migrated-db/migration-ledger-after.csv"
+          cat "$RUNNER_TEMP/migrated-db/migration-ledger-after.csv"
+          cmp --silent \
+            "$RUNNER_TEMP/migrated-db/migration-ledger-before.csv" \
+            "$RUNNER_TEMP/migrated-db/migration-ledger-after.csv"
+
+      - name: Capture migrated database
+        run: |
+          pg_dump --format=custom "$DATABASE_URL" \
+            > "$RUNNER_TEMP/migrated-db/crm_salam_codex_migration_platform.dump"
 
       - name: Upload migrated database
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: migrated-db-${{ github.sha }}
-          path: ${{ runner.temp }}/migrated-db/crm_salam_test_ci.dump
+          path: ${{ runner.temp }}/migrated-db
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
           overwrite: false
+
+      - name: Run production migration coverage
+        run: pnpm test:coverage:production
 
       - name: Verify database invariants
         run: pnpm test:db
@@ -106,14 +153,10 @@ jobs:
       - name: Prepare synthetic browser database
         run: |
           docker exec "${{ job.services.postgres.id }}" \
-            psql --username=postgres --dbname=postgres --set=ON_ERROR_STOP=1 \
-            --command="CREATE ROLE crm LOGIN PASSWORD 'crm_local_only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"
-          docker exec "${{ job.services.postgres.id }}" \
             createdb --username=postgres --owner=crm crm_salam_codex_ui
-          docker exec -i "${{ job.services.postgres.id }}" \
-            pg_restore --no-owner --no-privileges --role=crm \
-            --username=postgres --dbname=crm_salam_codex_ui \
-            < "$RUNNER_TEMP/migrated-db/crm_salam_test_ci.dump"
+          browser_database_url=postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_ui
+          pg_restore --no-owner --no-privileges --dbname="$browser_database_url" \
+            < "$RUNNER_TEMP/migrated-db/crm_salam_codex_migration_platform.dump"
 
       - name: Run isolated CRM and Tasha browser evidence
         if: ${{ env.VISUAL_CAPTURE_REQUESTED != 'true' }}
@@ -240,13 +283,13 @@ jobs:
       postgres:
         image: postgres:16.14-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
         env:
-          POSTGRES_DB: crm_salam_test_ci
+          POSTGRES_DB: postgres
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d crm_salam_test_ci"
+          --health-cmd "pg_isready -U postgres -d postgres"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -254,7 +297,8 @@ jobs:
       NEXT_TELEMETRY_DISABLED: "1"
       PRODUCT_SURFACE: ${{ matrix.surface }}
       DEPLOYMENT_ENVIRONMENT: ci
-      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/crm_salam_test_ci
+      DATABASE_URL: postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_migration_platform
+      TEST_DATABASE_URL: postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_migration_platform
       APP_URL: ${{ matrix.app_url }}
       APP_VERSION: ${{ github.sha }}
       AUTH_HASH_KEY: ci-only-auth-hash-key-at-least-32-characters
@@ -290,12 +334,34 @@ jobs:
           name: migrated-db-${{ github.sha }}
           path: ${{ runner.temp }}/migrated-db
 
+      - name: Bootstrap runtime migration database
+        run: |
+          docker exec "${{ job.services.postgres.id }}" \
+            psql --username=postgres --dbname=postgres --set=ON_ERROR_STOP=1 \
+            --command="CREATE ROLE crm LOGIN PASSWORD 'crm_local_only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"
+          docker exec "${{ job.services.postgres.id }}" \
+            dropdb --if-exists --username=postgres crm_salam_codex_migration_platform
+          docker exec "${{ job.services.postgres.id }}" \
+            createdb --username=postgres --owner=crm crm_salam_codex_migration_platform
+
       - name: Restore migrated database
         run: |
-          docker exec -i "${{ job.services.postgres.id }}" \
-            pg_restore --clean --if-exists --no-owner --no-privileges \
-            --username=postgres --dbname=crm_salam_test_ci \
-            < "$RUNNER_TEMP/migrated-db/crm_salam_test_ci.dump"
+          pg_restore --clean --if-exists --no-owner --no-privileges \
+            --dbname="$DATABASE_URL" \
+            < "$RUNNER_TEMP/migrated-db/crm_salam_codex_migration_platform.dump"
+
+      - name: Verify restored migration database
+        run: |
+          identity="$(psql "$DATABASE_URL" --no-align --tuples-only --field-separator='|' \
+            --command="select current_database(), current_user, current_setting('server_encoding')")"
+          test "$identity" = "crm_salam_codex_migration_platform|crm|UTF8"
+          psql "$DATABASE_URL" --quiet --no-psqlrc --set=ON_ERROR_STOP=1 \
+            --command="copy (select filename, checksum, applied_at from schema_migrations order by filename) to stdout with (format csv, header true)" \
+            > "$RUNNER_TEMP/migrated-db/migration-ledger-restored.csv"
+          cat "$RUNNER_TEMP/migrated-db/migration-ledger-restored.csv"
+          cmp --silent \
+            "$RUNNER_TEMP/migrated-db/migration-ledger-before.csv" \
+            "$RUNNER_TEMP/migrated-db/migration-ledger-restored.csv"
 
       - name: Download production artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4

@@ -8,6 +8,10 @@ const qualityWorkflow = readFileSync(
   `${repositoryRoot}.github/workflows/quality.yml`,
   "utf8",
 );
+const productionCoverageConfig = readFileSync(
+  `${repositoryRoot}vitest.production-coverage.config.ts`,
+  "utf8",
+);
 const packageJson = JSON.parse(
   readFileSync(`${repositoryRoot}package.json`, "utf8"),
 ) as {
@@ -88,6 +92,22 @@ const expectedSurfaceBindings = [
     oidc_client_id: "tasha-ci",
   },
 ];
+
+const migrationDatabaseName = "crm_salam_codex_migration_platform";
+const migrationDatabaseUrl =
+  `postgresql://crm:crm_local_only@127.0.0.1:5432/${migrationDatabaseName}`;
+const productionMigrationSuites = [
+  "tests/integration/migration-platform-schema.test.ts",
+  "tests/integration/migration-schema-parity.test.ts",
+  "tests/integration/migration-runner.test.ts",
+  "tests/integration/migration-source-registration.test.ts",
+  "tests/integration/import-batch-service.test.ts",
+  "tests/integration/import-row-service.test.ts",
+  "tests/integration/import-validation-approval.test.ts",
+  "tests/integration/import-apply-service.test.ts",
+  "tests/integration/reconciliation-service.test.ts",
+  "tests/integration/migration-cli.test.ts",
+] as const;
 
 function workflowJob(name: string) {
   const marker = `  ${name}:\n`;
@@ -334,19 +354,21 @@ describe("Quality workflow browser evidence", () => {
       "Run isolated CRM and Tasha browser evidence",
     );
 
-    expect(prepareStep).toContain(
-      "CREATE ROLE crm LOGIN PASSWORD 'crm_local_only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION",
-    );
+    expect(prepareStep).not.toContain("CREATE ROLE crm");
     expect(prepareStep).toContain(
       "createdb --username=postgres --owner=crm crm_salam_codex_ui",
     );
     expect(prepareStep).toContain(
-      '"$RUNNER_TEMP/migrated-db/crm_salam_test_ci.dump"',
+      `"$RUNNER_TEMP/migrated-db/${migrationDatabaseName}.dump"`,
     );
     expect(prepareStep).toMatch(
-      /pg_restore[\s\S]*--no-owner --no-privileges --role=crm[\s\S]*--dbname=crm_salam_codex_ui/,
+      /pg_restore[\s\S]*--no-owner --no-privileges[\s\S]*--dbname="\$browser_database_url"/,
     );
-    expect(prepareStep).not.toMatch(/dropdb|crm_salam_test_ci\s*;/i);
+    expect(prepareStep).toContain(
+      "browser_database_url=postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_ui",
+    );
+    expect(prepareStep).not.toMatch(/pg_restore[\s\S]*--username=postgres/);
+    expect(prepareStep).not.toMatch(/dropdb/i);
     expect(checksJob.indexOf("Prepare synthetic browser database")).toBeLessThan(
       checksJob.indexOf("Run isolated CRM and Tasha browser evidence"),
     );
@@ -434,13 +456,151 @@ describe("Quality workflow browser evidence", () => {
 });
 
 describe("Quality workflow deployment artifacts", () => {
-  it("applies migrations once before the build matrix", () => {
+  it("runs production coverage through the serial database-backed migration contracts", () => {
+    expect(productionCoverageConfig).toContain(
+      '"server-only": fileURLToPath(new URL("./tests/stubs/server-only.ts", import.meta.url))',
+    );
+    expect(productionCoverageConfig).toMatch(/fileParallelism:\s*false/);
+    expect(productionCoverageConfig).toMatch(/testTimeout:\s*15_000/);
+    expect(productionCoverageConfig).toMatch(/hookTimeout:\s*30_000/);
+    expect(productionCoverageConfig).toMatch(
+      /exclude:\s*\[\s*"src\/\*\*\/\*\.test\.\{ts,tsx\}",\s*"src\/\*\*\/\*\.d\.ts"\s*\]/,
+    );
+    expect(productionCoverageConfig).toMatch(
+      /thresholds:\s*\{\s*lines:\s*62,\s*functions:\s*69,\s*branches:\s*58,\s*statements:\s*62,?\s*\}/,
+    );
+    for (const suite of productionMigrationSuites) {
+      expect(productionCoverageConfig).toContain(`"${suite}"`);
+    }
+  });
+
+  it("bootstraps and attests both exact application URLs before migrations", () => {
+    const checksJob = workflowJob("checks");
+    const smokeJob = workflowJob("runtime-smoke");
+    const bootstrapStep = jobStep(checksJob, "Bootstrap isolated migration database");
+    const attestationStep = jobStep(checksJob, "Attest isolated migration database");
+    const migrationIndex = checksJob.indexOf("- name: Apply production migrations");
+
+    expect(checksJob).toContain(`DATABASE_URL: ${migrationDatabaseUrl}`);
+    expect(checksJob).toContain(`TEST_DATABASE_URL: ${migrationDatabaseUrl}`);
+    expect(smokeJob).toContain(`DATABASE_URL: ${migrationDatabaseUrl}`);
+    expect(smokeJob).toContain(`TEST_DATABASE_URL: ${migrationDatabaseUrl}`);
+    expect(qualityWorkflow).not.toContain("crm_salam_test_ci");
+
+    expect(bootstrapStep).toContain("--username=postgres --dbname=postgres");
+    expect(bootstrapStep).toContain(
+      "CREATE ROLE crm LOGIN PASSWORD 'crm_local_only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION",
+    );
+    expect(bootstrapStep).toContain(
+      `createdb --username=postgres --owner=crm ${migrationDatabaseName}`,
+    );
+    expect(bootstrapStep).toContain(
+      `dropdb --if-exists --username=postgres ${migrationDatabaseName}`,
+    );
+    expect(bootstrapStep.indexOf("CREATE ROLE crm")).toBeLessThan(
+      bootstrapStep.indexOf(`createdb --username=postgres --owner=crm ${migrationDatabaseName}`),
+    );
+    expect(
+      bootstrapStep.indexOf(`dropdb --if-exists --username=postgres ${migrationDatabaseName}`),
+    ).toBeLessThan(
+      bootstrapStep.indexOf(`createdb --username=postgres --owner=crm ${migrationDatabaseName}`),
+    );
+
+    expect(attestationStep).toContain(`const expectedDatabaseUrl = '${migrationDatabaseUrl}'`);
+    expect(attestationStep).toContain("process.env.DATABASE_URL !== expectedDatabaseUrl");
+    expect(attestationStep).toContain("process.env.TEST_DATABASE_URL !== expectedDatabaseUrl");
+    expect(attestationStep).toMatch(
+      /select current_database\(\), current_user, current_setting\('server_encoding'\)/i,
+    );
+    expect(attestationStep).toContain(`${migrationDatabaseName}|crm|UTF8`);
+    expect(checksJob.indexOf("- name: Bootstrap isolated migration database")).toBeLessThan(
+      checksJob.indexOf("- name: Attest isolated migration database"),
+    );
+    expect(checksJob.indexOf("- name: Attest isolated migration database")).toBeLessThan(
+      migrationIndex,
+    );
+    expect(migrationIndex).toBeGreaterThanOrEqual(0);
+  });
+
+  it("replays migrations and byte-compares the complete timestamped ledger", () => {
     const checksJob = workflowJob("checks");
     const buildJob = workflowJob("build");
+    const firstMigrationIndex = checksJob.indexOf("- name: Apply production migrations");
+    const beforeLedgerIndex = checksJob.indexOf("- name: Capture migration ledger before replay");
+    const replayIndex = checksJob.indexOf("- name: Replay production migrations");
+    const compareIndex = checksJob.indexOf("- name: Verify replay preserved migration ledger");
+    const compareStep = jobStep(checksJob, "Verify replay preserved migration ledger");
 
-    expect(qualityWorkflow.match(/pnpm db:migrate/g) ?? []).toHaveLength(1);
+    expect(qualityWorkflow.match(/pnpm db:migrate/g) ?? []).toHaveLength(2);
     expect(checksJob).toMatch(/- name: Apply production migrations\s+run: pnpm db:migrate/);
+    expect(checksJob).toMatch(/- name: Replay production migrations\s+run: pnpm db:migrate/);
+    expect(compareStep).toMatch(
+      /select filename, checksum, applied_at from schema_migrations order by filename/i,
+    );
+    expect(compareStep).toContain("migration-ledger-before.csv");
+    expect(compareStep).toContain("migration-ledger-after.csv");
+    expect(compareStep).toMatch(/cmp\s+--silent/);
+    expect(firstMigrationIndex).toBeLessThan(beforeLedgerIndex);
+    expect(beforeLedgerIndex).toBeLessThan(replayIndex);
+    expect(replayIndex).toBeLessThan(compareIndex);
     expect(buildJob).toContain("needs: checks");
+  });
+
+  it("uses the application identity for migration, tests, dump, restore, and runtime smoke", () => {
+    const checksJob = workflowJob("checks");
+    const smokeJob = workflowJob("runtime-smoke");
+    const migrationStep = jobStep(checksJob, "Apply production migrations");
+    const replayStep = jobStep(checksJob, "Replay production migrations");
+    const captureStep = jobStep(checksJob, "Capture migrated database");
+    const coverageStep = jobStep(checksJob, "Run production migration coverage");
+    const invariantStep = jobStep(checksJob, "Verify database invariants");
+    const runtimeBootstrapStep = jobStep(smokeJob, "Bootstrap runtime migration database");
+    const restoreStep = jobStep(smokeJob, "Restore migrated database");
+    const restoreProofStep = jobStep(smokeJob, "Verify restored migration database");
+
+    for (const step of [migrationStep, replayStep, captureStep, coverageStep, invariantStep]) {
+      expect(step).not.toContain("--username=postgres");
+    }
+    expect(captureStep).toMatch(/pg_dump[\s\S]*"\$DATABASE_URL"/);
+    expect(restoreStep).toMatch(/pg_restore[\s\S]*--dbname="\$DATABASE_URL"/);
+    expect(restoreStep).not.toContain("--username=postgres");
+    expect(restoreProofStep).toContain("migration-ledger-before.csv");
+    expect(restoreProofStep).toContain("migration-ledger-restored.csv");
+    expect(restoreProofStep).toMatch(/cmp\s+--silent/);
+    expect(runtimeBootstrapStep).toContain(
+      "CREATE ROLE crm LOGIN PASSWORD 'crm_local_only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION",
+    );
+    expect(runtimeBootstrapStep).toContain(
+      `dropdb --if-exists --username=postgres ${migrationDatabaseName}`,
+    );
+    expect(runtimeBootstrapStep).toContain(
+      `createdb --username=postgres --owner=crm ${migrationDatabaseName}`,
+    );
+    expect(
+      runtimeBootstrapStep.indexOf(`dropdb --if-exists --username=postgres ${migrationDatabaseName}`),
+    ).toBeLessThan(
+      runtimeBootstrapStep.indexOf(`createdb --username=postgres --owner=crm ${migrationDatabaseName}`),
+    );
+    expect(smokeJob).toContain(`DATABASE_URL: ${migrationDatabaseUrl}`);
+  });
+
+  it("creates and proves the restored dump before production runtime smoke", () => {
+    const checksJob = workflowJob("checks");
+    const smokeJob = workflowJob("runtime-smoke");
+    const dumpIndex = checksJob.indexOf("- name: Capture migrated database");
+    const uploadIndex = checksJob.indexOf("- name: Upload migrated database");
+    const coverageIndex = checksJob.indexOf("- name: Run production migration coverage");
+    const restoreIndex = smokeJob.indexOf("- name: Restore migrated database");
+    const proofIndex = smokeJob.indexOf("- name: Verify restored migration database");
+    const runtimeIndex = smokeJob.indexOf("- name: Smoke production runtime and security headers");
+
+    expect(dumpIndex).toBeGreaterThanOrEqual(0);
+    expect(uploadIndex).toBeGreaterThan(dumpIndex);
+    // Preserve the reviewed migrated snapshot before destructive database-backed coverage.
+    expect(coverageIndex).toBeGreaterThan(uploadIndex);
+    expect(restoreIndex).toBeGreaterThanOrEqual(0);
+    expect(proofIndex).toBeGreaterThan(restoreIndex);
+    expect(runtimeIndex).toBeGreaterThan(proofIndex);
   });
 
   it("builds immutable CRM and Tasha artifacts from the same commit", () => {

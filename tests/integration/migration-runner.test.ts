@@ -128,7 +128,7 @@ describe("production migration runner", () => {
     expect(replayedLedger).toEqual(firstLedger);
   });
 
-  it.each([2, 3, 4, 5])(
+  it.each([2, 3, 4, 5, 6])(
     "upgrades an exact %i-entry reviewed prefix without rewriting its ledger",
     async (prefixLength) => {
       const reviewedFilenames = [
@@ -138,6 +138,7 @@ describe("production migration runner", () => {
         "0004_membership_user_identity_guard.sql",
         "0005_reconciliation_typed_result_truth.sql",
         "0006_reconciliation_finite_amounts.sql",
+        "0007_reconciliation_signoff_lifecycle.sql",
       ] as const;
       const legacyFilenames = reviewedFilenames.slice(0, prefixLength);
       const legacySources = await Promise.all(
@@ -185,6 +186,7 @@ describe("production migration runner", () => {
         membership_guard: boolean;
         typed_truth_validated: boolean;
         finite_amounts_validated: boolean;
+        signoff_lifecycle_guard: boolean;
       }[]>`
         select
           to_regprocedure('crm_guard_membership_user_identity()') is not null
@@ -198,15 +200,279 @@ describe("production migration runner", () => {
             select 1 from pg_constraint
             where conname = 'reconciliation_results_finite_amounts'
               and convalidated
-          ) as finite_amounts_validated
+          ) as finite_amounts_validated,
+          to_regprocedure('crm_validate_reconciliation_sign_lifecycle()') is not null
+            as signoff_lifecycle_guard
       `;
       expect(integrityGuards).toEqual({
         membership_guard: true,
         typed_truth_validated: true,
         finite_amounts_validated: true,
+        signoff_lifecycle_guard: true,
       });
     },
   );
+
+  it("fails closed when a six-migration prefix contains orphan signed proof", async () => {
+    const reviewedFilenames = [
+      "0001_foundation.sql",
+      "0002_migration_platform.sql",
+      "0003_reconciliation_bytewise_order.sql",
+      "0004_membership_user_identity_guard.sql",
+      "0005_reconciliation_typed_result_truth.sql",
+      "0006_reconciliation_finite_amounts.sql",
+    ] as const;
+    const legacySources = await Promise.all(
+      reviewedFilenames.map(async (filename) => ({
+        filename,
+        source: await readFile(join(process.cwd(), "db/migrations", filename)),
+      })),
+    );
+    const legacyManifest = legacySources.map(({ filename, source }) =>
+      reviewedFixture(filename, source),
+    );
+    const legacyDirectory = await createMigrationDirectory(legacySources);
+    const legacyRunner = await loadRunnerWithManifest(legacyManifest);
+    await legacyRunner.runMigrations(databaseUrl, legacyDirectory);
+    const organizationId = "10000000-0000-4000-8000-000000000091";
+    const businessUnitId = "20000000-0000-4000-8000-000000000091";
+    const orphanRunId = "59000000-0000-4000-8000-000000000091";
+    const correlationId = "56000000-0000-4000-8000-000000000091";
+    await sql`
+      insert into organizations (id, code, name)
+      values (${organizationId}, 'orphan-proof-org', 'Orphan Proof Organisation')
+    `;
+    await sql`
+      insert into business_units (id, organization_id, code, name)
+      values (${businessUnitId}, ${organizationId}, 'orphan-proof-bu', 'Orphan Proof Unit')
+    `;
+    await sql`
+      insert into outbox_events (
+        organization_id, business_unit_id, event_type, event_version,
+        aggregate_type, aggregate_id, aggregate_version, actor_type,
+        correlation_id, payload
+      ) values (
+        ${organizationId}, ${businessUnitId},
+        'crm.migration.reconciliation_run_signed', 1,
+        'RECONCILIATION_RUN', ${orphanRunId}, 2, 'SYSTEM', ${correlationId}, '{}'::jsonb
+      )
+    `;
+    const legacyLedger = await sql<{
+      applied_at: Date;
+      checksum: string;
+      filename: string;
+    }[]>`
+      select filename, checksum, applied_at from schema_migrations order by filename
+    `;
+
+    const { runner } = await loadProductionModules();
+    await expect(runner.runMigrations(databaseUrl)).rejects.toThrow(/orphan.*sign.*proof/i);
+    const afterFailure = await sql<{
+      applied_at: Date;
+      checksum: string;
+      filename: string;
+    }[]>`
+      select filename, checksum, applied_at from schema_migrations order by filename
+    `;
+    expect(afterFailure).toEqual(legacyLedger);
+    const [guard] = await sql<{ exists: boolean }[]>`
+      select to_regprocedure('crm_validate_reconciliation_sign_lifecycle()') is not null as exists
+    `;
+    expect(guard?.exists).toBe(false);
+  });
+
+  it("fails closed when a six-migration prefix contains an invalid RECONCILED/SIGNED loop", async () => {
+    const reviewedFilenames = [
+      "0001_foundation.sql",
+      "0002_migration_platform.sql",
+      "0003_reconciliation_bytewise_order.sql",
+      "0004_membership_user_identity_guard.sql",
+      "0005_reconciliation_typed_result_truth.sql",
+      "0006_reconciliation_finite_amounts.sql",
+    ] as const;
+    const legacySources = await Promise.all(
+      reviewedFilenames.map(async (filename) => ({
+        filename,
+        source: await readFile(join(process.cwd(), "db/migrations", filename)),
+      })),
+    );
+    const legacyManifest = legacySources.map(({ filename, source }) =>
+      reviewedFixture(filename, source),
+    );
+    const legacyDirectory = await createMigrationDirectory(legacySources);
+    const legacyRunner = await loadRunnerWithManifest(legacyManifest);
+    await legacyRunner.runMigrations(databaseUrl, legacyDirectory);
+
+    const fixture = {
+      organizationId: "10000000-0000-4000-8000-000000000092",
+      businessUnitId: "20000000-0000-4000-8000-000000000092",
+      operatorUserId: "30000000-0000-4000-8000-000000000092",
+      signerUserId: "30000000-0000-4000-8000-000000000093",
+      operatorMembershipId: "40000000-0000-4000-8000-000000000092",
+      signerMembershipId: "40000000-0000-4000-8000-000000000093",
+      sourceId: "51000000-0000-4000-8000-000000000092",
+      transformId: "54000000-0000-4000-8000-000000000092",
+      dryRunId: "55000000-0000-4000-8000-000000000092",
+      liveBatchId: "56000000-0000-4000-8000-000000000092",
+      applyRunId: "66000000-0000-4000-8000-000000000092",
+      reconciliationRunId: "59000000-0000-4000-8000-000000000092",
+      reconciliationResultId: "60000000-0000-4000-8000-000000000092",
+    } as const;
+    const sourceSha = Buffer.from("21".repeat(32), "hex");
+    const planSha = Buffer.from("62".repeat(32), "hex");
+    const requiredChecks = [{
+      check_kind: "COUNT",
+      check_key: "records.total",
+      scope_key: "all",
+      measure_unit: null,
+      decimal_scale: null,
+    }];
+
+    await sql.begin(async (transaction) => {
+      await transaction`
+        insert into organizations (id, code, name)
+        values (${fixture.organizationId}, 'invalid-loop-org', 'Invalid Loop Organisation')
+      `;
+      await transaction`
+        insert into business_units (id, organization_id, code, name)
+        values (
+          ${fixture.businessUnitId}, ${fixture.organizationId},
+          'invalid-loop-bu', 'Invalid Loop Unit'
+        )
+      `;
+      await transaction`
+        insert into users (id, auth_subject, display_name, status)
+        values
+          (${fixture.operatorUserId}, 'invalid-loop-operator', 'Invalid Loop Operator', 'ACTIVE'),
+          (${fixture.signerUserId}, 'invalid-loop-signer', 'Invalid Loop Signer', 'ACTIVE')
+      `;
+      await transaction`
+        insert into memberships (
+          id, organization_id, business_unit_id, user_id, status
+        ) values
+          (
+            ${fixture.operatorMembershipId}, ${fixture.organizationId},
+            ${fixture.businessUnitId}, ${fixture.operatorUserId}, 'ACTIVE'
+          ),
+          (
+            ${fixture.signerMembershipId}, ${fixture.organizationId},
+            ${fixture.businessUnitId}, ${fixture.signerUserId}, 'ACTIVE'
+          )
+      `;
+      await transaction`
+        insert into migration_sources (
+          id, organization_id, business_unit_id, source_key, source_kind,
+          source_mode, owner_membership_id, status
+        ) values (
+          ${fixture.sourceId}, ${fixture.organizationId}, ${fixture.businessUnitId},
+          'invalid-loop-source', 'NIAGAWAN_CSV', 'ONE_TIME_MIGRATION',
+          ${fixture.operatorMembershipId}, 'ACTIVE'
+        )
+      `;
+      await transaction`
+        insert into transform_versions (
+          id, organization_id, business_unit_id, migration_source_id, version_no,
+          source_schema_version, mapping_artifact_ref, mapping_sha256,
+          release_manifest_ref, release_manifest_sha256, transform_release_sha256,
+          rationale, approved_by_membership_id, approved_at
+        ) values (
+          ${fixture.transformId}, ${fixture.organizationId}, ${fixture.businessUnitId},
+          ${fixture.sourceId}, 1, 'synthetic.v1', 'protected://invalid-loop/mapping',
+          ${Buffer.from("11".repeat(32), "hex")}, 'protected://invalid-loop/release',
+          ${Buffer.from("12".repeat(32), "hex")},
+          ${Buffer.from("13".repeat(32), "hex")}, 'Invalid loop transform fixture',
+          ${fixture.operatorMembershipId}, transaction_timestamp()
+        )
+      `;
+      await transaction`
+        insert into import_batches (
+          id, organization_id, business_unit_id, migration_source_id,
+          transform_version_id, protected_artifact_ref, source_sha256, size_bytes,
+          captured_at, cutoff_at, schema_version, status, dry_run,
+          total_row_count, valid_row_count, validated_by_membership_id, validated_at
+        ) values (
+          ${fixture.dryRunId}, ${fixture.organizationId}, ${fixture.businessUnitId},
+          ${fixture.sourceId}, ${fixture.transformId}, 'protected://invalid-loop/dry',
+          ${sourceSha}, 1, transaction_timestamp(), transaction_timestamp(),
+          'synthetic.v1', 'DRY_RUN_COMPLETE', true, 1, 1,
+          ${fixture.operatorMembershipId}, transaction_timestamp()
+        )
+      `;
+      await transaction`
+        insert into import_batches (
+          id, organization_id, business_unit_id, migration_source_id,
+          transform_version_id, validated_dry_run_batch_id, protected_artifact_ref,
+          source_sha256, size_bytes, captured_at, cutoff_at, schema_version, status,
+          dry_run, total_row_count, imported_row_count, approved_row_count,
+          validated_by_membership_id, validated_at, approval_mode,
+          approved_by_membership_id, approved_at, approval_reason,
+          applied_by_membership_id, apply_run_id, apply_lease_expires_at,
+          apply_started_at, applied_at
+        ) values (
+          ${fixture.liveBatchId}, ${fixture.organizationId}, ${fixture.businessUnitId},
+          ${fixture.sourceId}, ${fixture.transformId}, ${fixture.dryRunId},
+          'protected://invalid-loop/live', ${sourceSha}, 1,
+          transaction_timestamp(), transaction_timestamp(), 'synthetic.v1',
+          'RECONCILED', false, 1, 1, 1, ${fixture.operatorMembershipId},
+          transaction_timestamp(), 'FULL', ${fixture.operatorMembershipId},
+          transaction_timestamp(), 'Invalid loop approval',
+          ${fixture.operatorMembershipId}, ${fixture.applyRunId},
+          transaction_timestamp() + interval '1 minute', transaction_timestamp(),
+          transaction_timestamp()
+        )
+      `;
+      await transaction`
+        insert into reconciliation_runs (
+          id, organization_id, business_unit_id, batch_id, run_no, status,
+          plan_artifact_ref, plan_sha256, required_checks, required_checks_sha256,
+          required_check_count, passed_check_count, failed_check_count,
+          signed_by_membership_id, signed_at
+        ) values (
+          ${fixture.reconciliationRunId}, ${fixture.organizationId},
+          ${fixture.businessUnitId}, ${fixture.liveBatchId}, 1, 'PASSED',
+          'protected://invalid-loop/plan', ${planSha}, ${transaction.json(requiredChecks)},
+          digest(convert_to(${transaction.json(requiredChecks)}::jsonb::text, 'UTF8'), 'sha256'),
+          1, 1, 0, null, null
+        )
+      `;
+      await transaction`
+        insert into reconciliation_results (
+          id, organization_id, business_unit_id, run_id, check_kind, check_key,
+          scope_key, source_count, target_count, passed, evidence_metadata
+        ) values (
+          ${fixture.reconciliationResultId}, ${fixture.organizationId},
+          ${fixture.businessUnitId}, ${fixture.reconciliationRunId}, 'COUNT',
+          'records.total', 'all', 1, 1, true, '{}'::jsonb
+        )
+      `;
+      await transaction`
+        update reconciliation_runs
+        set status = 'SIGNED', signed_by_membership_id = ${fixture.signerMembershipId},
+            signed_at = transaction_timestamp()
+        where id = ${fixture.reconciliationRunId}
+      `;
+    });
+
+    const legacyLedger = await sql<{
+      applied_at: Date;
+      checksum: string;
+      filename: string;
+    }[]>`
+      select filename, checksum, applied_at from schema_migrations order by filename
+    `;
+    const { runner } = await loadProductionModules();
+    await expect(runner.runMigrations(databaseUrl)).rejects.toThrow(
+      /signed reconciliation requires exactly one successful audit proof/i,
+    );
+    const afterFailure = await sql<{
+      applied_at: Date;
+      checksum: string;
+      filename: string;
+    }[]>`
+      select filename, checksum, applied_at from schema_migrations order by filename
+    `;
+    expect(afterFailure).toEqual(legacyLedger);
+  });
 
   it("serializes concurrent runners into one exact reviewed ledger", async () => {
     const { manifest, runner } = await loadProductionModules();

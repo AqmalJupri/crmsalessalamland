@@ -16,6 +16,10 @@ const snapshotsRoot = join(repositoryRoot, "tests/e2e/__snapshots__");
 const provenancePath = join(snapshotsRoot, "provenance.json");
 const visualSpecPath = join(repositoryRoot, "tests/e2e/ui-visual.spec.ts");
 const visualStylePath = join(repositoryRoot, "tests/e2e/visual-snapshot.css");
+const provenanceWriterPath = join(
+  repositoryRoot,
+  "scripts/ci/write-visual-baseline-provenance.ts",
+);
 const screenReaderPath = join(
   repositoryRoot,
   "docs/design/evidence/ui-foundation-screen-reader.md",
@@ -110,6 +114,29 @@ function expectedAssets(): string[] {
 }
 
 describe("UI visual evidence contract", () => {
+  it("loads the provenance writer through the repository TSX CommonJS contract", () => {
+    const result = spawnSync("pnpm", ["exec", "tsx", provenanceWriterPath], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_SHA: "",
+        ImageOS: "",
+        RUNNER_ARCH: "",
+        VISUAL_BASELINE_CAPTURE: "",
+      },
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+
+    expect(result.status).toBe(1);
+    expect(output).not.toMatch(/top-level await|transform failed/i);
+    expect(output).toContain(
+      process.platform === "linux"
+        ? "VISUAL_BASELINE_CAPTURE must be exactly reviewed-linux."
+        : "Visual baseline provenance can only be produced by Linux.",
+    );
+  });
+
   it("loads the executable visual spec in Playwright's CommonJS transform mode", () => {
     const result = spawnSync(
       "pnpm",

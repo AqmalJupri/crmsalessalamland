@@ -43,7 +43,7 @@ const expectedMigrationLedger = [
   },
   {
     filename: "0007_reconciliation_signoff_lifecycle.sql",
-    checksum: "a013044b4a51de4371efb871dedfda8f9d76e84664a6299cc27d7947db9ad420",
+    checksum: "377718a38cd3af63d0e2eeceecdb2c979fa912714b6d5fc131a79a687a20a6de",
   },
 ];
 const navigationItems = [

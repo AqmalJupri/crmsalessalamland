@@ -141,6 +141,18 @@ for (const scene of activeScenes) {
     );
     await assertReviewedBaselineAuthority(page);
 
+    let hydrationMismatchCount = 0;
+    page.on("console", (message) => {
+      const diagnostic = message.text().toLowerCase();
+      if (
+        diagnostic.includes("hydration-mismatch") ||
+        diagnostic.includes("hydration failed") ||
+        diagnostic.includes("server rendered html didn't match")
+      ) {
+        hydrationMismatchCount += 1;
+      }
+    });
+
     await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
     await page.goto(scene.path, { waitUntil: "domcontentloaded" });
     await page.evaluate(async () => {
@@ -151,11 +163,13 @@ for (const scene of activeScenes) {
 
     await expect(page).toHaveScreenshot(`${scene.name}.png`, {
       animations: "disabled",
+      caret: "initial",
       fullPage: true,
       maxDiffPixels: 100,
       scale: "css",
       stylePath,
       threshold: 0.1,
     });
+    expect(hydrationMismatchCount, "React hydration mismatch during visual capture").toBe(0);
   });
 }

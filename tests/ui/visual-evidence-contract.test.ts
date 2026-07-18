@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
   computeVisualReferenceLock,
@@ -113,7 +114,84 @@ function expectedAssets(): string[] {
   ).sort();
 }
 
+function screenshotStringOptionEvidence(
+  source: string,
+  optionName: string,
+): { callCount: number; unresolved: boolean; values: string[] } {
+  const sourceFile = ts.createSourceFile(
+    "ui-visual.spec.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  let callCount = 0;
+  let unresolved = false;
+  const values: string[] = [];
+
+  function visit(node: ts.Node): void {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "toHaveScreenshot"
+    ) {
+      callCount += 1;
+      const options = node.arguments.at(-1);
+      if (!options || !ts.isObjectLiteralExpression(options)) {
+        unresolved = true;
+      } else {
+        for (const property of options.properties) {
+          if (ts.isSpreadAssignment(property)) {
+            unresolved = true;
+            continue;
+          }
+          if (ts.isComputedPropertyName(property.name)) {
+            unresolved = true;
+            continue;
+          }
+          const name = property.name.text;
+          if (name !== optionName) continue;
+          if (!ts.isPropertyAssignment(property)) {
+            unresolved = true;
+            continue;
+          }
+          if (!ts.isStringLiteralLike(property.initializer)) {
+            unresolved = true;
+            continue;
+          }
+          values.push(property.initializer.text);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return { callCount, unresolved, values };
+}
+
 describe("UI visual evidence contract", () => {
+  it("parses quoted screenshot option keys and fails closed on unresolved spreads", () => {
+    expect(
+      screenshotStringOptionEvidence(
+        'expect(page).toHaveScreenshot("scene.png", { "caret": "hide" });',
+        "caret",
+      ),
+    ).toEqual({ callCount: 1, unresolved: false, values: ["hide"] });
+    expect(
+      screenshotStringOptionEvidence(
+        'expect(page).toHaveScreenshot("scene.png", { ...options, caret: "initial" });',
+        "caret",
+      ),
+    ).toEqual({ callCount: 1, unresolved: true, values: ["initial"] });
+    expect(
+      screenshotStringOptionEvidence(
+        'expect(page).toHaveScreenshot("scene.png", { caret: "initial", get caret() { return "hide"; } });',
+        "caret",
+      ),
+    ).toEqual({ callCount: 1, unresolved: true, values: ["initial"] });
+  });
+
   it("loads the provenance writer through the repository TSX CommonJS contract", () => {
     const result = spawnSync("pnpm", ["exec", "tsx", provenanceWriterPath], {
       cwd: repositoryRoot,
@@ -176,7 +254,15 @@ describe("UI visual evidence contract", () => {
     }
     expect(source).toContain("toHaveScreenshot");
     expect(source).toMatch(/animations:\s*"disabled"/);
-    expect(source).not.toMatch(/\bcaret\s*:/);
+    expect(screenshotStringOptionEvidence(source, "caret")).toEqual({
+      callCount: 1,
+      unresolved: false,
+      values: ["initial"],
+    });
+    expect(source).toContain('page.on("console"');
+    expect(source).toContain("hydrationMismatchCount");
+    expect(source).toContain("hydration-mismatch");
+    expect(source).toContain("server rendered html didn't match");
     expect(source).toMatch(/maxDiffPixels:\s*100/);
     expect(source).toMatch(/threshold:\s*0\.1/);
     expect(source).toMatch(/fullPage:\s*true/);

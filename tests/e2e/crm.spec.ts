@@ -316,35 +316,29 @@ test("mobile navigation opens and remains within viewport", async ({ page }, tes
   await expectNoHorizontalOverflow(page);
 });
 
-test("mobile lead status filter shows complete supported labels", async ({ page }, testInfo) => {
+test("mobile lead status filter has room for complete supported labels", async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.startsWith("mobile"), "Mobile-only assertion");
   await page.goto("/leads?bu=salam-land");
 
   const statusFilter = page.getByLabel("Tapis status");
   await expect(statusFilter).toHaveValue("all");
-  await statusFilter.evaluate((element) => {
-    const select = element as HTMLSelectElement;
-    const option = new Option("Awaiting documents", "awaiting-documents");
-    select.add(option);
-    select.value = option.value;
-  });
-  const labelFit = await statusFilter.evaluate((element) => {
+  const supportedLabel = "Awaiting documents";
+  const labelFit = await statusFilter.evaluate((element, label) => {
     const select = element as HTMLSelectElement;
     const style = getComputedStyle(select);
     const canvas = document.createElement("canvas");
     const context = canvas.getContext("2d");
     if (!context) throw new Error("Canvas text measurement is unavailable.");
     context.font = style.font;
-    const selectedLabel = select.options[select.selectedIndex]?.text ?? "";
-    const textWidth = context.measureText(selectedLabel).width;
+    const textWidth = context.measureText(label).width;
     const availableWidth =
       select.clientWidth -
       Number.parseFloat(style.paddingLeft) -
       Number.parseFloat(style.paddingRight);
-    return { availableWidth, selectedLabel, textWidth };
-  });
+    return { availableWidth, label, textWidth };
+  }, supportedLabel);
 
-  expect(labelFit.selectedLabel).toBe("Awaiting documents");
+  expect(labelFit.label).toBe(supportedLabel);
   expect(
     labelFit.availableWidth,
     `Selected label needs ${labelFit.textWidth}px but has ${labelFit.availableWidth}px`,

@@ -898,7 +898,7 @@ The additive correction binds sign-off to the full top-level `xid8`, database-ow
 
 ## Task 11: Verify the complete control plane
 
-**Execution status:** Implementation and independent review are complete in `ac07905..985e1cf`; closure remains pending the frozen combined SHA, reviewed Linux visual evidence/provenance and a fully green hosted Quality run.
+**Execution status:** Implementation, independent review, the frozen reviewed Linux evidence/provenance and forced-fresh hosted capture are complete in `ac07905..9f2c8cd`. Standard run `29658551712` passed every job but disclosed one retry-only pre-hydration E2E test mutation; closure now depends on a zero-flaky hosted rerun after the deterministic correction.
 
 **Files:**
 

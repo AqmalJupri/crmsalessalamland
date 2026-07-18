@@ -476,6 +476,8 @@ robots: "noindex, nofollow, noarchive"
 
 ## Task 9: Expand responsive, keyboard, and visual regression evidence
 
+**Execution status:** Automated responsive/keyboard/visual contracts, forced-fresh Linux capture, manual review of all 60 PNGs and provenance promotion are complete through `9f2c8cd`. The task remains open only for the named human screen-reader evidence required below.
+
 **Files:**
 
 - Modify: `playwright.config.ts`
@@ -513,6 +515,8 @@ robots: "noindex, nofollow, noarchive"
 - [ ] Commit: `test(ui): lock responsive and accessibility evidence`
 
 ## Task 10: Verify the complete UI foundation
+
+**Execution status:** Local engineering verification, independent code/design/provenance reviews and forced-fresh hosted capture are complete through `9f2c8cd`. Standard run `29658551712` passed all jobs but disclosed one retry-only pre-hydration E2E test mutation; a zero-flaky rerun after the deterministic correction and Task 9's named human screen-reader sign-off remain open. No production release gate is implied.
 
 **Files:**
 

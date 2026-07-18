@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { PlaywrightTestConfig } from "@playwright/test";
@@ -16,6 +17,10 @@ const migrationLedgerGatePath = `${repositoryRoot}scripts/ci/verify-migration-le
 const migrationLedgerGateSource = existsSync(migrationLedgerGatePath)
   ? readFileSync(migrationLedgerGatePath, "utf8")
   : "";
+const visualEvidenceContractSource = readFileSync(
+  `${repositoryRoot}tests/ui/visual-evidence-contract.test.ts`,
+  "utf8",
+);
 const packageJson = JSON.parse(
   readFileSync(`${repositoryRoot}package.json`, "utf8"),
 ) as {
@@ -456,6 +461,24 @@ describe("Quality workflow browser evidence", () => {
     expect(uploadStep).toContain("visual-baseline-candidates-${{ github.sha }}");
     expect(uploadStep).toContain("tests/e2e/__snapshots__");
     expect(uploadStep).toContain("retention-days: 1");
+  });
+
+  it("lets manual capture regenerate stale reviewed evidence without weakening normal runs", () => {
+    const result = spawnSync(
+      "pnpm",
+      ["exec", "vitest", "run", "tests/ui/visual-evidence-contract.test.ts"],
+      {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+        env: { ...process.env, VISUAL_CAPTURE_REQUESTED: "true" },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/1 skipped/);
+    expect(visualEvidenceContractSource).toContain(
+      'it.skipIf(process.env.VISUAL_CAPTURE_REQUESTED === "true")(',
+    );
   });
 });
 

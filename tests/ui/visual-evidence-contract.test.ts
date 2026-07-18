@@ -206,53 +206,56 @@ describe("UI visual evidence contract", () => {
     expect(evidence).toContain("Automasi Axe tidak menggantikan semakan ini");
   });
 
-  it("registers exactly the reviewed Linux PNGs by digest and viewport width", () => {
-    const raw = readRequired(provenancePath);
-    const provenance = JSON.parse(raw) as VisualProvenance;
-    const expected = expectedAssets();
-    const pngs = filesRecursively(snapshotsRoot)
-      .filter((path) => extname(path) === ".png")
-      .map((path) => relative(snapshotsRoot, path).replaceAll("\\", "/"))
-      .sort();
+  it.skipIf(process.env.VISUAL_CAPTURE_REQUESTED === "true")(
+    "registers exactly the reviewed Linux PNGs by digest and viewport width",
+    () => {
+      const raw = readRequired(provenancePath);
+      const provenance = JSON.parse(raw) as VisualProvenance;
+      const expected = expectedAssets();
+      const pngs = filesRecursively(snapshotsRoot)
+        .filter((path) => extname(path) === ".png")
+        .map((path) => relative(snapshotsRoot, path).replaceAll("\\", "/"))
+        .sort();
 
-    expect(provenance).toMatchObject({
-      schemaVersion: 3,
-      syntheticOnly: true,
-      dynamicData: "none-present",
-      capture: {
-        os: "Linux",
-        runnerImage: "ubuntu24",
-        runnerArch: "X64",
-        browserName: "chromium",
-        playwrightVersion: "1.61.1",
-        browserVersion: "149.0.7827.55",
-      },
-      review: {
-        status: "reviewed",
-      },
-    });
-    expect(provenance.sourceCommit).toMatch(/^[0-9a-f]{40}$/);
-    expect(provenance.review.referenceLock).toBe(
-      computeVisualReferenceLock(repositoryRoot),
-    );
-    expect(provenance.sourceBinding).toEqual(
-      computeVisualSourceBinding(repositoryRoot),
-    );
-    expect(provenance.comparisonBinding).toEqual(
-      computeVisualComparisonBinding(repositoryRoot),
-    );
-    expect(provenance.sourceBinding.fileCount).toBeGreaterThan(0);
-    expect(provenance.review.reviewer.trim().length).toBeGreaterThan(0);
-    expect(Object.keys(provenance.assets).sort()).toEqual(expected);
-    expect(pngs).toEqual(expected);
+      expect(provenance).toMatchObject({
+        schemaVersion: 3,
+        syntheticOnly: true,
+        dynamicData: "none-present",
+        capture: {
+          os: "Linux",
+          runnerImage: "ubuntu24",
+          runnerArch: "X64",
+          browserName: "chromium",
+          playwrightVersion: "1.61.1",
+          browserVersion: "149.0.7827.55",
+        },
+        review: {
+          status: "reviewed",
+        },
+      });
+      expect(provenance.sourceCommit).toMatch(/^[0-9a-f]{40}$/);
+      expect(provenance.review.referenceLock).toBe(
+        computeVisualReferenceLock(repositoryRoot),
+      );
+      expect(provenance.sourceBinding).toEqual(
+        computeVisualSourceBinding(repositoryRoot),
+      );
+      expect(provenance.comparisonBinding).toEqual(
+        computeVisualComparisonBinding(repositoryRoot),
+      );
+      expect(provenance.sourceBinding.fileCount).toBeGreaterThan(0);
+      expect(provenance.review.reviewer.trim().length).toBeGreaterThan(0);
+      expect(Object.keys(provenance.assets).sort()).toEqual(expected);
+      expect(pngs).toEqual(expected);
 
-    for (const asset of expected) {
-      const path = join(snapshotsRoot, asset);
-      expect(provenance.assets[asset], asset).toBe(sha256(path));
-      const project = asset.split("/")[2] as keyof typeof screenshotProjects;
-      const dimensions = pngDimensions(path);
-      expect(dimensions.width, asset).toBe(screenshotProjects[project]);
-      expect(dimensions.height, asset).toBeGreaterThanOrEqual(700);
-    }
-  });
+      for (const asset of expected) {
+        const path = join(snapshotsRoot, asset);
+        expect(provenance.assets[asset], asset).toBe(sha256(path));
+        const project = asset.split("/")[2] as keyof typeof screenshotProjects;
+        const dimensions = pngDimensions(path);
+        expect(dimensions.width, asset).toBe(screenshotProjects[project]);
+        expect(dimensions.height, asset).toBeGreaterThanOrEqual(700);
+      }
+    },
+  );
 });

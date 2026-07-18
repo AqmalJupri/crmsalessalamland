@@ -5,7 +5,7 @@
 - UI plan: `docs/superpowers/plans/2026-07-16-ui-product-surface-foundation.md`
 - Migration plan: `docs/superpowers/plans/2026-07-16-migration-control-plane.md`
 - Original baseline: lint PASS; typecheck PASS; tests 222/222 PASS.
-- Current integrated checkpoint: `63188b2`; final combined hosted verification is recorded below. No production release gate has passed.
+- Current integrated checkpoint: `5bfae9c`; final combined hosted verification is recorded below. No production release gate has passed.
 
 ## Integrated round history
 
@@ -14,6 +14,7 @@
 3. Additive Migration `0007`: `31dd049..25afbc3`.
 4. Migration Task 10: `ae72341..8935521`.
 5. Migration Task 9 service and review corrections: `d77fcc0..63188b2`.
+6. Round 1 evidence ledger and portable visual-provenance correction: `72ba2fb`, `5bfae9c`.
 
 UI Phase B3 is already present through `e647dce`; the equivalent `4044338` tree must not be reapplied.
 
@@ -47,13 +48,13 @@ UI Phase B3 is already present through `e647dce`; the equivalent `4044338` tree 
 ## Current combined verification
 
 - Local lint, TypeScript and diff hygiene: PASS.
-- Unit/high-confidence coverage in explicit capture mode: 75 files, 918 passed and one reviewed-visual provenance assertion skipped; 92.22% statements, 85.87% branches, 95.19% functions and 93.24% lines.
+- Unit/high-confidence coverage in explicit capture mode: 75 files, 919 passed and one reviewed-visual provenance assertion skipped; 92.22% statements, 85.87% branches, 95.19% functions and 93.24% lines.
 - Normal unit mode: intentionally FAIL-CLOSED only on stale visual provenance after source/package changes; no hash was edited manually.
 - PostgreSQL 16 integrated suite: 15 files, 601/601 PASS; production-source coverage: 75 files, 1,355/1,355 PASS at 82.56% statements, 77.99% branches, 90.41% functions and 83.86% lines.
 - Fresh migration apply/replay: exact seven-row ledger with unchanged timestamps; custom dump restored into a separate database with identical ledger. Fresh catalog: 59 public tables, 247 indexes, 112 non-internal triggers and 30 `crm_*` functions.
 - Local CRM and Tasha production builds plus runtime/security/readiness smokes: PASS. Non-visual browser contracts: CRM 155 passed/20 inapplicable skipped; Tasha 88 passed/101 inapplicable skipped; ports, connections and advisory locks returned to zero.
-- Local shell Node is 24.x and therefore emits the expected engine warning; the exact Node 22.22.0 proof remains the hosted workflow responsibility.
-- Remaining combined closure: commit/push the frozen source, run Linux capture, manually inspect all 60 PNGs and generated provenance, commit the reviewed evidence, then require a fully green standard hosted Quality run.
+- Hosted capture run `29653651419` on exact Node 22.22.0 passed lint/typecheck/unit coverage, seven-migration apply/replay and unchanged-ledger checks, migrated-database capture, production coverage, 601 database invariants, browser-database restore, and all 60 visual scene executions. It then failed before candidate upload because the provenance writer used top-level `await` under the repository's TSX CommonJS transform. Commit `5bfae9c` closes that exact failure with a RED/GREEN spawn regression and independently approved async entrypoint; no UI or provenance field contract changed.
+- Remaining combined closure: push the corrected frozen source, rerun Linux capture, manually inspect all 60 PNGs and generated provenance, commit the reviewed evidence, then require a fully green standard hosted Quality run.
 
 ## Minor review findings
 

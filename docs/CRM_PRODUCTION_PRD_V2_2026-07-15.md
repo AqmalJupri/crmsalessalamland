@@ -1145,8 +1145,8 @@ No archive is declared canonical solely because it is newest or largest.
 
 | Evidence | Settled result | Boundary |
 |---|---|---|
-| Lint and TypeScript | PASS on integrated Round 1 | Local shell uses Node 24.x and emits the expected engine warning; exact Node 22.22.0 remains a hosted-workflow proof |
-| High-confidence coverage | 75 files; 918 passed and one visual-provenance assertion skipped only in explicit capture mode; 92.22% statements, 85.87% branches, 95.19% functions, 93.24% lines | Normal mode correctly rejects the stale reviewed visual provenance until Linux recapture and manual review |
+| Lint and TypeScript | PASS on integrated Round 1 | Local shell currently uses Node 22.22.3; hosted capture run `29653651419` exercised exact Node 22.22.0 through coverage and database gates, while a final fully green hosted run remains open |
+| High-confidence coverage | 75 files; 919 passed and one visual-provenance assertion skipped only in explicit capture mode; 92.22% statements, 85.87% branches, 95.19% functions, 93.24% lines | Normal mode correctly rejects the stale reviewed visual provenance until Linux recapture and manual review |
 | All-production-source coverage | 75 files, 1,355/1,355 pass; 82.56% statements, 77.99% branches, 90.41% functions, 83.86% lines | Coverage is engineering evidence, not UAT, capacity, penetration, privacy or production approval |
 | PostgreSQL 16 migration/control plane | 15 files, 601/601 pass; exact seven-row apply/replay ledger; separate custom dump/restore has identical ledger; fresh catalog has 59 tables, 247 indexes, 112 non-internal triggers and 30 `crm_*` functions | Synthetic source-neutral evidence only; not real-adapter reconciliation, RLS, HA, production PITR/off-site restore or cutover proof |
 | Dual-surface runtime | CRM and Tasha production builds plus runtime/security/readiness smoke pass; non-visual browser contracts pass CRM 155 with 20 inapplicable skips and Tasha 88 with 101 inapplicable skips | Final Linux 60-image capture/review, named screen-reader sign-off and final green hosted Quality remain open |

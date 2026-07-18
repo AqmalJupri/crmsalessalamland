@@ -22,6 +22,8 @@
     "test:e2e:tasha": "pnpm clean:next && DATABASE_URL=postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_ui APP_URL=http://127.0.0.1:3202 AUTH_HASH_KEY=ui-e2e-auth-hash-key-0123456789abcdef CRM_DEMO_MODE=true DEPLOYMENT_ENVIRONMENT=local PRODUCT_SURFACE=tasha E2E_PRODUCT_SURFACE=tasha E2E_PORT=3202 playwright test",
     "test:runtime": "node tests/production/runtime-smoke.mjs",
     "db:migrate": "tsx src/server/db/migrate.ts",
+    "migration:inspect": "tsx src/server/migration/cli.ts inspect-manifest",
+    "migration:status": "tsx src/server/migration/cli.ts status",
     "clean:next": "node -e \"require('node:fs').rmSync('.next', { recursive: true, force: true })\"",
     "verify": "pnpm clean:next && pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm test:coverage:production && pnpm build",
     "verify:full": "pnpm verify && pnpm test:db && pnpm test:e2e"

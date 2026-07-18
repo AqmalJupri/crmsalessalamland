@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
   EXPECTED_MIGRATIONS,
@@ -11,6 +12,22 @@ const expectedLedger = EXPECTED_MIGRATIONS.map(({ filename, checksum }) => ({
 }));
 
 describe("CI migration ledger gate", () => {
+  it("starts under the same CommonJS tsx mode used by CI", () => {
+    const result = spawnSync(
+      "pnpm",
+      ["exec", "tsx", "scripts/ci/verify-migration-ledger.ts"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: { ...process.env, DATABASE_URL: "" },
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/DATABASE_URL is required/i);
+    expect(result.stderr).not.toMatch(/top-level await/i);
+  });
+
   it("accepts the frozen manifest ledger exactly", () => {
     expect(() => assertCiMigrationLedgerCurrent(expectedLedger)).not.toThrow();
   });

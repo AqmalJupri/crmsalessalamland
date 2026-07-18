@@ -177,13 +177,32 @@ describe("migration manifest", () => {
       "FOR NO KEY UPDATE NOWAIT",
     );
     expect(reconciliationSignoffLifecycleMigrationSource).toContain(
-      "FOR SHARE OF signer_user",
+      "FOR SHARE OF signer_user NOWAIT",
     );
     expect(reconciliationSignoffLifecycleMigrationSource).toContain(
       "pg_catalog.pg_current_xact_id()",
     );
     expect(reconciliationSignoffLifecycleMigrationSource).toContain(
+      "ADD COLUMN signed_transaction_id pg_catalog.xid8",
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).toContain(
+      "signed_transaction_id = pg_catalog.pg_current_xact_id()",
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).not.toMatch(/\bxmin\b/);
+    expect(reconciliationSignoffLifecycleMigrationSource).not.toContain(
       "pg_catalog.pg_xact_status",
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).not.toMatch(
+      /::(?:pg_catalog\.)?xid(?!8)/,
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).toContain(
+      "NEW.signed_at := pg_catalog.clock_timestamp()",
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).toContain(
+      "NEW.signed_at IS NOT NULL",
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).toContain(
+      "Lock order: parent batch, memberships by UUID, then signer user",
     );
     expect(reconciliationSignoffLifecycleMigrationSource).toContain(
       "CREATE CONSTRAINT TRIGGER migration_reconciliation_lifecycle_from_membership_guard",
@@ -200,9 +219,10 @@ describe("migration manifest", () => {
     expect(reconciliationSignoffLifecycleMigrationSource).toContain(
       "FROM public.memberships",
     );
-    expect(reconciliationSignoffLifecycleMigrationSource).not.toMatch(
-      /\b(?:CREATE|ALTER|DROP)\s+TABLE\b/i,
-    );
+    expect(reconciliationSignoffLifecycleMigrationSource).not.toMatch(/\b(?:CREATE|DROP)\s+TABLE\b/i);
+    expect(
+      reconciliationSignoffLifecycleMigrationSource.match(/ALTER TABLE public\.reconciliation_runs/g),
+    ).toHaveLength(3);
     expect(reconciliationSignoffLifecycleMigrationSource).not.toContain("DROP FUNCTION");
     expect(reconciliationSignoffLifecycleMigrationSource).not.toContain("DROP TRIGGER");
   });

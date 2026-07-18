@@ -151,7 +151,6 @@ for (const scene of activeScenes) {
 
     await expect(page).toHaveScreenshot(`${scene.name}.png`, {
       animations: "disabled",
-      caret: "hide",
       fullPage: true,
       maxDiffPixels: 100,
       scale: "css",

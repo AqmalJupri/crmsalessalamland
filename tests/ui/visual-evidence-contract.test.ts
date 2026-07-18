@@ -176,7 +176,7 @@ describe("UI visual evidence contract", () => {
     }
     expect(source).toContain("toHaveScreenshot");
     expect(source).toMatch(/animations:\s*"disabled"/);
-    expect(source).toMatch(/caret:\s*"hide"/);
+    expect(source).not.toMatch(/\bcaret\s*:/);
     expect(source).toMatch(/maxDiffPixels:\s*100/);
     expect(source).toMatch(/threshold:\s*0\.1/);
     expect(source).toMatch(/fullPage:\s*true/);
@@ -186,6 +186,7 @@ describe("UI visual evidence contract", () => {
     expect(source).toContain("computeVisualComparisonBinding");
     expect(source).toContain("browser.version()");
     expect(style).toContain("nextjs-portal");
+    expect(style).toMatch(/caret-color:\s*transparent\s*!important/);
   });
 
   it("keeps baseline capture manual, Linux-only, synthetic, and separate from normal comparison", () => {

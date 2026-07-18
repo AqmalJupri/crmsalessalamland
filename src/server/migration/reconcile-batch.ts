@@ -2,7 +2,7 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 import { isProxy } from "node:util/types";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { assertImportBatchTransition } from "@/domain/migration/batch-lifecycle";
 import { getDatabase } from "@/server/db/client";
 import {
@@ -37,6 +37,13 @@ const MAX_CANONICAL_REQUIREMENT_BYTES = 512_000;
 const MAX_POSTGRES_INTEGER = 2_147_483_647;
 const MAX_POSTGRES_BIGINT = 9_223_372_036_854_775_807n;
 const MAX_REASON_LENGTH = 2_000;
+const TERMINAL_RECORD_REFRESH_CODES = new Set([
+  "MIGRATION_CAPABILITY_REQUIRED",
+  "MIGRATION_MEMBERSHIP_INVALID",
+  "MIGRATION_SCOPE_FORBIDDEN",
+  "MIGRATION_SOURCE_NOT_ACTIVE",
+  "MIGRATION_SOURCE_NOT_FOUND",
+]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CHECK_KEY_PATTERN = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$/;
 const SCOPE_KEY_PATTERN = /^[a-z][a-z0-9_.:-]*$/;
@@ -824,6 +831,10 @@ function postgresErrorDetails(error: unknown): { code?: string; constraint?: str
   return {};
 }
 
+function canRefreshTerminalRecordReplay(error: unknown): error is ApiError {
+  return error instanceof ApiError && TERMINAL_RECORD_REFRESH_CODES.has(error.code);
+}
+
 async function locateBatch(
   database: Database,
   actor: MigrationActor,
@@ -901,45 +912,88 @@ async function preflightRecord(
     );
   });
   if (mode !== "MUTATION") return mode;
-  await database.transaction(async (transaction) => {
-    await requireActiveMigrationTenant(transaction, command.actor);
-    await requireMigrationActorCapability(transaction, command.actor, SIGN_CAPABILITY);
-    await lockAndValidateMigrationSourceAuthority(
-      transaction,
-      command.actor,
-      migrationSourceId,
-    );
-    const [batch] = await transaction
-      .select({ status: importBatches.status, version: importBatches.version })
-      .from(importBatches)
-      .where(
-        and(
-          eq(importBatches.organizationId, command.actor.organizationId),
-          eq(importBatches.businessUnitId, command.actor.businessUnitId),
-          eq(importBatches.migrationSourceId, migrationSourceId),
-          eq(importBatches.id, command.batchId),
-        ),
-      )
-      .for("share")
-      .limit(1);
-    if (!batch) throw new ApiError(404, "IMPORT_BATCH_NOT_FOUND", "Import batch not found.");
-    if (batch.version !== command.expectedBatchVersion) {
-      throw new ApiError(
-        409,
-        "IMPORT_BATCH_VERSION_CONFLICT",
-        "The applied import batch changed during reconciliation preflight.",
+  try {
+    await database.transaction(async (transaction) => {
+      await requireActiveMigrationTenant(transaction, command.actor);
+      await requireMigrationActorCapability(transaction, command.actor, SIGN_CAPABILITY);
+      await lockAndValidateMigrationSourceAuthority(
+        transaction,
+        command.actor,
+        migrationSourceId,
       );
+      const [batch] = await transaction
+        .select({ status: importBatches.status, version: importBatches.version })
+        .from(importBatches)
+        .where(
+          and(
+            eq(importBatches.organizationId, command.actor.organizationId),
+            eq(importBatches.businessUnitId, command.actor.businessUnitId),
+            eq(importBatches.migrationSourceId, migrationSourceId),
+            eq(importBatches.id, command.batchId),
+          ),
+        )
+        .for("share")
+        .limit(1);
+      if (!batch) {
+        throw new ApiError(404, "IMPORT_BATCH_NOT_FOUND", "Import batch not found.");
+      }
+      if (batch.version !== command.expectedBatchVersion) {
+        throw new ApiError(
+          409,
+          "IMPORT_BATCH_VERSION_CONFLICT",
+          "The applied import batch changed during reconciliation preflight.",
+        );
+      }
+      if (batch.status !== "APPLIED") {
+        throw new ApiError(
+          409,
+          "IMPORT_BATCH_STATE_INVALID",
+          "Only an applied import batch can create a reconciliation run.",
+        );
+      }
+      await requireMigrationActorCapability(transaction, command.actor, SIGN_CAPABILITY);
+    });
+  } catch (error: unknown) {
+    if (
+      canRefreshTerminalRecordReplay(error) &&
+      await hasTerminalRecordReplay(database, command, migrationSourceId)
+    ) {
+      return "TERMINAL_REPLAY";
     }
-    if (batch.status !== "APPLIED") {
-      throw new ApiError(
-        409,
-        "IMPORT_BATCH_STATE_INVALID",
-        "Only an applied import batch can create a reconciliation run.",
-      );
-    }
-    await requireMigrationActorCapability(transaction, command.actor, SIGN_CAPABILITY);
-  });
+    throw error;
+  }
   return "MUTATION";
+}
+
+async function hasTerminalRecordReplay(
+  database: Database,
+  command: RecordCommand,
+  migrationSourceId: string,
+): Promise<boolean> {
+  const [terminal] = await database
+    .select({ id: reconciliationRuns.id })
+    .from(reconciliationRuns)
+    .innerJoin(
+      importBatches,
+      and(
+        eq(importBatches.organizationId, reconciliationRuns.organizationId),
+        eq(importBatches.businessUnitId, reconciliationRuns.businessUnitId),
+        eq(importBatches.id, reconciliationRuns.batchId),
+      ),
+    )
+    .where(
+      and(
+        eq(reconciliationRuns.organizationId, command.actor.organizationId),
+        eq(reconciliationRuns.businessUnitId, command.actor.businessUnitId),
+        eq(reconciliationRuns.batchId, command.batchId),
+        eq(reconciliationRuns.runNo, command.runNo),
+        eq(reconciliationRuns.status, "SIGNED"),
+        eq(importBatches.migrationSourceId, migrationSourceId),
+        eq(importBatches.status, "RECONCILED"),
+      ),
+    )
+    .limit(1);
+  return terminal !== undefined;
 }
 
 function assertExactResultSet(
@@ -1348,9 +1402,9 @@ export async function recordReconciliationRun(
   const passed = failedCount === 0;
   const runStatus = passed ? "PASSED" : "FAILED";
 
-  try {
-    return await database.transaction(async (transaction) => {
-      const terminalReplay = preflightMode === "TERMINAL_REPLAY";
+  const executeFinalRecord = (attemptMode: typeof preflightMode) =>
+    database.transaction(async (transaction) => {
+      const terminalReplay = attemptMode === "TERMINAL_REPLAY";
       let eventActorType: "USER" | "SERVICE" | null = null;
       await requireActiveMigrationTenant(transaction, command.actor);
       if (!terminalReplay) {
@@ -1361,7 +1415,7 @@ export async function recordReconciliationRun(
         );
         eventActorType = actorType(actorEvidence.userType);
       }
-      if (preflightMode === "MUTATION") {
+      if (attemptMode === "MUTATION") {
         await lockAndValidateMigrationSourceAuthority(
           transaction,
           command.actor,
@@ -1382,7 +1436,7 @@ export async function recordReconciliationRun(
         .for("update")
         .limit(1);
       if (!batch) throw new ApiError(404, "IMPORT_BATCH_NOT_FOUND", "Import batch not found.");
-      const batchRuns: StoredReplayRun[] = await transaction
+      const [existing]: StoredReplayRun[] = await transaction
         .select({
           id: reconciliationRuns.id,
           runNo: reconciliationRuns.runNo,
@@ -1400,11 +1454,19 @@ export async function recordReconciliationRun(
             eq(reconciliationRuns.organizationId, command.actor.organizationId),
             eq(reconciliationRuns.businessUnitId, command.actor.businessUnitId),
             eq(reconciliationRuns.batchId, command.batchId),
+            eq(reconciliationRuns.runNo, command.runNo),
           ),
         )
-        .orderBy(asc(reconciliationRuns.runNo), asc(reconciliationRuns.id))
-        .for("update");
-      const existing = batchRuns.find((candidate) => candidate.runNo === command.runNo);
+        .for("update")
+        .limit(1);
+      if (
+        terminalReplay &&
+        (batch.status !== "RECONCILED" || existing?.status !== "SIGNED")
+      ) {
+        replayConflict(
+          "The terminal reconciliation record replay no longer has a signed run and reconciled batch.",
+        );
+      }
       if (existing) {
         const storedResults: StoredReplayResult[] = await transaction
           .select({
@@ -1470,7 +1532,7 @@ export async function recordReconciliationRun(
         }
         return { runId: existing.id, passed };
       }
-      if (preflightMode !== "MUTATION") {
+      if (attemptMode !== "MUTATION") {
         replayConflict(
           "The reconciliation run selected for replay no longer exists.",
         );
@@ -1489,7 +1551,20 @@ export async function recordReconciliationRun(
           "The applied import batch changed during plan verification.",
         );
       }
-      const latestRunNo = batchRuns.at(-1)?.runNo ?? 0;
+      const [latestRun] = await transaction
+        .select({ runNo: reconciliationRuns.runNo })
+        .from(reconciliationRuns)
+        .where(
+          and(
+            eq(reconciliationRuns.organizationId, command.actor.organizationId),
+            eq(reconciliationRuns.businessUnitId, command.actor.businessUnitId),
+            eq(reconciliationRuns.batchId, command.batchId),
+          ),
+        )
+        .orderBy(desc(reconciliationRuns.runNo), desc(reconciliationRuns.id))
+        .for("share")
+        .limit(1);
+      const latestRunNo = latestRun?.runNo ?? 0;
       if (command.runNo !== latestRunNo + 1) {
         throw new ApiError(
           409,
@@ -1579,24 +1654,43 @@ export async function recordReconciliationRun(
       );
       return { runId: run.id, passed };
     });
-  } catch (error: unknown) {
-    if (error instanceof ApiError) throw error;
-    const postgresError = postgresErrorDetails(error);
-    if (
-      postgresError.code === "23505" &&
-      postgresError.constraint === "reconciliation_runs_run_unique"
-    ) {
+
+  let finalMode = preflightMode;
+  for (;;) {
+    const attemptMode = finalMode;
+    try {
+      return await executeFinalRecord(attemptMode);
+    } catch (error: unknown) {
+      if (
+        attemptMode !== "TERMINAL_REPLAY" &&
+        canRefreshTerminalRecordReplay(error) &&
+        await hasTerminalRecordReplay(
+          database,
+          command,
+          locator.migrationSourceId,
+        )
+      ) {
+        finalMode = "TERMINAL_REPLAY";
+        continue;
+      }
+      if (error instanceof ApiError) throw error;
+      const postgresError = postgresErrorDetails(error);
+      if (
+        postgresError.code === "23505" &&
+        postgresError.constraint === "reconciliation_runs_run_unique"
+      ) {
+        throw new ApiError(
+          409,
+          "RECONCILIATION_RUN_CONFLICT",
+          "This reconciliation run number already exists for the import batch.",
+        );
+      }
       throw new ApiError(
-        409,
-        "RECONCILIATION_RUN_CONFLICT",
-        "This reconciliation run number already exists for the import batch.",
+        500,
+        "RECONCILIATION_RECORD_FAILED",
+        "The reconciliation run could not be recorded.",
       );
     }
-    throw new ApiError(
-      500,
-      "RECONCILIATION_RECORD_FAILED",
-      "The reconciliation run could not be recorded.",
-    );
   }
 }
 
@@ -1692,7 +1786,7 @@ export async function signReconciliationRun(
         .for("update")
         .limit(1);
       if (!batch) throw new ApiError(404, "IMPORT_BATCH_NOT_FOUND", "Import batch not found.");
-      const batchRuns = await transaction
+      const [run] = await transaction
         .select({
           id: reconciliationRuns.id,
           runNo: reconciliationRuns.runNo,
@@ -1710,11 +1804,11 @@ export async function signReconciliationRun(
             eq(reconciliationRuns.organizationId, command.actor.organizationId),
             eq(reconciliationRuns.businessUnitId, command.actor.businessUnitId),
             eq(reconciliationRuns.batchId, locator.batchId),
+            eq(reconciliationRuns.id, command.runId),
           ),
         )
-        .orderBy(asc(reconciliationRuns.runNo), asc(reconciliationRuns.id))
-        .for("update");
-      const run = batchRuns.find((candidate) => candidate.id === command.runId);
+        .for("update")
+        .limit(1);
       if (!run) {
         throw new ApiError(
           404,
@@ -1722,7 +1816,21 @@ export async function signReconciliationRun(
           "Reconciliation run not found.",
         );
       }
-      if (batchRuns.at(-1)?.id !== run.id) {
+      const [laterRun] = await transaction
+        .select({ id: reconciliationRuns.id })
+        .from(reconciliationRuns)
+        .where(
+          and(
+            eq(reconciliationRuns.organizationId, command.actor.organizationId),
+            eq(reconciliationRuns.businessUnitId, command.actor.businessUnitId),
+            eq(reconciliationRuns.batchId, locator.batchId),
+            gt(reconciliationRuns.runNo, run.runNo),
+          ),
+        )
+        .orderBy(asc(reconciliationRuns.runNo), asc(reconciliationRuns.id))
+        .for("share")
+        .limit(1);
+      if (laterRun) {
         throw new ApiError(
           409,
           "RECONCILIATION_RUN_NOT_LATEST",

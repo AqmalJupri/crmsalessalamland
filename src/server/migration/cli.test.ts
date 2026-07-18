@@ -541,6 +541,19 @@ describe("synthetic fixture repository contract", () => {
   });
 });
 
+describe("direct-process hanging driver harness", () => {
+  it("uses a resolve-only built-in module URL without interposing on loads", async () => {
+    const source = await readFile(hangingDriverRegisterPath, "utf8");
+
+    expect(source).toMatch(/registerHooks\(\{\s*resolve\(/);
+    expect(source).toContain('specifier === "postgres"');
+    expect(source).toMatch(
+      /new URL\(\s*"\.\/migration-cli-hanging-postgres\.mjs",\s*import\.meta\.url,?\s*\)\.href/,
+    );
+    expect(source).not.toMatch(/\bload\s*\(/);
+  });
+});
+
 describe("default synthetic manifest reader", () => {
   const safeManifestFailure = JSON.stringify({
     state: "DENIED",

@@ -119,6 +119,8 @@ test("login and root expose surface-specific Malay identity and metadata", async
   await expect(
     page.locator(".crm-login-card").getByText(contract.productName, { exact: true }),
   ).toBeVisible();
+  await expect(page.locator(".crm-login-card__mark")).toHaveCSS("display", "grid");
+  await expect(page.locator(".crm-login-card__mark")).toHaveCSS("place-items", "center");
 
   await visitAndAudit(page, {
     path: "/?bu=salam-land",
@@ -127,6 +129,13 @@ test("login and root expose surface-specific Malay identity and metadata", async
     shell: true,
   });
   await expect(page.getByRole("button", { name: "Menu pengguna Pengguna Demo" })).toBeVisible();
+  if (surface === "tasha") {
+    const unknownState = page.getByRole("region", { name: "Data pengecualian belum tersedia." });
+    await expect(unknownState).toHaveAttribute("data-state-kind", "unknown");
+    await expect(unknownState.locator('[data-state-icon="circle-help"]')).toBeVisible();
+    await expect(unknownState.locator('[data-state-icon="inbox"]')).toHaveCount(0);
+    await expect(unknownState.locator(".crm-operation-state__details")).toHaveCount(0);
+  }
 });
 
 test("manifest keeps the surface name, root start URL, and explicit icons", async ({ request }) => {

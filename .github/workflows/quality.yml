@@ -227,21 +227,15 @@ jobs:
           - surface: crm
             app_url: https://crm-ci.example.test
             oidc_client_id: crm-ci
+            mismatched_surface: tasha
           - surface: tasha
             app_url: https://tasha-ci.example.test
             oidc_client_id: tasha-ci
+            mismatched_surface: crm
     env:
       NEXT_TELEMETRY_DISABLED: "1"
       PRODUCT_SURFACE: ${{ matrix.surface }}
-      DEPLOYMENT_ENVIRONMENT: "ci"
-      APP_URL: ${{ matrix.app_url }}
       APP_VERSION: ${{ github.sha }}
-      CRM_DEMO_MODE: "false"
-      AUTH_HASH_KEY: ci-only-auth-hash-key-at-least-32-characters
-      OIDC_ISSUER: https://identity.example.test
-      OIDC_CLIENT_ID: ${{ matrix.oidc_client_id }}
-      OIDC_CLIENT_SECRET: ci-only-oidc-secret-at-least-16-characters
-      OIDC_REDIRECT_URI: ${{ matrix.app_url }}/api/v1/auth/oidc/callback
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -294,9 +288,11 @@ jobs:
           - surface: crm
             app_url: https://crm-ci.example.test
             oidc_client_id: crm-ci
+            mismatched_surface: tasha
           - surface: tasha
             app_url: https://tasha-ci.example.test
             oidc_client_id: tasha-ci
+            mismatched_surface: crm
     services:
       postgres:
         image: postgres:16.14-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
@@ -421,6 +417,15 @@ jobs:
         run: >-
           pnpm --dir "$RUNNER_TEMP/runtime-${{ matrix.surface }}"
           install --prod --frozen-lockfile
+
+      - name: Reject mismatched runtime surface
+        env:
+          ARTIFACT_PRODUCT_SURFACE: ${{ matrix.surface }}
+          PRODUCT_SURFACE: ${{ matrix.mismatched_surface }}
+          PORT: "3101"
+        run: |
+          cd "$RUNNER_TEMP/runtime-${{ matrix.surface }}"
+          node "$GITHUB_WORKSPACE/scripts/ci/run-next-runtime-surface-mismatch.mjs"
 
       - name: Smoke production runtime and security headers
         env:

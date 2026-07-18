@@ -1,4 +1,5 @@
-export type ProductSurface = "crm" | "tasha";
+export const PRODUCT_SURFACES = ["crm", "tasha"] as const;
+export type ProductSurface = (typeof PRODUCT_SURFACES)[number];
 export type DeploymentEnvironment = "local" | "ci" | "staging" | "production";
 
 export interface ProductSurfaceSpec {
@@ -25,6 +26,18 @@ export const productSurfaceSpecs = {
     defaultBusinessUnitCode: null,
   },
 } as const satisfies Record<ProductSurface, ProductSurfaceSpec>;
+
+export function getProductSurfaceFromEnvironment(
+  environment?: Readonly<Record<string, string | undefined>>,
+): ProductSurface {
+  const surface = environment === undefined
+    ? process.env.CRM_BUILD_SURFACE
+    : environment.CRM_BUILD_SURFACE;
+  if (!PRODUCT_SURFACES.includes(surface as ProductSurface)) {
+    throw new Error("CRM_BUILD_SURFACE must be exactly crm or tasha.");
+  }
+  return surface as ProductSurface;
+}
 
 export function getProductSurfaceSpec(surface: ProductSurface): ProductSurfaceSpec {
   return productSurfaceSpecs[surface];

@@ -94,11 +94,13 @@ const expectedSurfaceBindings = [
     surface: "crm",
     app_url: "https://crm-ci.example.test",
     oidc_client_id: "crm-ci",
+    mismatched_surface: "tasha",
   },
   {
     surface: "tasha",
     app_url: "https://tasha-ci.example.test",
     oidc_client_id: "tasha-ci",
+    mismatched_surface: "crm",
   },
 ];
 
@@ -351,6 +353,19 @@ describe("Quality workflow server lifecycle", () => {
       'node "$GITHUB_WORKSPACE/scripts/ci/run-next-runtime-smoke.mjs"',
     );
     expect(smokeStep).not.toMatch(/\bsetsid\b|\bcurl\b|kill\s+-TERM|pnpm\s+start/);
+  });
+
+  it("rejects running either immutable artifact as the other product surface", () => {
+    const smokeJob = workflowJob("runtime-smoke");
+    const mismatchStep = jobStep(smokeJob, "Reject mismatched runtime surface");
+
+    expect(mismatchStep).toContain('ARTIFACT_PRODUCT_SURFACE: ${{ matrix.surface }}');
+    expect(mismatchStep).toContain('PRODUCT_SURFACE: ${{ matrix.mismatched_surface }}');
+    expect(mismatchStep).toContain('PORT: "3101"');
+    expect(mismatchStep).toContain(
+      'node "$GITHUB_WORKSPACE/scripts/ci/run-next-runtime-surface-mismatch.mjs"',
+    );
+    expect(mismatchStep).not.toMatch(/pnpm\s+build|db:migrate/);
   });
 });
 
@@ -712,8 +727,10 @@ describe("Quality workflow deployment artifacts", () => {
 
     expectSurfaceBindings(buildJob);
     expect(buildJob).toContain('PRODUCT_SURFACE: ${{ matrix.surface }}');
-    expect(buildJob).toContain('DEPLOYMENT_ENVIRONMENT: "ci"');
     expect(buildJob).toContain('APP_VERSION: ${{ github.sha }}');
+    expect(buildJob).not.toMatch(
+      /DEPLOYMENT_ENVIRONMENT|APP_URL|AUTH_HASH_KEY|OIDC_ISSUER|OIDC_CLIENT_ID|OIDC_CLIENT_SECRET|OIDC_REDIRECT_URI|CRM_DEMO_MODE/,
+    );
     expect(buildJob).toContain("run: pnpm build");
     expect(buildJob).toContain("actions/upload-artifact@");
     expect(buildJob).toContain('production-${{ matrix.surface }}-${{ github.sha }}');

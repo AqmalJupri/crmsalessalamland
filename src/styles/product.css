@@ -625,7 +625,7 @@ a {
 }
 
 .crm-login-card__brand strong,
-.crm-login-card__brand span {
+.crm-login-card__brand span:not(.crm-login-card__mark) {
   display: block;
 }
 
@@ -633,7 +633,7 @@ a {
   font-size: var(--crm-text-lg);
 }
 
-.crm-login-card__brand span {
+.crm-login-card__brand span:not(.crm-login-card__mark) {
   color: var(--crm-muted);
   font-size: var(--crm-text-xs);
 }

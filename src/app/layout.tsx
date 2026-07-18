@@ -1,12 +1,14 @@
 import type { Metadata, Viewport } from "next";
-import { getProductSurfaceSpec } from "@/config/product-surface";
+import {
+  getProductSurfaceFromEnvironment,
+  getProductSurfaceSpec,
+} from "@/config/product-surface";
 import { ServiceWorkerRegistration } from "@/components/pwa/service-worker-registration";
-import { getRuntimeConfig } from "@/server/env";
 import "@/styles/theme.css";
 import "@/styles/product.css";
 
 export function generateMetadata(): Metadata {
-  const surface = getRuntimeConfig().productSurface;
+  const surface = getProductSurfaceFromEnvironment();
   const spec = getProductSurfaceSpec(surface);
 
   return {

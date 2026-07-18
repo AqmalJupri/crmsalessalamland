@@ -1,14 +1,16 @@
 import { SearchX } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { getProductSurfaceSpec } from "@/config/product-surface";
-import { getRuntimeConfig } from "@/server/env";
+import {
+  getProductSurfaceFromEnvironment,
+  getProductSurfaceSpec,
+} from "@/config/product-surface";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Halaman tidak ditemui" };
 
 export default function NotFound() {
-  const surface = getRuntimeConfig().productSurface;
+  const surface = getProductSurfaceFromEnvironment();
   const surfaceSpec = getProductSurfaceSpec(surface);
 
   return (

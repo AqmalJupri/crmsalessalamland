@@ -60,7 +60,13 @@ export function SurfaceHome({
   surface: ProductSurface;
 }) {
   if (surface === "tasha") {
-    return <OperationState kind={emptyStateKind} label="Data pengecualian belum tersedia." />;
+    return (
+      <OperationState
+        kind="unknown"
+        label="Data pengecualian belum tersedia."
+        details={false}
+      />
+    );
   }
 
   if (!demo) {

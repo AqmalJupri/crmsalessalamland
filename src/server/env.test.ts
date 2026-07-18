@@ -27,6 +27,7 @@ function useProductionEnvironment(surface: keyof typeof canonicalHosts = "crm") 
   process.env = {
     ...process.env,
     NODE_ENV: "production",
+    CRM_BUILD_SURFACE: surface,
     PRODUCT_SURFACE: surface,
     DEPLOYMENT_ENVIRONMENT: "production",
     CRM_DEMO_MODE: "false",
@@ -43,6 +44,7 @@ beforeEach(() => {
   process.env = {
     ...originalEnvironment,
     NODE_ENV: "test",
+    CRM_BUILD_SURFACE: "crm",
     PRODUCT_SURFACE: "crm",
     DEPLOYMENT_ENVIRONMENT: "ci",
     DATABASE_URL: "postgresql://crm:crm@127.0.0.1:5432/crm_salam_test_env",
@@ -60,6 +62,7 @@ beforeEach(() => {
 
 describe("product deployment configuration", () => {
   it.each(["crm", "tasha"] as const)("parses the %s product surface", (surface) => {
+    process.env.CRM_BUILD_SURFACE = surface;
     process.env.PRODUCT_SURFACE = surface;
 
     expect(getRuntimeConfig()).toMatchObject({ productSurface: surface });
@@ -78,6 +81,13 @@ describe("product deployment configuration", () => {
     process.env.PRODUCT_SURFACE = "backoffice";
 
     expect(() => getRuntimeConfig()).toThrow(/PRODUCT_SURFACE/);
+  });
+
+  it("rejects a runtime surface that differs from the immutable artifact", () => {
+    process.env.CRM_BUILD_SURFACE = "crm";
+    process.env.PRODUCT_SURFACE = "tasha";
+
+    expect(() => getRuntimeConfig()).toThrow(/PRODUCT_SURFACE must match immutable CRM_BUILD_SURFACE/i);
   });
 
   it("rejects an invalid deployment environment", () => {

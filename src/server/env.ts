@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
+  getProductSurfaceFromEnvironment,
   getProductSurfaceSpec,
+  PRODUCT_SURFACES,
   type DeploymentEnvironment,
   type ProductSurface,
 } from "@/config/product-surface";
@@ -9,7 +11,7 @@ const truthy = new Set(["1", "true", "yes", "on"]);
 
 const runtimeSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  PRODUCT_SURFACE: z.enum(["crm", "tasha"]),
+  PRODUCT_SURFACE: z.enum(PRODUCT_SURFACES),
   DEPLOYMENT_ENVIRONMENT: z.enum(["local", "ci", "staging", "production"]),
   DATABASE_URL: z.string().url(),
   APP_URL: z.string().url(),
@@ -144,6 +146,13 @@ export function getRuntimeConfig(): RuntimeConfig {
   const parsed = runtimeSchema.safeParse(process.env);
   if (!parsed.success) {
     throw new Error(`Invalid runtime configuration: ${z.prettifyError(parsed.error)}`);
+  }
+
+  const embeddedSurface = process.env.CRM_BUILD_SURFACE === undefined && parsed.data.NODE_ENV !== "production"
+    ? parsed.data.PRODUCT_SURFACE
+    : getProductSurfaceFromEnvironment();
+  if (embeddedSurface !== parsed.data.PRODUCT_SURFACE) {
+    invalidConfiguration("PRODUCT_SURFACE must match immutable CRM_BUILD_SURFACE.");
   }
 
   const demoMode = truthy.has(parsed.data.CRM_DEMO_MODE?.toLowerCase() ?? "false");

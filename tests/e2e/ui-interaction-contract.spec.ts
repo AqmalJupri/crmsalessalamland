@@ -255,6 +255,32 @@ test("coarse-pointer root actions meet the 44px target contract", async ({ page 
   await expectCoarseTargets(page);
 });
 
+test("CRM pipeline exposes horizontal navigation only when measured overflow exists", async ({ page }, testInfo) => {
+  test.skip(surface !== "crm", "CRM-only Pipeline workflow");
+  await page.goto("/pipeline?bu=salam-land");
+
+  const viewport = page.getByRole("region", { name: "Pipeline jualan" });
+  const hint = page.locator(".crm-pipeline-region__hint");
+  const dimensions = await viewport.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  if (testInfo.project.name === "desktop-chromium-1440x900") {
+    expect(dimensions.scrollWidth).toBe(dimensions.clientWidth);
+    await expect(viewport).not.toHaveAttribute("tabindex");
+    await expect(viewport).not.toHaveAttribute("aria-describedby");
+    await expect(hint).toHaveCount(0);
+  } else {
+    expect(dimensions.scrollWidth).toBeGreaterThan(dimensions.clientWidth);
+    await expect(viewport).toHaveAttribute("tabindex", "0");
+    await expect(viewport).toHaveAttribute("aria-describedby", /-hint$/);
+    await expect(hint).toBeVisible();
+    await viewport.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(() => viewport.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+  }
+});
+
 test("CRM Lead dialogs are contained and return keyboard focus", async ({ page }) => {
   test.skip(surface !== "crm", "CRM-only Lead workflow");
   await page.goto("/leads?bu=salam-land");

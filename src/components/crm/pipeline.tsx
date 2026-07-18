@@ -2,8 +2,12 @@
 
 import {
   useId,
+  useLayoutEffect,
+  useRef,
+  useState,
   type ReactNode,
 } from "react";
+import { ArrowRight } from "lucide-react";
 
 import { cn } from "../ui/utils";
 
@@ -110,10 +114,39 @@ export function PipelineBoard({
   stages,
 }: PipelineBoardProps) {
   const boardId = useId().replace(/:/g, "");
+  const hintId = `crm-pipeline-${boardId}-hint`;
+  const viewportRef = useRef<HTMLElement>(null);
+  const [isScrollable, setIsScrollable] = useState(false);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const measure = () => {
+      setIsScrollable(viewport.scrollWidth - viewport.clientWidth > 1);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(viewport);
+    const board = viewport.firstElementChild;
+    if (board) observer.observe(board);
+    return () => observer.disconnect();
+  }, [stages]);
 
   return (
-    <section className={cn("crm-pipeline-region", className)} aria-label={ariaLabel}>
-      <div className="crm-pipeline" role="list">
+    <div className={cn("crm-pipeline-region", className)}>
+      {isScrollable ? <p id={hintId} className="crm-pipeline-region__hint">
+        <span>Leret</span>
+        <ArrowRight aria-hidden="true" />
+      </p> : null}
+      <section
+        ref={viewportRef}
+        className="crm-pipeline-region__viewport"
+        aria-label={ariaLabel}
+        aria-describedby={isScrollable ? hintId : undefined}
+        tabIndex={isScrollable ? 0 : undefined}
+      >
+        <div className="crm-pipeline" role="list">
         {stages.map((stage) => {
           const titleId = `crm-pipeline-${boardId}-${stage.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 
@@ -169,7 +202,8 @@ export function PipelineBoard({
             </section>
           );
         })}
-      </div>
-    </section>
+        </div>
+      </section>
+    </div>
   );
 }

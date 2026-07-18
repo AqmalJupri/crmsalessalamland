@@ -75,9 +75,13 @@ describe("SurfaceHome", () => {
   });
 
   it("renders only Tasha's truthful unknown state even when demo fixtures are enabled", () => {
-    render(home({ surface: "tasha" }));
+    const { container } = render(home({ surface: "tasha" }));
 
-    expect(screen.getByText("Data pengecualian belum tersedia.")).toBeTruthy();
+    const state = screen.getByRole("region", { name: "Data pengecualian belum tersedia." });
+    expect(state.textContent).toBe("Data pengecualian belum tersedia.");
+    expect(container.querySelector('[data-state-kind="unknown"]')).toBeTruthy();
+    expect(container.querySelector('[data-state-icon="circle-help"]')).toBeTruthy();
+    expect(container.querySelector('[data-state-icon="inbox"]')).toBeNull();
     for (const leakedCopy of [
       "Lead baharu",
       "Pipeline",

@@ -442,6 +442,40 @@ export default function manifest() {
     expect(pipelineEmpty).not.toMatch(/color:\s*var\(--crm-muted\)/);
   });
 
+  it("keeps the login monogram centred and exposes horizontal pipeline navigation", () => {
+    const loginMark = cssRule(productSource, ".crm-login-card__mark");
+    const genericBrandCopy = cssRule(
+      productSource,
+      ".crm-login-card__brand span:not(.crm-login-card__mark)",
+    );
+    const pipelineViewport = cssRule(themeSource, ".crm-pipeline-region__viewport");
+    const pipelineHint = cssRule(themeSource, ".crm-pipeline-region__hint");
+
+    expect(loginMark).toMatch(/display:\s*grid/);
+    expect(genericBrandCopy).toMatch(/display:\s*block/);
+    expect(pipelineViewport).toMatch(/overflow-x:\s*auto/);
+    expect(pipelineViewport).toMatch(/scrollbar-width:\s*thin/);
+    expect(pipelineHint).toMatch(/display:\s*flex/);
+
+    const mobile = atRule(themeSource, "@media (max-width: 640px)");
+    expect(mobile).toMatch(
+      /\.crm-pipeline-region__viewport\s*\{[^}]*scroll-snap-type:\s*x proximity/,
+    );
+    expect(mobile).not.toMatch(/\.crm-pipeline\s*\{[^}]*scroll-snap-type:/);
+  });
+
+  it("uses balanced KPI columns at constrained desktop and one readable column on small phones", () => {
+    const constrainedDesktop = atRule(themeSource, "@media (max-width: 1200px)");
+    const narrowPhone = atRule(themeSource, "@media (max-width: 480px)");
+
+    expect(constrainedDesktop).toMatch(
+      /\.crm-metric-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/,
+    );
+    expect(narrowPhone).toMatch(
+      /\.crm-metric-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,
+    );
+  });
+
   it("gives the record button a compact desktop height and a 44px coarse target", () => {
     const recordLink = cssRule(productSource, ".crm-record-link");
     const coarsePointer = atRule(themeSource, "@media (pointer: coarse)");

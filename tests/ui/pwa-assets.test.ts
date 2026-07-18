@@ -129,6 +129,7 @@ function textMetadata(details: PngDetails): Map<string, string> {
 function setRuntimeSurface(surface: keyof typeof surfaces): void {
   const environment = {
     NODE_ENV: "test",
+    CRM_BUILD_SURFACE: surface,
     PRODUCT_SURFACE: surface,
     DEPLOYMENT_ENVIRONMENT: "local",
     DATABASE_URL: "postgresql://crm:crm@localhost:5432/crm",
@@ -219,6 +220,47 @@ describe("host-specific private metadata", () => {
       });
     });
   }
+
+  it.each(Object.entries(surfaces))(
+    "builds %s root metadata and manifest from the immutable public surface without runtime secrets",
+    async (surface, expected) => {
+      for (const key of [
+        "APP_URL",
+        "AUTH_HASH_KEY",
+        "DATABASE_URL",
+        "DEPLOYMENT_ENVIRONMENT",
+        ...oidcEnvironmentKeys,
+      ]) {
+        vi.stubEnv(key, undefined);
+      }
+      vi.stubEnv("PRODUCT_SURFACE", surface);
+      vi.stubEnv("CRM_BUILD_SURFACE", surface);
+      resetRuntimeConfigForTests();
+
+      const [{ generateMetadata }, { default: manifest }] = await Promise.all([
+        import("@/app/layout"),
+        import("@/app/manifest"),
+      ]);
+
+      expect(generateMetadata()).toMatchObject({
+        title: { default: expected.name, template: `%s · ${expected.name}` },
+        manifest: "/manifest.webmanifest",
+      });
+      expect(manifest()).toMatchObject({
+        name: expected.name,
+        short_name: expected.shortName,
+        icons: [
+          { src: `/icons/${surface}-192.png` },
+          { src: `/icons/${surface}-512.png` },
+          { src: `/icons/${surface}-maskable-512.png` },
+        ],
+      });
+    },
+  );
+
+  it("binds the public product surface into the compiled Next artifact", () => {
+    expect(nextConfig.env).toHaveProperty("CRM_BUILD_SURFACE");
+  });
 
   it("uses fixed PII-free navigation nouns for every protected route", () => {
     for (const [relativePath, title] of Object.entries(routeTitles)) {

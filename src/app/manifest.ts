@@ -1,9 +1,11 @@
 import type { MetadataRoute } from "next";
-import { getProductSurfaceSpec } from "@/config/product-surface";
-import { getRuntimeConfig } from "@/server/env";
+import {
+  getProductSurfaceFromEnvironment,
+  getProductSurfaceSpec,
+} from "@/config/product-surface";
 
 export default function manifest(): MetadataRoute.Manifest {
-  const surface = getRuntimeConfig().productSurface;
+  const surface = getProductSurfaceFromEnvironment();
   const spec = getProductSurfaceSpec(surface);
 
   return {

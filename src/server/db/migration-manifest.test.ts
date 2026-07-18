@@ -33,6 +33,10 @@ const finiteAmountMigrationPath = new URL(
   "../../../db/migrations/0006_reconciliation_finite_amounts.sql",
   import.meta.url,
 );
+const reconciliationSignoffLifecycleMigrationPath = new URL(
+  "../../../db/migrations/0007_reconciliation_signoff_lifecycle.sql",
+  import.meta.url,
+);
 const frozenMigrationSource = readFileSync(frozenMigrationPath, "utf8");
 const bytewiseMigrationSource = existsSync(bytewiseMigrationPath)
   ? readFileSync(bytewiseMigrationPath, "utf8")
@@ -45,6 +49,11 @@ const typedResultTruthMigrationSource = existsSync(typedResultTruthMigrationPath
   : "";
 const finiteAmountMigrationSource = existsSync(finiteAmountMigrationPath)
   ? readFileSync(finiteAmountMigrationPath, "utf8")
+  : "";
+const reconciliationSignoffLifecycleMigrationSource = existsSync(
+  reconciliationSignoffLifecycleMigrationPath,
+)
+  ? readFileSync(reconciliationSignoffLifecycleMigrationPath, "utf8")
   : "";
 
 function reconciliationRequirementGuard(source: string): string {
@@ -75,6 +84,7 @@ describe("migration manifest", () => {
       "0004_membership_user_identity_guard.sql",
       "0005_reconciliation_typed_result_truth.sql",
       "0006_reconciliation_finite_amounts.sql",
+      "0007_reconciliation_signoff_lifecycle.sql",
     ]);
   });
 
@@ -145,6 +155,56 @@ describe("migration manifest", () => {
     expect(finiteAmountMigrationSource).toContain("'NaN', 'Infinity', '-Infinity'");
     expect(finiteAmountMigrationSource).not.toMatch(/\b(?:CREATE|DROP)\s+TABLE\b/i);
     expect(finiteAmountMigrationSource).not.toContain("DROP CONSTRAINT");
+  });
+
+  it("adds the reviewed bidirectional reconciliation sign-off boundary", () => {
+    expect(reconciliationSignoffLifecycleMigrationSource).toContain(
+      "CREATE OR REPLACE FUNCTION public.crm_guard_reconciliation_sign_lifecycle()",
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).toContain(
+      "CREATE OR REPLACE FUNCTION public.crm_validate_reconciliation_sign_lifecycle()",
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).toContain(
+      "CREATE UNIQUE INDEX reconciliation_sign_audit_once",
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).toContain(
+      "CREATE UNIQUE INDEX reconciliation_sign_outbox_once",
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).toContain(
+      "DEFERRABLE INITIALLY DEFERRED",
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).toContain(
+      "FOR NO KEY UPDATE NOWAIT",
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).toContain(
+      "FOR SHARE OF signer_user",
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).toContain(
+      "pg_catalog.pg_current_xact_id()",
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).toContain(
+      "pg_catalog.pg_xact_status",
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).toContain(
+      "CREATE CONSTRAINT TRIGGER migration_reconciliation_lifecycle_from_membership_guard",
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).toContain(
+      "CREATE CONSTRAINT TRIGGER migration_reconciliation_lifecycle_from_user_guard",
+    );
+    expect(
+      reconciliationSignoffLifecycleMigrationSource.match(/SET search_path = pg_catalog/g),
+    ).toHaveLength(4);
+    expect(reconciliationSignoffLifecycleMigrationSource).toContain(
+      "FROM public.import_batches",
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).toContain(
+      "FROM public.memberships",
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).not.toMatch(
+      /\b(?:CREATE|ALTER|DROP)\s+TABLE\b/i,
+    );
+    expect(reconciliationSignoffLifecycleMigrationSource).not.toContain("DROP FUNCTION");
+    expect(reconciliationSignoffLifecycleMigrationSource).not.toContain("DROP TRIGGER");
   });
 
   it("accepts only the complete zero-padded migration plan", () => {

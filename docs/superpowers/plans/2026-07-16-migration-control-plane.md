@@ -888,7 +888,7 @@ export async function signReconciliationRun(
 - Modify only other files when evidence reveals a defect in a file owned by Tasks 1-10.
 
 - [ ] Parse and assert the database name first, then reset and create only the isolated local database `crm_salam_codex_migration_platform`. Set both `DATABASE_URL` and `TEST_DATABASE_URL` to `postgresql://crm:crm_local_only@127.0.0.1:5432/crm_salam_codex_migration_platform`; refuse any host other than loopback or database name that differs, and fail deployment preflight unless PostgreSQL reports `server_encoding = 'UTF8'`.
-- [ ] Run `pnpm db:migrate` twice and query `schema_migrations`; expect exactly the six reviewed filename/checksum rows with unchanged timestamps after the second run.
+- [ ] Run `pnpm db:migrate` twice and query `schema_migrations`; expect exactly the seven reviewed filename/checksum rows with unchanged timestamps after the second run.
 - [ ] Run focused unit and integration suites:
 
 ```bash
@@ -933,7 +933,7 @@ node scripts/ci/run-next-runtime-smoke.mjs \
   --log /tmp/crm-migration-runtime.log
 ```
 
-Expected: runtime smoke passes and readiness returns `200` only while the database ledger exactly matches `0001` through `0006`.
+Expected: runtime smoke passes and readiness returns `200` only while the database ledger exactly matches `0001` through `0007`.
 - [ ] Extend `tests/ci/quality-workflow.test.ts` to require the UI-owned portable `run-next-runtime-smoke.mjs`, matching start/probe ports, explicit liveness/readiness success branches, and migration/runtime step ordering. Run `tests/ci/runtime-process.test.ts` on macOS locally and Linux CI; it must prove the Node detached process group and grandchild are terminated on success, startup failure, smoke failure, timeout, `SIGINT`, and `SIGTERM`. Expected: PASS and no failed smoke command can be masked by cleanup.
 - [ ] Scan the full diff and newly introduced Git objects for source data, PII, credentials, database URLs with secrets, and unsafe archives.
 - [ ] Request independent code review. Resolve every Critical or Important finding with a failing regression test before changing code.

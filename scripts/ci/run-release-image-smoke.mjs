@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { constants as fileConstants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
+import { isIP } from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -801,21 +802,18 @@ function parseImageInspection(source, manifest) {
   }
 }
 
-function privateContainerAddress(value) {
+function privateContainerAddress(value, failureCode) {
   const address = value.trim();
-  if (!/^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)\d{1,3}\.\d{1,3}$/.test(address)) {
-    fail("DATABASE_NETWORK_INVALID");
+  if (isIP(address) !== 4) fail(failureCode);
+  const [first, second] = address.split(".").map(Number);
+  if (
+    first !== 10 &&
+    !(first === 172 && second >= 16 && second <= 31) &&
+    !(first === 192 && second === 168)
+  ) {
+    fail(failureCode);
   }
   return address;
-}
-
-function publishedBaseUrl(value) {
-  const match = value.trim().match(/^127\.0\.0\.1:(\d{4,5})$/);
-  const port = Number(match?.[1]);
-  if (!Number.isSafeInteger(port) || port < 10_000 || port > 65_535) {
-    fail("APP_PORT_INVALID");
-  }
-  return `http://127.0.0.1:${port}`;
 }
 
 function appEnvironment(context, databaseAddress) {
@@ -1116,7 +1114,10 @@ export async function runReleaseImageSmoke(input = {}) {
       `{{with index .NetworkSettings.Networks "${context.network}"}}{{.IPAddress}}{{end}}`,
       context.databaseContainer,
     ], "DATABASE_NETWORK_INVALID");
-    const databaseAddress = privateContainerAddress(databaseInspection.stdout);
+    const databaseAddress = privateContainerAddress(
+      databaseInspection.stdout,
+      "DATABASE_NETWORK_INVALID",
+    );
     const environment = appEnvironment(context, databaseAddress);
     await runDocker(context, [
       "run",
@@ -1145,17 +1146,17 @@ export async function runReleaseImageSmoke(input = {}) {
       "/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777",
       "--tmpfs",
       "/app/.next/cache:rw,noexec,nosuid,nodev,size=64m,uid=65532,gid=65532,mode=0700",
-      "--publish",
-      "127.0.0.1::3000",
       ...environmentArguments(environment),
       context.manifest.image.manifestDigest,
     ], "APP_START_FAILED", "APP_START_TIMEOUT", context.readinessTimeoutMs);
-    const port = await runDocker(
-      context,
-      ["port", context.appContainer, "3000/tcp"],
-      "APP_PORT_INVALID",
-    );
-    const baseUrl = publishedBaseUrl(port.stdout);
+    const appInspection = await runDocker(context, [
+      "inspect",
+      "--format",
+      `{{with index .NetworkSettings.Networks "${context.network}"}}{{.IPAddress}}{{end}}`,
+      context.appContainer,
+    ], "APP_NETWORK_INVALID");
+    const appAddress = privateContainerAddress(appInspection.stdout, "APP_NETWORK_INVALID");
+    const baseUrl = `http://${appAddress}:3000`;
     const network = await runDocker(
       context,
       ["network", "inspect", context.network],
@@ -1163,14 +1164,6 @@ export async function runReleaseImageSmoke(input = {}) {
     );
     assertNetworkInspection(network.stdout, context);
     await waitApp(context, baseUrl);
-
-    const appInspection = await runDocker(context, [
-      "inspect",
-      "--format",
-      `{{with index .NetworkSettings.Networks "${context.network}"}}{{.IPAddress}}{{end}}`,
-      context.appContainer,
-    ], "APP_NETWORK_INVALID");
-    const appAddress = privateContainerAddress(appInspection.stdout);
 
     await runDocker(context, [
       "exec",
@@ -1185,20 +1178,23 @@ export async function runReleaseImageSmoke(input = {}) {
 
     await runDocker(context, ["stop", "--time", "10", context.appContainer], "APP_RESTART_FAILED");
     await runDocker(context, ["start", context.appContainer], "APP_RESTART_FAILED");
-    await waitApp(context, baseUrl);
-    const networkAfterRestart = await runDocker(
-      context,
-      ["network", "inspect", context.network],
-      "NETWORK_MEMBERSHIP_INVALID",
-    );
-    assertNetworkInspection(networkAfterRestart.stdout, context);
     const appInspectionAfterRestart = await runDocker(context, [
       "inspect",
       "--format",
       `{{with index .NetworkSettings.Networks "${context.network}"}}{{.IPAddress}}{{end}}`,
       context.appContainer,
     ], "APP_NETWORK_INVALID");
-    const appAddressAfterRestart = privateContainerAddress(appInspectionAfterRestart.stdout);
+    const appAddressAfterRestart = privateContainerAddress(
+      appInspectionAfterRestart.stdout,
+      "APP_NETWORK_INVALID",
+    );
+    await waitApp(context, `http://${appAddressAfterRestart}:3000`);
+    const networkAfterRestart = await runDocker(
+      context,
+      ["network", "inspect", context.network],
+      "NETWORK_MEMBERSHIP_INVALID",
+    );
+    assertNetworkInspection(networkAfterRestart.stdout, context);
     await runProductionSmoke(context, appAddressAfterRestart, environment);
   } catch (error) {
     primaryError = error instanceof Error ? error : new ReleaseImageSmokeError("RELEASE_IMAGE_SMOKE_FAILED");

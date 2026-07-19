@@ -232,6 +232,8 @@ function commandText(call: CommandCall): string {
 
 class FakeRunner {
   readonly calls: CommandCall[] = [];
+  appAddress = "172.30.0.3";
+  appAddresses: string[] = [];
   failPattern: RegExp | undefined;
   hangPattern: RegExp | undefined;
   imageDescriptorDigest = imageManifestDigest;
@@ -288,7 +290,7 @@ class FakeRunner {
       return { stdout: "172.30.0.2\n", stderr: "" };
     }
     if (args[0] === "inspect" && args.includes("--format") && source.includes("crm-smoke-app-")) {
-      return { stdout: "172.30.0.3\n", stderr: "" };
+      return { stdout: `${this.appAddresses.shift() ?? this.appAddress}\n`, stderr: "" };
     }
     if (args[0] === "port") return { stdout: "127.0.0.1:55001\n", stderr: "" };
     if (args[0] === "network" && args[1] === "inspect") {
@@ -494,6 +496,51 @@ describe("restricted exact release-image runtime owner", () => {
     expect(probeRuns[1]?.args).toEqual(probeRuns[0]?.args);
   });
 
+  it("probes the validated private app address without publishing an internal-network port", async () => {
+    const fixture = createEvidence();
+    const runner = new FakeRunner();
+    runner.appAddresses = ["172.30.0.3", "172.30.0.4"];
+    runner.failPattern = /^docker port /;
+    const readinessUrls: string[] = [];
+    const owner = await loadOwner();
+
+    await owner.runReleaseImageSmoke(options(fixture, runner, {
+      fetchImpl: (input: string | URL | Request) => {
+        readinessUrls.push(String(input));
+        return healthyFetch();
+      },
+    }));
+
+    expect(readinessUrls).toEqual([
+      "http://172.30.0.3:3000/api/health/ready",
+      "http://172.30.0.4:3000/api/health/ready",
+    ]);
+    expect(runner.calls.some((call) => call.args[0] === "port")).toBe(false);
+    const appRun = runner.calls.find(
+      (call) => call.args[0] === "run" && call.args.includes(imageManifestDigest),
+    );
+    expect(appRun?.args).not.toContain("--publish");
+    expect(appRun?.args).not.toContain("-p");
+  });
+
+  it.each([
+    ["an out-of-range IPv4 app address", "172.16.999.1"],
+    ["a public IPv4 app address", "203.0.113.10"],
+    ["an IPv6 app address", "fd00::3"],
+  ])("rejects %s before readiness probing", async (_label, appAddress) => {
+    const fixture = createEvidence();
+    const runner = new FakeRunner();
+    runner.appAddress = appAddress;
+    const fetchImpl = () => {
+      throw new Error("readiness must not run");
+    };
+    const owner = await loadOwner();
+
+    await expect(owner.runReleaseImageSmoke(options(fixture, runner, { fetchImpl }))).rejects.toThrow(
+      /APP_NETWORK_INVALID/,
+    );
+  });
+
   it("loads without rebuilding and runs the exact image and restored database on one restricted internal network", async () => {
     const fixture = createEvidence();
     const runner = new FakeRunner();
@@ -551,9 +598,9 @@ describe("restricted exact release-image runtime owner", () => {
       "65532:65532",
       "--dns",
       "127.0.0.1",
-      "--publish",
-      "127.0.0.1::3000",
     ]));
+    expect(appRun!.args).not.toContain("--publish");
+    expect(appRun!.args).not.toContain("-p");
     const tmpfsValues = appRun!.args.flatMap((value, index, values) =>
       value === "--tmpfs" ? [values[index + 1]!] : [],
     );

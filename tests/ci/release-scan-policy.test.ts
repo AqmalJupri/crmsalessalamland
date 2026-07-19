@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,6 +26,8 @@ const imageArtifactSource = "synthetic-oci-image-archive\n";
 const cyclonedxSource = canonicalJson(cyclonedxSbom());
 const spdxSource = canonicalJson(spdxSbom());
 const vulnerabilityDatabaseSource = "synthetic-trivy-database\n";
+const measuredTrivyDatabaseBytes = 1_188_278_272;
+const maximumTrivyDatabaseBytes = 2 * 1024 * 1024 * 1024;
 const temporaryDirectories: string[] = [];
 
 const emptyPolicy = Object.freeze({
@@ -48,8 +51,10 @@ interface RunMutation {
   spdx?: unknown;
   outputSource?: string;
   bindingOutputSource?: string;
+  databaseSize?: number;
   arguments?: string[];
   trustedNow?: string;
+  timeout?: number;
 }
 
 function canonicalJson(value: unknown): string {
@@ -271,6 +276,9 @@ function runScanner(mutation: RunMutation = {}) {
     encoding: "utf8",
     flag: "wx",
   });
+  if (mutation.databaseSize !== undefined) {
+    truncateSync(join(directory, "trivy.db"), mutation.databaseSize);
+  }
   writeFileSync(
     join(directory, "image-metadata.json"),
     canonicalJson({
@@ -328,7 +336,7 @@ function runScanner(mutation: RunMutation = {}) {
     {
       cwd: repositoryRoot,
       encoding: "utf8",
-      timeout: 10_000,
+      timeout: mutation.timeout ?? 10_000,
       env: { ...process.env, PATH: process.env.PATH },
     },
   );
@@ -366,6 +374,25 @@ describe("container vulnerability allowlist", () => {
 });
 
 describe("release scan policy gate", () => {
+  it(
+    "accepts the measured official Trivy database within a finite production bound",
+    () => {
+      const run = runScanner({
+        databaseSize: measuredTrivyDatabaseBytes,
+        timeout: 25_000,
+      });
+      expect(run.result.status, run.result.stderr).toBe(0);
+      expect(run.result.stdout).toBe("");
+      expect(run.result.stderr).toBe("");
+    },
+    30_000,
+  );
+
+  it("rejects a Trivy database above the finite production bound", () => {
+    const run = runScanner({ databaseSize: maximumTrivyDatabaseBytes + 1 });
+    expectSafeFailure(run, "RELEASE_SCAN_INPUT_BOUNDS");
+  });
+
   it("writes a canonical manifest-compatible pass report with exact provenance", () => {
     const run = runScanner();
     expect(run.result.status, run.result.stderr).toBe(0);
@@ -596,6 +623,15 @@ describe("release scan policy gate", () => {
     expectSafeFailure(run, "RELEASE_SCAN_REPORT_COVERAGE");
   });
 
+  it("accepts a clean Trivy vulnerability result that omits the empty findings field", () => {
+    const cleanResult = vulnerabilityResult([]);
+    delete cleanResult.Vulnerabilities;
+    const run = runScanner({ report: trivyReport([cleanResult]) });
+    expect(run.result.status, run.result.stderr).toBe(0);
+    expect(run.result.stdout).toBe("");
+    expect(run.result.stderr).toBe("");
+  });
+
   it("rejects Results without meaningful package vulnerability coverage", () => {
     const run = runScanner({
       report: trivyReport([
@@ -668,6 +704,15 @@ describe("release scan policy gate", () => {
 
   it("rejects a vulnerability-only report passed as secret-scan evidence", () => {
     const run = runScanner({ secretReport: trivyReport() });
+    expectSafeFailure(run, "RELEASE_SCAN_SECRET_COVERAGE");
+  });
+
+  it("rejects package-only results passed as clean secret-scan evidence", () => {
+    const packageOnlyResult = vulnerabilityResult([]);
+    delete packageOnlyResult.Vulnerabilities;
+    const run = runScanner({
+      secretReport: trivySecretReport([packageOnlyResult]),
+    });
     expectSafeFailure(run, "RELEASE_SCAN_SECRET_COVERAGE");
   });
 

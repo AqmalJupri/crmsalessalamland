@@ -694,6 +694,7 @@ jobs:
             --platform linux/amd64 \
             --db-repository ghcr.io/aquasecurity/trivy-db:2 \
             --scanners vuln \
+            --list-all-pkgs=true \
             --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
             --format json \
             --output "$release_dir/trivy-raw.json" \
@@ -703,6 +704,7 @@ jobs:
             --input "$oci_input" \
             --platform linux/amd64 \
             --scanners secret \
+            --list-all-pkgs=false \
             --image-config-scanners secret \
             --format json \
             --output "$release_dir/trivy-secret-raw.json" \

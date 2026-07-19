@@ -22,7 +22,7 @@ const TRIVY_REPORT_LIMIT = 64 * 1024 * 1024;
 const TRIVY_VERSION_LIMIT = 64 * 1024;
 const IMAGE_METADATA_LIMIT = 64 * 1024;
 const SBOM_LIMIT = 64 * 1024 * 1024;
-const TRIVY_DATABASE_LIMIT = 512 * 1024 * 1024;
+const TRIVY_DATABASE_LIMIT = 2 * 1024 * 1024 * 1024;
 const POLICY_LIMIT = 1024 * 1024;
 const MAX_RESULTS = 10_000;
 const MAX_PACKAGES = 250_000;
@@ -905,8 +905,7 @@ function validateTrivyReport(value, image, exceptions, scannerVersion, evaluatio
       typeof result.Type === "string" &&
       result.Type.length > 0 &&
       Array.isArray(result.Packages) &&
-      result.Packages.length > 0 &&
-      Array.isArray(result.Vulnerabilities)
+      result.Packages.length > 0
     ) {
       hasPackageVulnerabilityCoverage = true;
     }

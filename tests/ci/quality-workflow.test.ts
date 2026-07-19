@@ -1163,6 +1163,8 @@ describe("Release image workflow DAG", () => {
     const scanSource = String(scan.run ?? "");
     expect(scanSource).toContain("--scanners secret");
     expect(scanSource).toContain("--image-config-scanners secret");
+    expect(scanSource.match(/--list-all-pkgs=true/g) ?? []).toHaveLength(1);
+    expect(scanSource.match(/--list-all-pkgs=false/g) ?? []).toHaveLength(1);
     expect(scanSource).toContain(
       'oci_layout="$(mktemp -d "$RUNNER_TEMP/release-oci-layout.XXXXXX")"',
     );
@@ -1197,14 +1199,30 @@ describe("Release image workflow DAG", () => {
     const manifestSelectionIndex = scanSource.indexOf("value.imageManifestDigest");
     const extractionIndex = scanSource.indexOf("tar --extract");
     const firstTrivyIndex = scanSource.indexOf("trivy --cache-dir", extractionIndex);
+    const vulnerabilityScannerIndex = scanSource.indexOf("--scanners vuln", firstTrivyIndex);
+    const vulnerabilityPackageCoverageIndex = scanSource.indexOf(
+      "--list-all-pkgs=true",
+      vulnerabilityScannerIndex,
+    );
     const secondTrivyIndex = scanSource.indexOf("trivy --cache-dir", firstTrivyIndex + 1);
+    const secretScannerIndex = scanSource.indexOf("--scanners secret", secondTrivyIndex);
+    const secretPackageCoverageIndex = scanSource.indexOf(
+      "--list-all-pkgs=false",
+      secretScannerIndex,
+    );
     const releaseAssertionIndex = scanSource.indexOf("scripts/ci/assert-release-scan.mjs");
     expect(validationIndex).toBeGreaterThanOrEqual(0);
     expect(metadataCompareIndex).toBeGreaterThan(validationIndex);
     expect(manifestSelectionIndex).toBeGreaterThan(metadataCompareIndex);
     expect(extractionIndex).toBeGreaterThan(manifestSelectionIndex);
     expect(firstTrivyIndex).toBeGreaterThan(extractionIndex);
+    expect(vulnerabilityScannerIndex).toBeGreaterThan(firstTrivyIndex);
+    expect(vulnerabilityPackageCoverageIndex).toBeGreaterThan(vulnerabilityScannerIndex);
+    expect(vulnerabilityPackageCoverageIndex).toBeLessThan(secondTrivyIndex);
     expect(secondTrivyIndex).toBeGreaterThan(firstTrivyIndex);
+    expect(secretScannerIndex).toBeGreaterThan(secondTrivyIndex);
+    expect(secretPackageCoverageIndex).toBeGreaterThan(secretScannerIndex);
+    expect(secretPackageCoverageIndex).toBeLessThan(releaseAssertionIndex);
     expect(releaseAssertionIndex).toBeGreaterThan(secondTrivyIndex);
     const versionCaptureIndex = String(scan.run).indexOf(
       '> "$release_dir/trivy-version.json"',

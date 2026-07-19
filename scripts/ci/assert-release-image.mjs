@@ -34,12 +34,34 @@ const MAX_TAR_EXTENSION_BYTES = 64 * 1024;
 const MAX_APP_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_APP_SCAN_BYTES = 512 * 1024 * 1024;
 const MAX_CREDENTIAL_KEY_MATCHES = 4096;
-const MAX_CREDENTIAL_COMMENT_SPANS = 4096;
+const OBSERVED_PRODUCTION_SENSITIVE_TOKENS = 6_353_075;
+const OBSERVED_PRODUCTION_CREDENTIAL_COMMENTS = 30_372;
+const SENSITIVE_SCAN_HEADROOM_NUMERATOR = 3;
+const SENSITIVE_SCAN_HEADROOM_DENOMINATOR = 2;
+const MAX_CREDENTIAL_COMMENT_SPANS = Math.ceil(
+  (OBSERVED_PRODUCTION_CREDENTIAL_COMMENTS * SENSITIVE_SCAN_HEADROOM_NUMERATOR) /
+    SENSITIVE_SCAN_HEADROOM_DENOMINATOR,
+);
 const MAX_SENSITIVE_SOURCE_BYTES = MAX_APP_SCAN_BYTES + MAX_JSON_BYTES;
-const MAX_SENSITIVE_TOKENS = 4_000_000;
+const MAX_SENSITIVE_TOKENS = Math.ceil(
+  (OBSERVED_PRODUCTION_SENSITIVE_TOKENS * SENSITIVE_SCAN_HEADROOM_NUMERATOR) /
+    SENSITIVE_SCAN_HEADROOM_DENOMINATOR,
+);
 const MAX_TEMPLATE_NESTING = 32;
 const MIN_CREDENTIAL_LITERAL_CHARACTERS = 8;
 const SAFE_CREDENTIAL_CONTROL_VALUES = new Set(["include", "omit", "same-origin"]);
+const SAFE_CREDENTIAL_ROLE_VALUES = new Set([
+  ...SAFE_CREDENTIAL_CONTROL_VALUES,
+  "use-credentials",
+]);
+const SAFE_CREDENTIAL_PREDICATE_VALUES = new Set([
+  ...SAFE_CREDENTIAL_ROLE_VALUES,
+  "anonymous",
+  "basic",
+  "cors",
+  "opaque",
+  "opaqueredirect",
+]);
 const CREDENTIAL_METADATA_SUFFIXES = new Set([
   "error",
   "hash",
@@ -53,6 +75,15 @@ const CREDENTIAL_METADATA_SUFFIXES = new Set([
   "type",
   "url",
 ]);
+const CREDENTIAL_CODE_METADATA_SUFFIXES = new Set([
+  "characters",
+  "charset",
+  "chars",
+  "codepoint",
+  "codepoints",
+]);
+const CREDENTIAL_CONTROL_PREFIXES = new Set(["include", "request", "use"]);
+const CREDENTIAL_CODE_CALLABLE_PREFIXES = new Set(["create", "get"]);
 const MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json";
 const INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json";
 const CONFIG_MEDIA_TYPE = "application/vnd.oci.image.config.v1+json";
@@ -498,6 +529,7 @@ function decodeUnicodeEscapes(source) {
 
 function lexicalCredentialSegments(source) {
   return decodeUnicodeEscapes(source)
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .toLowerCase()
     .split(/[^a-z0-9]+/)
@@ -523,7 +555,8 @@ function lexicalCredentialKey(source) {
       (_, laterIndex) =>
         laterIndex >= index + width && lexicalCredentialTermAt(segments, laterIndex) > 0,
     );
-    if (laterCredential || suffix === undefined || !CREDENTIAL_METADATA_SUFFIXES.has(suffix)) {
+    const metadataRole = suffix !== undefined && CREDENTIAL_METADATA_SUFFIXES.has(suffix);
+    if (laterCredential || !metadataRole) {
       return true;
     }
     index += width - 1;
@@ -534,6 +567,12 @@ function lexicalCredentialKey(source) {
 function embeddedKeyBefore(source, separator) {
   let cursor = separator - 1;
   while (cursor >= 0 && /\s/.test(source[cursor])) cursor -= 1;
+  while (cursor >= 1 && source[cursor - 1] === "*" && source[cursor] === "/") {
+    const commentStart = source.lastIndexOf("/*", cursor - 2);
+    if (commentStart === -1) return "";
+    cursor = commentStart - 1;
+    while (cursor >= 0 && /\s/.test(source[cursor])) cursor -= 1;
+  }
   if (cursor < 0) return "";
   if (["'", '"', "`"].includes(source[cursor])) {
     const quote = source[cursor];
@@ -577,12 +616,51 @@ function embeddedValueCharacters(source, separator) {
   return count;
 }
 
+function embeddedKeySeparator(source, valueSeparator) {
+  let separator = valueSeparator;
+  if (source[valueSeparator] === "=") {
+    while (separator > 0 && /[|?&+\-*\/%]/.test(source[separator - 1])) separator -= 1;
+  }
+  return separator;
+}
+
+function embeddedQuotedValue(source, separator) {
+  let cursor = separator + 1;
+  while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
+  const quote = source[cursor];
+  if (quote !== "'" && quote !== '"') return undefined;
+  const valueStart = ++cursor;
+  while (cursor < source.length && source[cursor] !== quote) {
+    if (source[cursor] === "\\" || source[cursor] === "\n" || source[cursor] === "\r") {
+      return undefined;
+    }
+    cursor += 1;
+  }
+  if (cursor >= source.length) return undefined;
+  return { value: source.slice(valueStart, cursor), end: cursor + 1 };
+}
+
+function isSafeEmbeddedCredentialControl(source, valueSeparator, keySeparator) {
+  const key = embeddedKeyBefore(source, keySeparator);
+  if (lexicalCredentialSegments(key).join("_") !== "credentials") return false;
+  const quoted = embeddedQuotedValue(source, valueSeparator);
+  if (!quoted || !SAFE_CREDENTIAL_CONTROL_VALUES.has(quoted.value)) return false;
+  let cursor = quoted.end;
+  while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
+  return cursor >= source.length || /[,;}\])]/.test(source[cursor]);
+}
+
 function hasEmbeddedCredentialAssignment(source) {
   for (let cursor = 0; cursor < source.length; cursor += 1) {
+    if (source[cursor] !== ":" && source[cursor] !== "=") continue;
+    const keySeparator = embeddedKeySeparator(source, cursor);
+    const key = embeddedKeyBefore(source, keySeparator);
+    const credentialControl = lexicalCredentialSegments(key).join("_") === "credentials";
     if (
-      (source[cursor] === ":" || source[cursor] === "=") &&
-      lexicalCredentialKey(embeddedKeyBefore(source, cursor)) &&
-      embeddedValueCharacters(source, cursor) >= MIN_CREDENTIAL_LITERAL_CHARACTERS
+      lexicalCredentialKey(key) &&
+      !isSafeEmbeddedCredentialControl(source, cursor, keySeparator) &&
+      (embeddedValueCharacters(source, cursor) >= MIN_CREDENTIAL_LITERAL_CHARACTERS ||
+        (credentialControl && embeddedQuotedValue(source, cursor) !== undefined))
     ) {
       return true;
     }
@@ -692,6 +770,31 @@ function skipLexicalTrivia(state) {
   }
 }
 
+function isEmbeddedJavaScriptSource(value) {
+  if (value.length < 32) return false;
+  const trimmed = value.trim();
+  return (
+    /^(?:"use strict"|'use strict');/.test(trimmed) ||
+    (/^\{\s*["']/.test(trimmed) && trimmed.endsWith("}"))
+  );
+}
+
+function scanEmbeddedJavaScriptSource(state, source) {
+  const embeddedSourceDepth = (state.embeddedSourceDepth ?? 0) + 1;
+  if (embeddedSourceDepth > MAX_TEMPLATE_NESTING) {
+    fail("RELEASE_IMAGE_SENSITIVE_CONTENT", state.path);
+  }
+  const embeddedState = {
+    source,
+    cursor: 0,
+    path: state.path,
+    budget: state.budget,
+    lineBreakBefore: false,
+    embeddedSourceDepth,
+  };
+  analyzeCredentialTokens(scanJsTokens(embeddedState), state.path, state.budget);
+}
+
 function scanJsString(state) {
   const { source, path } = state;
   const start = state.cursor;
@@ -701,7 +804,9 @@ function scanJsString(state) {
     const character = source[state.cursor];
     if (character === quote) {
       state.cursor += 1;
-      if (hasEmbeddedCredentialAssignment(value)) {
+      if (isEmbeddedJavaScriptSource(value)) {
+        scanEmbeddedJavaScriptSource(state, value);
+      } else if (hasEmbeddedCredentialAssignment(value)) {
         fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
       }
       return { kind: "string", value, start, end: state.cursor };
@@ -750,10 +855,16 @@ function scanJsNumber(state) {
   return { kind: "number", value: match[0], start, end: state.cursor };
 }
 
+function isPunctuator(token, value) {
+  return token?.kind === "punctuator" && token.value === value;
+}
+
 function canStartRegex(tokens) {
   const previous = tokens.at(-1);
   if (!previous) return true;
-  if (previous.value === ")" && previous.closesControlParenthesis) return true;
+  if (isPunctuator(previous, ")") && previous.closesControlParenthesis) return true;
+  if (isPunctuator(previous, "}") && previous.closesBlock) return true;
+  if (previous.contextualRegexPrefix) return true;
   if (["string", "number", "template", "regex"].includes(previous.kind)) return false;
   if (previous.kind === "identifier") {
     return [
@@ -765,7 +876,6 @@ function canStartRegex(tokens) {
       "in",
       "instanceof",
       "new",
-      "of",
       "return",
       "throw",
       "typeof",
@@ -773,7 +883,10 @@ function canStartRegex(tokens) {
       "yield",
     ].includes(previous.value);
   }
-  return ![")", "]", "}", "++", "--"].includes(previous.value);
+  return !(
+    previous.kind === "punctuator" &&
+    [")", "]", "}", "++", "--"].includes(previous.value)
+  );
 }
 
 function scanJsRegex(state) {
@@ -901,34 +1014,75 @@ function scanJsTokens(state, stopOnTemplateBrace = false, nesting = 0) {
     } else {
       token = scanJsPunctuator(state);
     }
-    if ([")", "]", "}"].includes(token.value)) {
+    if (token.kind === "punctuator" && [")", "]", "}"].includes(token.value)) {
       const active = delimiters.pop();
-      if (token.value === ")" && active?.value === "(") {
+      if (isPunctuator(token, ")") && active?.value === "(") {
         token.closesControlParenthesis = active.control;
+      } else if (isPunctuator(token, "}") && active?.value === "{") {
+        token.closesBlock = active.block;
       }
     }
     const lexicalToken = pushLexicalToken(state, tokens, token);
-    if (["(", "[", "{"].includes(token.value)) {
+    if (token.kind === "punctuator" && ["(", "[", "{"].includes(token.value)) {
       const previous = tokens.at(-2);
+      const controlKeyword =
+        isPunctuator(token, "(") &&
+        previous?.kind === "identifier" &&
+        ["catch", "for", "if", "switch", "while", "with"].includes(previous.value)
+          ? previous.value
+          : undefined;
       delimiters.push({
         value: token.value,
-        control:
-          token.value === "(" &&
-          previous?.kind === "identifier" &&
-          ["catch", "for", "if", "switch", "while", "with"].includes(previous.value),
+        control: controlKeyword !== undefined,
+        controlKeyword,
+        block:
+          isPunctuator(token, "{") &&
+          (previous?.closesControlParenthesis ||
+            (previous?.kind === "identifier" &&
+              ["do", "else", "finally", "try"].includes(previous.value)) ||
+            isPunctuator(previous, "=>")),
       });
     }
     if (token.closesControlParenthesis) lexicalToken.closesControlParenthesis = true;
-    if (token.value === "{") braceDepth += 1;
-    else if (token.value === "}" && braceDepth > 0) braceDepth -= 1;
+    if (token.closesBlock) lexicalToken.closesBlock = true;
+    if (
+      token.kind === "identifier" &&
+      token.value === "of" &&
+      delimiters.some(
+        (delimiter) => delimiter.value === "(" && delimiter.controlKeyword === "for",
+      )
+    ) {
+      lexicalToken.contextualRegexPrefix = true;
+    }
+    if (isPunctuator(token, "{")) braceDepth += 1;
+    else if (isPunctuator(token, "}") && braceDepth > 0) braceDepth -= 1;
   }
   if (stopOnTemplateBrace) fail("RELEASE_IMAGE_SENSITIVE_CONTENT", state.path);
   return tokens;
 }
 
+function canEndJsExpression(token) {
+  if (token?.kind === "identifier") {
+    return !["await", "delete", "new", "typeof", "void", "yield"].includes(token.value);
+  }
+  return (
+    token !== undefined &&
+    (["number", "regex", "string", "template"].includes(token.kind) ||
+      (token.kind === "punctuator" && [")", "]", "}", "++", "--"].includes(token.value)))
+  );
+}
+
 function credentialTokenContext(tokens, path) {
-  const opening = { "(": ")", "[": "]", "{": "}" };
-  const closing = { ")": "(", "]": "[", "}": "{" };
+  const opening = new Map([
+    ["(", ")"],
+    ["[", "]"],
+    ["{", "}"],
+  ]);
+  const closing = new Map([
+    [")", "("],
+    ["]", "["],
+    ["}", "{"],
+  ]);
   const stack = [];
   const parentheses = [];
   const depthBefore = [];
@@ -939,21 +1093,22 @@ function credentialTokenContext(tokens, path) {
     depthBefore[index] = stack.length;
     containingParenthesis[index] = parentheses.at(-1);
     boundary[index] =
-      [",", ";", ")", "]", "}"].includes(token.value) ||
+      (token.kind === "punctuator" && [",", ";", ")", "]", "}"].includes(token.value)) ||
       (token.lineBreakBefore &&
         token.kind === "identifier" &&
-        ["class", "const", "export", "function", "import", "let", "var"].includes(
+        (["class", "const", "export", "function", "import", "let", "var"].includes(
           token.value,
-        ));
-    if (opening[token.value]) {
+        ) ||
+          canEndJsExpression(tokens[index - 1])));
+    if (token.kind === "punctuator" && opening.has(token.value)) {
       stack.push({ value: token.value, index });
-      if (token.value === "(") parentheses.push(index);
-    } else if (closing[token.value]) {
+      if (isPunctuator(token, "(")) parentheses.push(index);
+    } else if (token.kind === "punctuator" && closing.has(token.value)) {
       const active = stack.pop();
-      if (active?.value !== closing[token.value]) {
+      if (active?.value !== closing.get(token.value)) {
         fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
       }
-      if (token.value === ")") parentheses.pop();
+      if (isPunctuator(token, ")")) parentheses.pop();
     }
   }
   if (stack.length > 0) fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
@@ -964,7 +1119,7 @@ function credentialTokenContext(tokens, path) {
     nextBoundary[index] = nextBoundaryAtDepth.get(depthBefore[index]) ?? tokens.length;
     if (boundary[index]) nextBoundaryAtDepth.set(depthBefore[index], index);
   }
-  return { boundary, containingParenthesis, nextBoundary };
+  return { boundary, containingParenthesis, depthBefore, nextBoundary };
 }
 
 function lexicalCalleeBefore(tokens, openingParenthesis) {
@@ -972,8 +1127,8 @@ function lexicalCalleeBefore(tokens, openingParenthesis) {
   const parts = [];
   while (cursor >= 0 && parts.length < 64) {
     const token = tokens[cursor];
-    if (token.kind === "identifier" || token.value === "." || token.value === "?.") {
-      parts.unshift(token.value === "?." ? "." : token.value);
+    if (token.kind === "identifier" || isPunctuator(token, ".") || isPunctuator(token, "?.")) {
+      parts.unshift(isPunctuator(token, "?.") ? "." : token.value);
       cursor -= 1;
     } else {
       break;
@@ -987,22 +1142,31 @@ function isCredentialLookupString(tokens, index, context) {
   const propertyPrefix = tokens[index - 1];
   const computedPropertyPrefix = tokens[index - 2];
   if (
-    (["{", ","].includes(propertyPrefix?.value) && tokens[index + 1]?.value === ":") ||
-    (tokens[index - 1]?.value === "[" &&
-      tokens[index + 1]?.value === "]" &&
-      tokens[index + 2]?.value === ":" &&
-      ["{", ","].includes(computedPropertyPrefix?.value))
+    ((isPunctuator(propertyPrefix, "{") || isPunctuator(propertyPrefix, ",")) &&
+      isPunctuator(tokens[index + 1], ":")) ||
+    (isPunctuator(tokens[index - 1], "[") &&
+      isPunctuator(tokens[index + 1], "]") &&
+      isPunctuator(tokens[index + 2], ":") &&
+      (isPunctuator(computedPropertyPrefix, "{") ||
+        isPunctuator(computedPropertyPrefix, ",")))
   ) {
     return true;
   }
   if (!lexicalCredentialKey(token.value)) return false;
-  if (tokens[index - 1]?.value === "[" && tokens[index + 1]?.value === "]") {
+  if (isPunctuator(tokens[index - 1], "[") && isPunctuator(tokens[index + 1], "]")) {
     const base = tokens[index - 2];
-    if (base && (base.kind === "identifier" || [")", "]"].includes(base.value))) return true;
-    const optionalBase = base?.value === "?." ? tokens[index - 3] : undefined;
+    if (
+      base &&
+      (base.kind === "identifier" ||
+        (base.kind === "punctuator" && [")", "]"].includes(base.value)))
+    ) {
+      return true;
+    }
+    const optionalBase = isPunctuator(base, "?.") ? tokens[index - 3] : undefined;
     if (
       optionalBase &&
-      (optionalBase.kind === "identifier" || [")", "]"].includes(optionalBase.value))
+      (optionalBase.kind === "identifier" ||
+        (optionalBase.kind === "punctuator" && [")", "]"].includes(optionalBase.value)))
     ) {
       return true;
     }
@@ -1037,22 +1201,246 @@ function credentialTokenLiteralWeight(tokens, index, context, templateCharacters
   return 0;
 }
 
-function isCredentialAssignmentOperator(value) {
+function isCredentialAssignmentOperator(token) {
+  if (token?.kind !== "punctuator") return false;
   return [":", "=", "||=", "??=", "&&=", "+=", "-=", "*=", "/=", "%="].includes(
-    value,
+    token.value,
   );
 }
 
+function isObjectPropertyIntroducer(token) {
+  return isPunctuator(token, "{") || isPunctuator(token, ",");
+}
+
 function credentialAssignmentTokenIndex(tokens, index) {
-  if (isCredentialAssignmentOperator(tokens[index + 1]?.value)) return index + 1;
+  const directOperator = tokens[index + 1];
   if (
-    tokens[index - 1]?.value === "[" &&
-    tokens[index + 1]?.value === "]" &&
-    isCredentialAssignmentOperator(tokens[index + 2]?.value)
+    isCredentialAssignmentOperator(directOperator) &&
+    (!isPunctuator(directOperator, ":") || isObjectPropertyIntroducer(tokens[index - 1]))
+  ) {
+    return index + 1;
+  }
+  const computedOperator = tokens[index + 2];
+  if (
+    isPunctuator(tokens[index - 1], "[") &&
+    isPunctuator(tokens[index + 1], "]") &&
+    isCredentialAssignmentOperator(computedOperator) &&
+    (!isPunctuator(computedOperator, ":") || isObjectPropertyIntroducer(tokens[index - 2]))
   ) {
     return index + 2;
   }
   return undefined;
+}
+
+function isMemberCredentialKey(tokens, index) {
+  return (
+    isPunctuator(tokens[index - 1], ".") ||
+    isPunctuator(tokens[index - 1], "?.") ||
+    isPunctuator(tokens[index - 1], "[")
+  );
+}
+
+function isCredentialComparisonOperator(token) {
+  return (
+    token?.kind === "punctuator" &&
+    ["==", "===", "!=", "!==", "<", "<=", ">", ">="].includes(token.value)
+  );
+}
+
+function isCallableCredentialExpression(key, tokens, start, end, context, literalWeight) {
+  const segments = lexicalCredentialSegments(key.value);
+  const callableRole =
+    (segments.at(-1) === "error" &&
+      segments.some((_, index) => lexicalCredentialTermAt(segments, index) > 0)) ||
+    (CREDENTIAL_CODE_CALLABLE_PREFIXES.has(segments[0]) && segments.includes("token"));
+  if (!callableRole) return false;
+  let callable = false;
+  if (
+    tokens[start]?.kind === "identifier" &&
+    (tokens[start].value === "function" ||
+      (tokens[start].value === "async" && tokens[start + 1]?.value === "function"))
+  ) {
+    callable = true;
+  }
+  if (!callable) {
+    const expressionDepth = context.depthBefore[start];
+    for (let index = start; index < end; index += 1) {
+      if (isPunctuator(tokens[index], "=>") && context.depthBefore[index] === expressionDepth) {
+        callable = true;
+        break;
+      }
+    }
+  }
+  if (!callable || literalWeight === 0) return callable;
+
+  const allowedStrings =
+    key.value === "TokenExpiredError"
+      ? new Set(["TokenExpiredError"])
+      : key.value === "getNextToken"
+        ? new Set(["/", "BlockComment", "LineComment"])
+        : undefined;
+  if (!allowedStrings) return false;
+  let allowedWeight = 0;
+  for (let index = start; index < end; index += 1) {
+    const token = tokens[index];
+    if (token.kind === "string") {
+      if (!allowedStrings.has(token.value)) return false;
+      allowedWeight += significantLiteralCharacters(token.value);
+    } else if (token.kind === "regex" || token.kind === "template") {
+      return false;
+    } else if (
+      token.kind === "number" &&
+      numericLiteralCharacters(token.value) >= MIN_CREDENTIAL_LITERAL_CHARACTERS
+    ) {
+      return false;
+    }
+  }
+  return allowedWeight === literalWeight;
+}
+
+function isDiagnosticCredentialExpression(key, tokens, start, end) {
+  if (end - start !== 1 || tokens[start]?.kind !== "string") return false;
+  const segments = lexicalCredentialSegments(key.value);
+  return (
+    segments[0] === "unexpected" &&
+    segments.includes("token") &&
+    /^unexpected token\b/i.test(tokens[start].value)
+  );
+}
+
+function isPublicHeaderCredentialExpression(key, tokens, start, end) {
+  if (end - start !== 1 || tokens[start]?.kind !== "string") return false;
+  const segments = lexicalCredentialSegments(key.value);
+  return (
+    segments.at(-1) === "header" &&
+    segments.some((segment) => ["key", "password", "secret", "token"].includes(segment)) &&
+    /^x-[a-z0-9]+(?:-[a-z0-9]+)+$/i.test(tokens[start].value)
+  );
+}
+
+function isPredicateCredentialExpression(key, tokens, start, end) {
+  const segments = lexicalCredentialSegments(key.value);
+  if (
+    segments[0] !== "is" ||
+    tokens[start]?.kind !== "regex" ||
+    tokens[start].value !== "/^(?:NODE_.+)|^(?:__.+)$/i"
+  ) {
+    return false;
+  }
+  for (let index = start + 1; index < end; index += 1) {
+    if (
+      tokens[index]?.kind === "identifier" &&
+      tokens[index].value === "test" &&
+      isPunctuator(tokens[index - 1], ".")
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isMimeMetadataCredentialExpression(key, tokens, start) {
+  return (
+    key.kind === "string" &&
+    /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i.test(key.value) &&
+    isPunctuator(tokens[start], "{")
+  );
+}
+
+function hasOnlyCredentialRoleLiterals(tokens, start, end) {
+  let controls = 0;
+  for (let index = start; index < end; index += 1) {
+    const token = tokens[index];
+    if (token.kind === "string") {
+      if (!SAFE_CREDENTIAL_ROLE_VALUES.has(token.value)) return false;
+      controls += 1;
+    } else if (token.kind === "regex" || token.kind === "template") {
+      return false;
+    } else if (
+      token.kind === "number" &&
+      numericLiteralCharacters(token.value) >= MIN_CREDENTIAL_LITERAL_CHARACTERS
+    ) {
+      return false;
+    }
+  }
+  return controls > 0;
+}
+
+function isFetchCredentialControlPredicate(tokens, start, end) {
+  let comparisons = 0;
+  for (let index = start; index < end; index += 1) {
+    const token = tokens[index];
+    if (token.kind === "string") {
+      if (
+        !SAFE_CREDENTIAL_PREDICATE_VALUES.has(token.value) ||
+        (!isCredentialComparisonOperator(tokens[index - 1]) &&
+          !isCredentialComparisonOperator(tokens[index + 1]))
+      ) {
+        return false;
+      }
+      comparisons += 1;
+    } else if (token.kind === "regex" || token.kind === "template") {
+      return false;
+    } else if (
+      token.kind === "number" &&
+      numericLiteralCharacters(token.value) >= MIN_CREDENTIAL_LITERAL_CHARACTERS
+    ) {
+      return false;
+    }
+  }
+  return comparisons > 0;
+}
+
+function isPublicCharacterClassRegex(token) {
+  return (
+    token?.kind === "regex" &&
+    /^\/\^\[(?:\\.|[^\]])+\]\+\$\/[A-Za-z]*$/.test(token.value)
+  );
+}
+
+function isCodeMetadataCredentialExpression(key, tokens, start, end, literalWeight) {
+  const segments = lexicalCredentialSegments(key.value);
+  const credentialIndex = segments.findIndex(
+    (_, index) => lexicalCredentialTermAt(segments, index) > 0,
+  );
+  const credentialWidth =
+    credentialIndex === -1 ? 0 : lexicalCredentialTermAt(segments, credentialIndex);
+  const suffix = segments[credentialIndex + credentialWidth];
+  if (
+    CREDENTIAL_CODE_METADATA_SUFFIXES.has(suffix) &&
+    (literalWeight === 0 || (end - start === 1 && isPublicCharacterClassRegex(tokens[start])))
+  ) {
+    return true;
+  }
+  if (
+    credentialIndex > 0 &&
+    ["credential", "credentials"].includes(segments[credentialIndex]) &&
+    CREDENTIAL_CONTROL_PREFIXES.has(segments[credentialIndex - 1]) &&
+    suffix === undefined &&
+    (literalWeight === 0 ||
+      hasOnlyCredentialRoleLiterals(tokens, start, end) ||
+      isFetchCredentialControlPredicate(tokens, start, end))
+  ) {
+    return true;
+  }
+  if (
+    segments.length === 2 &&
+    segments[0] === "strict" &&
+    segments[1] === "token" &&
+    isPunctuator(tokens[start], "[")
+  ) {
+    let stringCount = 0;
+    let stringWeight = 0;
+    for (let index = start; index < end; index += 1) {
+      if (tokens[index].kind !== "string") continue;
+      stringCount += 1;
+      const weight = significantLiteralCharacters(tokens[index].value);
+      if (weight > 1) return false;
+      stringWeight += weight;
+    }
+    return stringCount > 0 && literalWeight === stringWeight;
+  }
+  return false;
 }
 
 function analyzeCredentialTokens(tokens, path, budget) {
@@ -1068,10 +1456,43 @@ function analyzeCredentialTokens(tokens, path, budget) {
   }
   const context = credentialTokenContext(tokens, path);
   const literalPrefix = [0];
+  const dynamicInvalidPrefix = [0];
+  const dynamicReferencePrefix = [0];
   for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const credentialLookupString =
+      token.kind === "string" && isCredentialLookupString(tokens, index, context);
+    const safeCredentialComparisonString =
+      token.kind === "string" &&
+      SAFE_CREDENTIAL_PREDICATE_VALUES.has(token.value) &&
+      (isCredentialComparisonOperator(tokens[index - 1]) ||
+        isCredentialComparisonOperator(tokens[index + 1]));
     literalPrefix[index + 1] =
       literalPrefix[index] +
       credentialTokenLiteralWeight(tokens, index, context, templateCharacters);
+    dynamicInvalidPrefix[index + 1] =
+      dynamicInvalidPrefix[index] +
+      Number(
+        (token.kind === "identifier" &&
+          ["Infinity", "NaN", "false", "null", "true", "undefined"].includes(token.value)) ||
+          (token.kind === "string" &&
+            !credentialLookupString &&
+            !safeCredentialComparisonString &&
+            !SAFE_CREDENTIAL_CONTROL_VALUES.has(token.value)) ||
+          (token.kind !== "identifier" &&
+            token.kind !== "string" &&
+            (token.kind !== "punctuator" ||
+              ![
+                "(", ")", ",", ".", "?.", "??", "[", "]", "?", ":", "==", "===",
+                "!=", "!==", "<", "<=", ">", ">=",
+              ].includes(token.value))),
+      );
+    dynamicReferencePrefix[index + 1] =
+      dynamicReferencePrefix[index] +
+      Number(
+        token.kind === "identifier" &&
+          !["Infinity", "NaN", "false", "null", "true", "undefined"].includes(token.value),
+      );
   }
   for (let index = 0; index < tokens.length; index += 1) {
     const key = tokens[index];
@@ -1093,12 +1514,31 @@ function analyzeCredentialTokens(tokens, path, budget) {
         end - start === 1 &&
         tokens[start].kind === "string" &&
         SAFE_CREDENTIAL_CONTROL_VALUES.has(tokens[start].value);
-      if (!safeControl) fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+      const dynamicReference =
+        dynamicInvalidPrefix[end] === dynamicInvalidPrefix[start] &&
+        dynamicReferencePrefix[end] > dynamicReferencePrefix[start];
+      const emptyDataObject =
+        end - start === 2 &&
+        isPunctuator(tokens[start], "{") &&
+        isPunctuator(tokens[start + 1], "}");
+      if (!safeControl && !dynamicReference && !emptyDataObject) {
+        fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+      }
       continue;
     }
+    const literalWeight = literalPrefix[end] - literalPrefix[start];
+    const codeRole =
+      isCallableCredentialExpression(key, tokens, start, end, context, literalWeight) ||
+      isDiagnosticCredentialExpression(key, tokens, start, end) ||
+      isPublicHeaderCredentialExpression(key, tokens, start, end) ||
+      isPredicateCredentialExpression(key, tokens, start, end) ||
+      isMimeMetadataCredentialExpression(key, tokens, start) ||
+      isCodeMetadataCredentialExpression(key, tokens, start, end, literalWeight);
     if (
-      literalPrefix[end] - literalPrefix[start] >= MIN_CREDENTIAL_LITERAL_CHARACTERS ||
-      (tokens[operatorIndex].value !== ":" &&
+      (!codeRole && literalWeight >= MIN_CREDENTIAL_LITERAL_CHARACTERS) ||
+      (!codeRole &&
+        !isPunctuator(tokens[operatorIndex], ":") &&
+        !isMemberCredentialKey(tokens, index) &&
         key.value === key.value.toUpperCase() &&
         end > start)
     ) {

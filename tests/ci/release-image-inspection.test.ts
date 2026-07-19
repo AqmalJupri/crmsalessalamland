@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -21,6 +22,18 @@ const inspectorExists = existsSync(inspectorPath);
 const sourceSha = "a".repeat(40);
 const expectedSource = "https://github.com/AqmalJupri/crmsalessalamland";
 const canary = "SALAMLAND_CI_CANARY_7F3C9A1E5B2D";
+const observedProductionSensitiveTokens = 6_353_075;
+const observedProductionCredentialComments = 30_372;
+const sensitiveScanHeadroomNumerator = 3;
+const sensitiveScanHeadroomDenominator = 2;
+const expectedSensitiveTokenLimit = Math.ceil(
+  (observedProductionSensitiveTokens * sensitiveScanHeadroomNumerator) /
+    sensitiveScanHeadroomDenominator,
+);
+const expectedCredentialCommentLimit = Math.ceil(
+  (observedProductionCredentialComments * sensitiveScanHeadroomNumerator) /
+    sensitiveScanHeadroomDenominator,
+);
 const runtimeBaseLock = JSON.parse(
   readFileSync(`${repositoryRoot}security/runtime-base-lock.json`, "utf8"),
 ) as {
@@ -68,6 +81,24 @@ interface OciFixture {
   readonly manifestDigest: string;
   readonly archiveDigest: string;
   readonly surface: "crm" | "tasha";
+}
+
+interface SensitiveScanBudget {
+  sourceBytes: number;
+  tokens: number;
+  credentialKeys: number;
+  comments: number;
+}
+
+interface SensitiveScannerHarness {
+  readonly maxSensitiveSourceBytes: number;
+  createSensitiveScanBudget(): SensitiveScanBudget;
+  assertSensitiveContent(
+    bytes: Buffer,
+    canaryValue: string,
+    path: string,
+    budget: SensitiveScanBudget,
+  ): void;
 }
 
 function sha256(bytes: Buffer | string): string {
@@ -344,6 +375,45 @@ function expectRejected(
   expect(result.stderr).toMatch(code);
   expect(result.stderr).not.toContain(canary);
   expect(existsSync(overrides.output ?? fixture.outputPath)).toBe(false);
+}
+
+function loadSensitiveScannerHarness(): SensitiveScannerHarness {
+  const source = readFileSync(inspectorPath, "utf8");
+  const constantsStart = source.indexOf("const MAX_JSON_BYTES");
+  const constantsEnd = source.indexOf("const MANIFEST_MEDIA_TYPE");
+  const failureHelpersStart = source.indexOf("class InspectionError");
+  const failureHelpersEnd = source.indexOf("function isRecord");
+  const scannerFunctionsStart = source.indexOf("function createSensitiveScanBudget");
+  const scannerFunctionsEnd = source.indexOf("function appRoot");
+  if (
+    [
+      constantsStart,
+      constantsEnd,
+      failureHelpersStart,
+      failureHelpersEnd,
+      scannerFunctionsStart,
+      scannerFunctionsEnd,
+    ].some((offset) => offset < 0)
+  ) {
+    throw new Error("release image sensitive scanner boundaries are missing");
+  }
+
+  const sandbox: { Buffer: typeof Buffer; result?: SensitiveScannerHarness } = { Buffer };
+  runInNewContext(
+    [
+      source.slice(constantsStart, constantsEnd),
+      source.slice(failureHelpersStart, failureHelpersEnd),
+      source.slice(scannerFunctionsStart, scannerFunctionsEnd),
+      "globalThis.result = { maxSensitiveSourceBytes: MAX_SENSITIVE_SOURCE_BYTES, createSensitiveScanBudget, assertSensitiveContent };",
+    ].join("\n"),
+    sandbox,
+  );
+  if (!sandbox.result) throw new Error("release image sensitive scanner harness failed to load");
+  return {
+    maxSensitiveSourceBytes: sandbox.result.maxSensitiveSourceBytes,
+    createSensitiveScanBudget: sandbox.result.createSensitiveScanBudget,
+    assertSensitiveContent: sandbox.result.assertSensitiveContent,
+  };
 }
 
 afterEach(() => {
@@ -919,6 +989,282 @@ describe("release image inspection contract", () => {
     }
   });
 
+  for (const identifier of [
+    "__defineGetter__",
+    "__defineSetter__",
+    "__lookupGetter__",
+    "__lookupSetter__",
+    "__proto__",
+    "constructor",
+    "hasOwnProperty",
+    "isPrototypeOf",
+    "propertyIsEnumerable",
+    "toLocaleString",
+    "toString",
+    "valueOf",
+  ]) {
+    it.skipIf(!inspectorExists)(
+      `accepts valid JavaScript identifier ${identifier} without treating it as a delimiter`,
+      () => {
+        const fixture = makeOciFixture({
+          layerEntries: layerEntriesWithServerContent(
+            `function inspect(${identifier}) { return ${identifier}; }\n`,
+          ),
+        });
+
+        const result = runInspector(fixture);
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toBe("");
+      },
+    );
+  }
+
+  for (const punctuation of ["{", "}", "(", ")", "[", "]", ",", ";"]) {
+    it.skipIf(!inspectorExists)(
+      `accepts JavaScript string punctuation ${JSON.stringify(punctuation)} without treating it as structure`,
+      () => {
+        const fixture = makeOciFixture({
+          layerEntries: layerEntriesWithServerContent(
+            `function inspect(value) { return value === ${JSON.stringify(punctuation)}; }\n`,
+          ),
+        });
+
+        const result = runInspector(fixture);
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toBe("");
+      },
+    );
+  }
+
+  it.skipIf(!inspectorExists)(
+    "rejects credential literals after string punctuation without truncating the expression",
+    () => {
+      const fixture = makeOciFixture({
+        layerEntries: layerEntriesWithServerContent(
+          'const config = { password: "," + "synthetic-but-forbidden-value" };',
+        ),
+      });
+
+      expectRejected(fixture, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
+    },
+  );
+
+  it.skipIf(!inspectorExists)(
+    "handles string punctuation inside nested template expressions",
+    () => {
+      const accepted = makeOciFixture({
+        layerEntries: layerEntriesWithServerContent(
+          'const marker = `${condition ? "{" : fallback}`; const config = { password: this.password };',
+        ),
+      });
+      const result = runInspector(accepted);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+
+      const rejected = makeOciFixture({
+        layerEntries: layerEntriesWithServerContent(
+          'const wrapper = `${{ password: "," + "synthetic-but-forbidden-value" }}`;',
+        ),
+      });
+      expectRejected(rejected, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
+    },
+  );
+
+  it.skipIf(!inspectorExists)("accepts OIDC response type ternary literals", () => {
+    const fixture = makeOciFixture({
+      layerEntries: layerEntriesWithServerContent(
+        'const responseType = hybrid ? "code id_token" : implicit ? "id_token" : "code";',
+      ),
+    });
+
+    const result = runInspector(fixture);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+  });
+
+  it.skipIf(!inspectorExists)(
+    "accepts only exact Fetch credentials controls embedded in source text",
+    () => {
+      const fixture = makeOciFixture({
+        layerEntries: layerEntriesWithServerContent(
+          "const generated = `',{credentials:'same-origin',headers:{'`;",
+        ),
+      });
+
+      const result = runInspector(fixture);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+
+      for (const content of [
+        'const generated = "{credentials:\'cors\'}";',
+        'const generated = "{credentials:\'same-origin\'+\'synthetic-but-forbidden-value\'}";',
+      ]) {
+        const rejected = makeOciFixture({
+          layerEntries: layerEntriesWithServerContent(content),
+        });
+        expectRejected(rejected, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
+      }
+    },
+  );
+
+  it.skipIf(!inspectorExists)(
+    "lexically scans generated JavaScript source-text modules",
+    () => {
+      const sourceTextPath = "app/.next/server/chunks/url.js.text 3.js";
+      const accepted = makeOciFixture({
+        layerEntries: layerEntriesWithServerContent("export {};\n", [
+          {
+            path: sourceTextPath,
+            content: `module.exports = ${JSON.stringify(
+              '"use strict";const parsed={password:s.password};',
+            )};`,
+            uid: 0,
+            gid: 0,
+          },
+        ]),
+      });
+      const result = runInspector(accepted);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+
+      const rejected = makeOciFixture({
+        layerEntries: layerEntriesWithServerContent("export {};\n", [
+          {
+            path: sourceTextPath,
+            content: `module.exports = ${JSON.stringify(
+              '"use strict";const config={password:"synthetic-but-forbidden-value"};',
+            )};`,
+            uid: 0,
+            gid: 0,
+          },
+        ]),
+      });
+      expectRejected(rejected, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
+    },
+  );
+
+  it.skipIf(!inspectorExists)("accepts token character-class metadata constants", () => {
+    const fixture = makeOciFixture({
+      layerEntries: layerEntriesWithServerContent(
+        "const CONNECTION_TOKEN_CHARS = exports.HEADER_CHARS = exports.TOKEN = tokenCharacterClass;",
+      ),
+    });
+
+    const result = runInspector(fixture);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+  });
+
+  it.skipIf(!inspectorExists)(
+    "accepts protocol token metadata and request credential controls",
+    () => {
+      const fixture = makeOciFixture({
+        layerEntries: layerEntriesWithServerContent(
+          [
+            "const STRICT_TOKEN = ['!', '#', '$', '%', '&', '*', '+', '-'];",
+            "const HTTP_TOKEN_CODEPOINTS = /^[!#$%&'*+\\-.^_|~A-Za-z0-9]+$/;",
+            "const RequestCredentials = request.credentials;",
+            'const requestCredentials = converter(["omit", "same-origin", "include"]);',
+            'const includeCredentials = request.credentials === "include" || request.credentials === "same-origin" && request.responseTainting === "basic";',
+            'const USE_CREDENTIALS = "use-credentials";',
+          ].join("\n"),
+        ),
+      });
+
+      const result = runInspector(fixture);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+    },
+  );
+
+  it.skipIf(!inspectorExists)("rejects secret-bearing uppercase credential names", () => {
+    for (const key of [
+      "TOKEN",
+      "AUTH_TOKEN",
+      "ACCESS_TOKEN",
+      "REFRESH_TOKEN",
+      "API_TOKEN",
+      "DATABASE_PASSWORD",
+    ]) {
+      const fixture = makeOciFixture({
+        layerEntries: layerEntriesWithServerContent(`const ${key} = prod.token;`),
+      });
+      expectRejected(fixture, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
+    }
+  });
+
+  it.skipIf(!inspectorExists)(
+    "accepts diagnostic, callable, predicate, header and MIME token roles",
+    () => {
+      const fixture = makeOciFixture({
+        layerEntries: layerEntriesWithServerContent(
+          [
+            'const Messages = { UnexpectedToken: "Unexpected token %0" };',
+            'const TokenExpiredError = function(message, expiredAt) { this.name = "TokenExpiredError"; this.expiredAt = expiredAt; };',
+            'Parser.prototype.getNextToken = function() { return multiline ? "BlockComment" : "LineComment"; };',
+            'const NEXT_CACHE_REVALIDATE_TAG_TOKEN_HEADER = "x-next-revalidate-tag-token";',
+            'const isPrivateKey = /^(?:NODE_.+)|^(?:__.+)$/i.test(key);',
+            "const createToken = (name, source) => { patterns[name] = new RegExp(source); };",
+            'const mime = { "application/vnd.etsi.timestamp-token": { source: "iana" } };',
+            `const mimeSource = ${JSON.stringify(
+              '{"application/vnd.etsi.timestamp-token":{"source":"iana"}}',
+            )};`,
+          ].join("\n"),
+        ),
+      });
+
+      const result = runInspector(fixture);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+    },
+  );
+
+  it.skipIf(!inspectorExists)(
+    "rejects direct long literals under diagnostic, callable, predicate, header and MIME token names",
+    () => {
+      for (const content of [
+        'const Messages = { UnexpectedToken: "synthetic-but-forbidden-value" };',
+        'const TokenExpiredError = "synthetic-but-forbidden-value";',
+        'Parser.prototype.getNextToken = "synthetic-but-forbidden-value";',
+        'const CONNECTION_TOKEN_CHARS = "synthetic-but-forbidden-value";',
+        'const HTTP_TOKEN_CODEPOINTS = "synthetic-but-forbidden-value";',
+        'const HTTP_TOKEN_CODEPOINTS = /synthetic-but-forbidden-value/;',
+        'const STRICT_TOKEN = "synthetic-but-forbidden-value";',
+        "const STRICT_TOKEN = ['x', /synthetic-but-forbidden-value/];",
+        "const STRICT_TOKEN = ['x', 12345678];",
+        'const RequestCredentials = "synthetic-but-forbidden-value";',
+        'const requestCredentials = "synthetic-but-forbidden-value";',
+        'const includeCredentials = "synthetic-but-forbidden-value";',
+        'const USE_CREDENTIALS = "synthetic-but-forbidden-value";',
+        'const NEXT_CACHE_REVALIDATE_TAG_TOKEN_HEADER = "synthetic-but-forbidden-value";',
+        'const isPrivateKey = "synthetic-but-forbidden-value";',
+        'const isPrivateKey = /synthetic-but-forbidden-value/.test(key);',
+        'const createToken = "synthetic-but-forbidden-value";',
+        'const createToken = () => "synthetic-but-forbidden-value";',
+        'const PASSWORD = () => "synthetic-but-forbidden-value";',
+        'const config = { password: function() { return "synthetic-but-forbidden-value"; } };',
+        'const mime = { "application/vnd.etsi.timestamp-token": "synthetic-but-forbidden-value" };',
+        `const mimeSource = ${JSON.stringify(
+          '{"application/vnd.etsi.timestamp-token":"synthetic-but-forbidden-value"}',
+        )};`,
+      ]) {
+        const fixture = makeOciFixture({
+          layerEntries: layerEntriesWithServerContent(content),
+        });
+        expectRejected(fixture, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
+      }
+    },
+  );
+
   it.skipIf(!inspectorExists)("accepts credential-shaped code references without literal values", () => {
     const fixture = makeOciFixture({
       layerEntries: defaultLayerEntries().map((entry) =>
@@ -1011,6 +1357,66 @@ describe("release image inspection contract", () => {
     },
   );
 
+  for (const [caseName, content] of [
+    [
+      "a regex statement after a block",
+      'if(ok){} /["\']\\/\\/not-a-comment/.test(input);const x={password:this.password};',
+    ],
+    [
+      "division after an identifier named of",
+      "const of=10,den=2;const ratio=of/den;const x={password:this.password};",
+    ],
+    [
+      "an ASI-separated dynamic credential assignment",
+      'let x={};x.password=config.password\nconsole.log("long-metadata-label");',
+    ],
+    [
+      "a regex after contextual for-of",
+      "for (const item of /re/) { consume(item); } const x={password:this.password};",
+    ],
+  ] as const) {
+    it.skipIf(!inspectorExists)(`accepts ${caseName}`, () => {
+      const fixture = makeOciFixture({
+        layerEntries: layerEntriesWithServerContent(content),
+      });
+
+      const result = runInspector(fixture);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+    });
+  }
+
+  it.skipIf(!inspectorExists)(
+    "rejects a hardcoded credential assignment after an ASI-separated dynamic assignment",
+    () => {
+      for (const content of [
+        'let x={};x.password=config.password\nx.password="synthetic-but-forbidden-value";',
+        'const x={password:new\nSecretHolder("synthetic-but-forbidden-value")};',
+      ]) {
+        const fixture = makeOciFixture({
+          layerEntries: layerEntriesWithServerContent(content),
+        });
+        expectRejected(fixture, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
+      }
+    },
+  );
+
+  it.skipIf(!inspectorExists)(
+    "rejects compound and trivia-separated credential assignments inside comments",
+    () => {
+      for (const content of [
+        '// password ||= "synthetic-but-forbidden-value"\nconst ok=true;',
+        "// password /* gap */ : synthetic-but-forbidden-value\nconst ok=true;",
+      ]) {
+        const fixture = makeOciFixture({
+          layerEntries: layerEntriesWithServerContent(content),
+        });
+        expectRejected(fixture, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
+      }
+    },
+  );
+
   it.skipIf(!inspectorExists)(
     "rejects separated, computed, escaped and later-dangerous credential keys",
     () => {
@@ -1026,6 +1432,7 @@ describe("release image inspection contract", () => {
         'const config = { password: "synthetic\\x2dbut\\x2dforbidden\\x2dvalue" };',
         'const config = { credentialProviderSecret: "synthetic-but-forbidden-value" };',
         'const config = { tokenHashSecret: "synthetic-but-forbidden-value" };',
+        'const config = { "id_token": "synthetic-but-forbidden-value" };',
         'const payload = "{\\\"database-password\\\":\\\"synthetic-but-forbidden-value\\\"}";',
       ]) {
         const fixture = makeOciFixture({
@@ -1072,6 +1479,128 @@ describe("release image inspection contract", () => {
       });
       expectRejected(fixture, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
     }
+  });
+
+  it.skipIf(!inspectorExists)("rejects acronym credential keys with long literals", () => {
+    for (const key of ["DBPassword", "JWTSecret", "APIToken", "clientAPIKey"]) {
+      const fixture = makeOciFixture({
+        layerEntries: layerEntriesWithServerContent(
+          `const config = { ${key}: "synthetic-but-forbidden-value" };`,
+        ),
+      });
+      expectRejected(fixture, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
+    }
+  });
+
+  it.skipIf(!inspectorExists)("accepts dynamic Fetch credentials references", () => {
+    const fixture = makeOciFixture({
+      layerEntries: layerEntriesWithServerContent(
+        [
+          "const member = { credentials: request.credentials };",
+          "const environment = { credentials: process.env.FETCH_CREDENTIALS };",
+          "const reference = { credentials: inheritedCredentials };",
+          'const bracket = { credentials: request["credentials"] };',
+          'const fallback = { credentials: request.credentials ?? "same-origin" };',
+          'const cors = { credentials: corsAttributeState === "anonymous" ? "same-origin" : "omit" };',
+          "const store = { credentials: {} };",
+        ].join("\n"),
+      ),
+    });
+
+    const result = runInspector(fixture);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+  });
+
+  it.skipIf(!inspectorExists)("rejects a non-control Fetch credentials fallback", () => {
+    for (const content of [
+      'const fallback = { credentials: request.credentials ?? "cors" };',
+      'const conditional = { credentials: corsAttributeState === "anonymous" ? "cors" : "omit" };',
+      'const comparison = { credentials: input === "synthetic-but-forbidden-value" ? "include" : "omit" };',
+      'const nonempty = { credentials: { mode: "include" } };',
+      'const nested = { credentials: { password: "synthetic-but-forbidden-value" } };',
+    ]) {
+      const fixture = makeOciFixture({
+        layerEntries: layerEntriesWithServerContent(content),
+      });
+
+      expectRejected(fixture, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
+    }
+  });
+
+  it.skipIf(!inspectorExists)(
+    "accepts the measured production token and comment volumes with shared headroom",
+    () => {
+      const measuredVolumeFiles = [
+        {
+          path: "app/.next/static/chunks/measured-comments.js",
+          content: "// compiled output\n".repeat(observedProductionCredentialComments),
+          uid: 0,
+          gid: 0,
+        },
+        {
+          path: "app/.next/static/chunks/measured-tokens.js",
+          content: "a;".repeat(Math.ceil(observedProductionSensitiveTokens / 2)),
+          uid: 0,
+          gid: 0,
+        },
+      ];
+      const fixture = makeOciFixture({
+        layerEntries: layerEntriesWithServerContent("export {};\n", measuredVolumeFiles),
+      });
+
+      const result = runInspector(fixture);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+    },
+    15_000,
+  );
+
+  it.skipIf(!inspectorExists)(
+    "fails closed beyond the derived shared token and comment limits",
+    () => {
+      const excessiveComments = makeOciFixture({
+        layerEntries: layerEntriesWithServerContent("export {};\n", [
+          {
+            path: "app/.next/static/chunks/excessive-comments.js",
+            content: "// bounded comment\n".repeat(expectedCredentialCommentLimit + 1),
+            uid: 0,
+            gid: 0,
+          },
+        ]),
+      });
+      expectRejected(excessiveComments, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
+
+      const excessiveTokens = makeOciFixture({
+        layerEntries: layerEntriesWithServerContent("export {};\n", [
+          {
+            path: "app/.next/static/chunks/excessive-tokens.js",
+            content: "a;".repeat(Math.ceil((expectedSensitiveTokenLimit + 1) / 2)),
+            uid: 0,
+            gid: 0,
+          },
+        ]),
+      });
+      expectRejected(excessiveTokens, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
+    },
+    15_000,
+  );
+
+  it.skipIf(!inspectorExists)("fails closed beyond the shared sensitive-source byte budget", () => {
+    const scanner = loadSensitiveScannerHarness();
+    const atLimit = scanner.createSensitiveScanBudget();
+    atLimit.sourceBytes = scanner.maxSensitiveSourceBytes - 1;
+    expect(() =>
+      scanner.assertSensitiveContent(Buffer.from("x"), canary, "app/server.js", atLimit),
+    ).not.toThrow();
+
+    const beyondLimit = scanner.createSensitiveScanBudget();
+    beyondLimit.sourceBytes = scanner.maxSensitiveSourceBytes;
+    expect(() =>
+      scanner.assertSensitiveContent(Buffer.from("x"), canary, "app/server.js", beyondLimit),
+    ).toThrow(/RELEASE_IMAGE_SENSITIVE_CONTENT/);
   });
 
   it.skipIf(!inspectorExists)(

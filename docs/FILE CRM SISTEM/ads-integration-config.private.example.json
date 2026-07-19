@@ -1,0 +1,57 @@
+{
+  "baseUrl": "https://salamland.my",
+  "username": "afiq.admin",
+  "password": "REPLACE_WITH_ADMIN_PASSWORD",
+  "meta": {
+    "verifyToken": "REPLACE_WITH_META_VERIFY_TOKEN",
+    "apiVersion": "v22.0"
+  },
+  "tiktok": {
+    "callbackToken": "REPLACE_WITH_TIKTOK_CALLBACK_TOKEN",
+    "leadRetentionDays": 90
+  },
+  "connections": [
+    {
+      "companyId": "salam-land",
+      "metaEnabled": true,
+      "metaPageId": "398314092818758",
+      "metaFormIds": "PASTE_SALAM_FORM_ID_1,PASTE_SALAM_FORM_ID_2",
+      "metaAccessToken": "REPLACE_WITH_META_ACCESS_TOKEN",
+      "metaSpendAccessToken": "REPLACE_WITH_META_SPEND_ACCESS_TOKEN",
+      "metaSpendSyncEnabled": true,
+      "metaDefaultStaff": "Nurin",
+      "metaLeadStatus": "New Lead",
+      "tiktokEnabled": true,
+      "tiktokAdvertiserId": "REPLACE_WITH_TIKTOK_ADVERTISER_ID",
+      "tiktokFormIds": "PASTE_SALAM_TIKTOK_FORM_ID",
+      "tiktokAccessToken": "REPLACE_WITH_TIKTOK_ACCESS_TOKEN",
+      "tiktokSpendSyncEnabled": true,
+      "tiktokDefaultStaff": "Nurin",
+      "tiktokLeadStatus": "New Lead"
+    },
+    {
+      "companyId": "bumi-hayat",
+      "metaEnabled": true,
+      "metaPageId": "573344855853053",
+      "metaFormIds": "PASTE_BH_FORM_ID_1,PASTE_BH_FORM_ID_2",
+      "metaAccessToken": "REPLACE_WITH_META_ACCESS_TOKEN",
+      "metaSpendAccessToken": "REPLACE_WITH_META_SPEND_ACCESS_TOKEN",
+      "metaSpendSyncEnabled": true,
+      "metaDefaultStaff": "Amy",
+      "metaLeadStatus": "New Lead",
+      "tiktokEnabled": false
+    },
+    {
+      "companyId": "barakah-emas",
+      "metaEnabled": true,
+      "metaPageId": "1275140334740450",
+      "metaFormIds": "PASTE_BE_FORM_ID_1,PASTE_BE_FORM_ID_2",
+      "metaAccessToken": "REPLACE_WITH_META_ACCESS_TOKEN",
+      "metaSpendAccessToken": "REPLACE_WITH_META_SPEND_ACCESS_TOKEN",
+      "metaSpendSyncEnabled": true,
+      "metaDefaultStaff": "Nabilah",
+      "metaLeadStatus": "New Lead",
+      "tiktokEnabled": false
+    }
+  ]
+}

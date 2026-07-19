@@ -1186,7 +1186,7 @@ describe("Release image workflow DAG", () => {
     expect(scanSource).toContain("--no-same-owner");
     expect(scanSource).toContain("--no-same-permissions");
     expect(scanSource).toContain("--keep-old-files");
-    expect(scanSource).toContain("--no-overwrite-dir");
+    expect(scanSource).not.toContain("--no-overwrite-dir");
     expect(scanSource).toContain("value.imageManifestDigest");
     expect(scanSource).toContain('oci_input="$oci_layout@$image_manifest_digest"');
     expect(scanSource.match(/--input "\$oci_input"/g)).toHaveLength(2);

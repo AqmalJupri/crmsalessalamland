@@ -688,8 +688,7 @@ jobs:
             --directory "$oci_layout" \
             --no-same-owner \
             --no-same-permissions \
-            --keep-old-files \
-            --no-overwrite-dir
+            --keep-old-files
           trivy --cache-dir "$RUNNER_TEMP/trivy-cache" image \
             --input "$oci_input" \
             --platform linux/amd64 \

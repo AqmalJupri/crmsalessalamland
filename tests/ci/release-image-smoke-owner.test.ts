@@ -19,6 +19,7 @@ const ownerUrl = pathToFileURL(ownerPath).href;
 const sourceSha = "1".repeat(40);
 const imageManifestDigest = `sha256:${"2".repeat(64)}`;
 const imageConfigDigest = `sha256:${"3".repeat(64)}`;
+const imageManifestMediaType = "application/vnd.oci.image.manifest.v1+json";
 const baseDigest =
   "sha256:a2723a2817c5b01b8e7b98d567bc8b5a6b0e713e25bfb0a82b6ade4b9db06f50";
 const basePlatformDigest =
@@ -233,7 +234,9 @@ class FakeRunner {
   readonly calls: CommandCall[] = [];
   failPattern: RegExp | undefined;
   hangPattern: RegExp | undefined;
-  imageId = imageConfigDigest;
+  imageDescriptorDigest = imageManifestDigest;
+  imageDescriptorMediaType = imageManifestMediaType;
+  imageId = imageManifestDigest;
   networkNames: { app?: string; database?: string } = {};
   ledger: Array<{ filename: string; checksum: string }> = EXPECTED_MIGRATIONS.map(
     ({ filename, checksum }) => ({ filename, checksum }),
@@ -262,6 +265,10 @@ class FakeRunner {
       return {
         stdout: canonical([{
           Id: this.imageId,
+          Descriptor: {
+            digest: this.imageDescriptorDigest,
+            mediaType: this.imageDescriptorMediaType,
+          },
           RepoDigests: [`crm-ci@${imageManifestDigest}`],
           Config: {
             User: "65532:65532",
@@ -396,9 +403,10 @@ describe("restricted exact release-image runtime owner", () => {
     expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
   });
 
-  it("resolves the loaded image by its manifest digest while validating the config digest", async () => {
+  it("accepts Docker 29 containerd inspection identity as the manifest target digest", async () => {
     const fixture = createEvidence();
     const runner = new FakeRunner();
+    runner.imageId = imageManifestDigest;
     const owner = await loadOwner();
 
     await owner.runReleaseImageSmoke(options(fixture, runner));
@@ -416,10 +424,52 @@ describe("restricted exact release-image runtime owner", () => {
     expect(appRun?.args).not.toContain(imageConfigDigest);
   });
 
-  it("rejects a loaded manifest that resolves to a different config digest", async () => {
+  it("rejects a loaded image that resolves to a different manifest target digest", async () => {
     const fixture = createEvidence();
     const runner = new FakeRunner();
     runner.imageId = `sha256:${"9".repeat(64)}`;
+    const owner = await loadOwner();
+
+    await expect(owner.runReleaseImageSmoke(options(fixture, runner))).rejects.toThrow(
+      /IMAGE_INSPECTION_MISMATCH/,
+    );
+    expect(runner.calls.some(
+      (call) => call.args[0] === "network" && call.args[1] === "create",
+    )).toBe(false);
+  });
+
+  it("rejects classic-store config-digest identity before networking", async () => {
+    const fixture = createEvidence();
+    const runner = new FakeRunner();
+    runner.imageId = imageConfigDigest;
+    const owner = await loadOwner();
+
+    await expect(owner.runReleaseImageSmoke(options(fixture, runner))).rejects.toThrow(
+      /IMAGE_INSPECTION_MISMATCH/,
+    );
+    expect(runner.calls.some(
+      (call) => call.args[0] === "network" && call.args[1] === "create",
+    )).toBe(false);
+  });
+
+  it("rejects an inspected image with a different descriptor digest before networking", async () => {
+    const fixture = createEvidence();
+    const runner = new FakeRunner();
+    runner.imageDescriptorDigest = `sha256:${"8".repeat(64)}`;
+    const owner = await loadOwner();
+
+    await expect(owner.runReleaseImageSmoke(options(fixture, runner))).rejects.toThrow(
+      /IMAGE_INSPECTION_MISMATCH/,
+    );
+    expect(runner.calls.some(
+      (call) => call.args[0] === "network" && call.args[1] === "create",
+    )).toBe(false);
+  });
+
+  it("rejects an inspected image with a non-OCI manifest descriptor before networking", async () => {
+    const fixture = createEvidence();
+    const runner = new FakeRunner();
+    runner.imageDescriptorMediaType = "application/vnd.oci.image.index.v1+json";
     const owner = await loadOwner();
 
     await expect(owner.runReleaseImageSmoke(options(fixture, runner))).rejects.toThrow(

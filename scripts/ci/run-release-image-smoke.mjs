@@ -27,6 +27,7 @@ const probeImage =
 const sourceRepository = "https://github.com/AqmalJupri/crmsalessalamland";
 const databaseName = "crm_salam_codex_migration_platform";
 const databaseUser = "crm";
+const ociImageManifestMediaType = "application/vnd.oci.image.manifest.v1+json";
 const requiredEvidence = Object.freeze({
   image: Object.freeze({ name: "image.oci.tar", limit: 4 * 1024 * 1024 * 1024 }),
   imageMetadata: Object.freeze({ name: "image-metadata.json", limit: 64 * 1024 }),
@@ -787,7 +788,9 @@ function parseImageInspection(source, manifest) {
   const image = value[0];
   const labels = image.Config?.Labels;
   if (
-    image.Id !== manifest.image.configDigest ||
+    image.Id !== manifest.image.manifestDigest ||
+    image.Descriptor?.digest !== manifest.image.manifestDigest ||
+    image.Descriptor?.mediaType !== ociImageManifestMediaType ||
     image.Config?.User !== "65532:65532" ||
     labels?.["org.opencontainers.image.source"] !== sourceRepository ||
     labels?.["org.opencontainers.image.revision"] !== manifest.sourceSha ||

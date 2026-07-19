@@ -782,13 +782,43 @@ describe("release image inspection contract", () => {
     expectRejected(cycle, /RELEASE_IMAGE_APP_LINK/);
   });
 
-  it.skipIf(!inspectorExists)("rejects hostile outer-archive links", () => {
-    const fixture = makeOciFixture({
-      mutateOuterEntries: (entries) => {
-        entries.push({ path: "index-copy.json", type: "symlink", linkname: "index.json" });
+  it.skipIf(!inspectorExists)("rejects hostile outer-archive paths, duplicates, and links", () => {
+    const hostileFixtures = [
+      {
+        fixture: makeOciFixture({
+          mutateOuterEntries: (entries) => {
+            entries.push({ path: "index-copy.json", type: "symlink", linkname: "index.json" });
+          },
+        }),
+        error: /RELEASE_IMAGE_TAR_TYPE/,
       },
-    });
-    expectRejected(fixture, /RELEASE_IMAGE_TAR_TYPE/);
+      {
+        fixture: makeOciFixture({
+          mutateOuterEntries: (entries) => {
+            entries.push({ path: "unexpected.txt", content: "blocked" });
+          },
+        }),
+        error: /RELEASE_IMAGE_OCI_PATH/,
+      },
+      {
+        fixture: makeOciFixture({
+          mutateOuterEntries: (entries) => {
+            entries.push({ path: "../outside", content: "blocked" });
+          },
+        }),
+        error: /RELEASE_IMAGE_TAR_PATH/,
+      },
+      {
+        fixture: makeOciFixture({
+          mutateOuterEntries: (entries) => {
+            entries.push({ path: "index.json", content: "{}" });
+          },
+        }),
+        error: /RELEASE_IMAGE_TAR_DUPLICATE/,
+      },
+    ];
+
+    for (const { fixture, error } of hostileFixtures) expectRejected(fixture, error);
   });
 
   it.skipIf(!inspectorExists)("rejects oversized archive evidence before parsing", () => {

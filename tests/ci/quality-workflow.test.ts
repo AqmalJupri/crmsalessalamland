@@ -1160,8 +1160,52 @@ describe("Release image workflow DAG", () => {
     expect(canary.run).not.toMatch(/[a-f0-9]{64}/);
 
     const scan = strictStep(job, "Scan exact image for vulnerabilities and secrets");
-    expect(scan.run).toContain("--scanners secret");
-    expect(scan.run).toContain("--image-config-scanners secret");
+    const scanSource = String(scan.run ?? "");
+    expect(scanSource).toContain("--scanners secret");
+    expect(scanSource).toContain("--image-config-scanners secret");
+    expect(scanSource).toContain(
+      'oci_layout="$(mktemp -d "$RUNNER_TEMP/release-oci-layout.XXXXXX")"',
+    );
+    expect(scanSource).toContain(
+      'verified_dir="$(mktemp -d "$RUNNER_TEMP/release-image-verify.XXXXXX")"',
+    );
+    expect(scanSource).toContain("umask 077");
+    expect(scanSource).toContain(
+      'trap \'rm -rf "$verified_dir" "$oci_layout"\' EXIT',
+    );
+    expect(scanSource).toContain("scripts/ci/assert-release-image.mjs");
+    expect(scanSource).toContain('--canary "release-image-canary-${{ github.sha }}"');
+    expect(scanSource).toContain('--output "$verified_dir/image-metadata.json"');
+    expect(scanSource).toContain("cmp --silent");
+    expect(scanSource).toContain('"$release_dir/image-metadata.json"');
+    expect(scanSource).toContain('"$verified_dir/image-metadata.json"');
+    expect(scanSource).toContain("unset TAR_OPTIONS");
+    expect(scanSource).toContain("tar --extract");
+    expect(scanSource).toContain('--file "$release_dir/image.oci.tar"');
+    expect(scanSource).toContain('--directory "$oci_layout"');
+    expect(scanSource).toContain("--no-same-owner");
+    expect(scanSource).toContain("--no-same-permissions");
+    expect(scanSource).toContain("--keep-old-files");
+    expect(scanSource).toContain("--no-overwrite-dir");
+    expect(scanSource).toContain("value.imageManifestDigest");
+    expect(scanSource).toContain('oci_input="$oci_layout@$image_manifest_digest"');
+    expect(scanSource.match(/--input "\$oci_input"/g)).toHaveLength(2);
+    expect(scanSource.match(/--platform linux\/amd64/g)).toHaveLength(2);
+    expect(scanSource).not.toContain('--input "$release_dir/image.oci.tar"');
+    const validationIndex = scanSource.indexOf("scripts/ci/assert-release-image.mjs");
+    const metadataCompareIndex = scanSource.indexOf("cmp --silent");
+    const manifestSelectionIndex = scanSource.indexOf("value.imageManifestDigest");
+    const extractionIndex = scanSource.indexOf("tar --extract");
+    const firstTrivyIndex = scanSource.indexOf("trivy --cache-dir", extractionIndex);
+    const secondTrivyIndex = scanSource.indexOf("trivy --cache-dir", firstTrivyIndex + 1);
+    const releaseAssertionIndex = scanSource.indexOf("scripts/ci/assert-release-scan.mjs");
+    expect(validationIndex).toBeGreaterThanOrEqual(0);
+    expect(metadataCompareIndex).toBeGreaterThan(validationIndex);
+    expect(manifestSelectionIndex).toBeGreaterThan(metadataCompareIndex);
+    expect(extractionIndex).toBeGreaterThan(manifestSelectionIndex);
+    expect(firstTrivyIndex).toBeGreaterThan(extractionIndex);
+    expect(secondTrivyIndex).toBeGreaterThan(firstTrivyIndex);
+    expect(releaseAssertionIndex).toBeGreaterThan(secondTrivyIndex);
     const versionCaptureIndex = String(scan.run).indexOf(
       '> "$release_dir/trivy-version.json"',
     );

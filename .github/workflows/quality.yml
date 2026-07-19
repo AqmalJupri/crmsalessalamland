@@ -667,8 +667,32 @@ jobs:
         run: |
           set -euo pipefail
           release_dir="$RUNNER_TEMP/release-${{ matrix.surface }}"
+          umask 077
+          verified_dir="$(mktemp -d "$RUNNER_TEMP/release-image-verify.XXXXXX")"
+          oci_layout="$(mktemp -d "$RUNNER_TEMP/release-oci-layout.XXXXXX")"
+          trap 'rm -rf "$verified_dir" "$oci_layout"' EXIT
+          node scripts/ci/assert-release-image.mjs \
+            --archive "$release_dir/image.oci.tar" \
+            --surface "${{ matrix.surface }}" \
+            --source-sha "${{ github.sha }}" \
+            --canary "release-image-canary-${{ github.sha }}" \
+            --output "$verified_dir/image-metadata.json"
+          cmp --silent \
+            "$release_dir/image-metadata.json" \
+            "$verified_dir/image-metadata.json"
+          image_manifest_digest="$(node -e "const value=require(process.argv[1]); process.stdout.write(value.imageManifestDigest)" "$verified_dir/image-metadata.json")"
+          oci_input="$oci_layout@$image_manifest_digest"
+          unset TAR_OPTIONS
+          tar --extract \
+            --file "$release_dir/image.oci.tar" \
+            --directory "$oci_layout" \
+            --no-same-owner \
+            --no-same-permissions \
+            --keep-old-files \
+            --no-overwrite-dir
           trivy --cache-dir "$RUNNER_TEMP/trivy-cache" image \
-            --input "$release_dir/image.oci.tar" \
+            --input "$oci_input" \
+            --platform linux/amd64 \
             --db-repository ghcr.io/aquasecurity/trivy-db:2 \
             --scanners vuln \
             --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
@@ -677,7 +701,8 @@ jobs:
             --exit-code 0 \
             --timeout 10m
           trivy --cache-dir "$RUNNER_TEMP/trivy-cache" image \
-            --input "$release_dir/image.oci.tar" \
+            --input "$oci_input" \
+            --platform linux/amd64 \
             --scanners secret \
             --image-config-scanners secret \
             --format json \

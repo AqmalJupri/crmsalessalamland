@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import nextConfig from "../../next.config";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const dockerfilePath = `${repositoryRoot}Dockerfile`;
@@ -505,6 +506,9 @@ describe("release image source contract", () => {
 
   it("binds standalone output and the resolved linux/amd64 base digest", () => {
     expect(nextConfigSource).toMatch(/\boutput:\s*["']standalone["']/);
+    expect(nextConfig.outputFileTracingExcludes).toEqual({
+      "next-server": ["node_modules/.pnpm/node_modules/semver"],
+    });
     expect(releaseContractSource).toContain(
       `reference: "${exactBuildBase.slice(0, exactBuildBase.indexOf("@"))}"`,
     );

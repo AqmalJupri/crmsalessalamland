@@ -24,6 +24,9 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  outputFileTracingExcludes: {
+    "next-server": ["node_modules/.pnpm/node_modules/semver"],
+  },
   env: {
     CRM_BUILD_SURFACE: process.env.PRODUCT_SURFACE ?? "",
   },

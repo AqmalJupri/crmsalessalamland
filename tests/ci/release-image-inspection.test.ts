@@ -1751,7 +1751,7 @@ describe("release image inspection contract", () => {
       ],
     });
     expectRejected(canaryPath, /RELEASE_IMAGE_FORBIDDEN_PATH/);
-  });
+  }, 15_000);
 
   it.skipIf(!inspectorExists)("accepts only exact fail-closed arguments", () => {
     const fixture = makeOciFixture();

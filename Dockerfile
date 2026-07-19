@@ -16,6 +16,9 @@ ENV APP_VERSION=$APP_VERSION \
     PRODUCT_SURFACE=crm
 COPY . .
 RUN pnpm build
+RUN find /app/.next/standalone /app/.next/static /app/public -type d -exec chmod 0755 -- {} + && \
+    find /app/.next/standalone /app/.next/static /app/public -type f -perm /111 -exec chmod 0755 -- {} + && \
+    find /app/.next/standalone /app/.next/static /app/public -type f ! -perm /111 -exec chmod 0644 -- {} +
 
 FROM dependencies AS build-tasha
 ARG APP_VERSION
@@ -23,6 +26,9 @@ ENV APP_VERSION=$APP_VERSION \
     PRODUCT_SURFACE=tasha
 COPY . .
 RUN pnpm build
+RUN find /app/.next/standalone /app/.next/static /app/public -type d -exec chmod 0755 -- {} + && \
+    find /app/.next/standalone /app/.next/static /app/public -type f -perm /111 -exec chmod 0755 -- {} + && \
+    find /app/.next/standalone /app/.next/static /app/public -type f ! -perm /111 -exec chmod 0644 -- {} +
 
 FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:a2723a2817c5b01b8e7b98d567bc8b5a6b0e713e25bfb0a82b6ade4b9db06f50 AS runtime-base
 USER 0:0

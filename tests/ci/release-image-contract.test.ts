@@ -32,6 +32,8 @@ const exactRuntimeBase =
 const exactRuntimePlatformDigest =
   "sha256:6eae66c49774276f50ae1818db25bb89735971a909fb833633dd1400dbc450a1";
 const releaseSurfaces = ["crm", "tasha"] as const;
+const exactReleaseModeNormalization =
+  "find /app/.next/standalone /app/.next/static /app/public -type d -exec chmod 0755 -- {} + && find /app/.next/standalone /app/.next/static /app/public -type f -perm /111 -exec chmod 0755 -- {} + && find /app/.next/standalone /app/.next/static /app/public -type f ! -perm /111 -exec chmod 0644 -- {} +";
 
 const reviewedIgnoreRules = [
   ".git",
@@ -366,6 +368,15 @@ function assertDockerfileContract(source: string): void {
   }
 
   assertNoSecretInputs(stages);
+  for (const surface of releaseSurfaces) {
+    const buildStage = stages.get(`build-${surface}`)!;
+    expect(buildStage.parent).toBe("dependencies");
+    expect(
+      buildStage.instructions
+        .filter((instruction) => instruction.name === "RUN")
+        .map((instruction) => instruction.value),
+    ).toEqual(["pnpm build", exactReleaseModeNormalization]);
+  }
   const runtimeBase = stages.get("runtime-base")!;
   expect(runtimeBase.parent).toBe(exactRuntimeBase);
   expect(
@@ -429,9 +440,11 @@ RUN corepack enable
 FROM dependencies AS build-crm
 ENV PRODUCT_SURFACE=crm
 RUN pnpm build
+RUN ${exactReleaseModeNormalization}
 FROM dependencies AS build-tasha
 ENV PRODUCT_SURFACE=tasha
 RUN pnpm build
+RUN ${exactReleaseModeNormalization}
 FROM ${exactRuntimeBase} AS runtime-base
 USER 0:0
 WORKDIR /app
@@ -518,6 +531,10 @@ describe("release image source contract", () => {
     [
       "runtime workdir before root owner",
       validDockerfileFixture.replace("USER 0:0\nWORKDIR /app", "WORKDIR /app\nUSER 0:0"),
+    ],
+    [
+      "writable release output",
+      validDockerfileFixture.replace(exactReleaseModeNormalization, "chmod -R 0777 /app/.next"),
     ],
     ["floating base", validDockerfileFixture.replace(/@sha256:[a-f0-9]{64}/, "")],
     [

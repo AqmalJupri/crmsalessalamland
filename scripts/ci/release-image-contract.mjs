@@ -13,6 +13,7 @@ export const RELEASE_RUNTIME_CONFIG_FIELDS = Object.freeze([
   "WorkingDir",
   "Entrypoint",
   "Cmd",
+  "ArgsEscaped",
 ]);
 const RUNTIME_BASE_ENVIRONMENT = Object.freeze([
   "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",

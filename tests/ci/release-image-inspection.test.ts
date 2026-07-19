@@ -216,6 +216,7 @@ function makeOciFixture(options: OciFixtureOptions = {}): OciFixture {
       User: "65532:65532",
       WorkingDir: "/app",
       Cmd: ["/nodejs/bin/node", "server.js"],
+      ArgsEscaped: true,
     },
     created: "2026-07-19T00:00:00.000Z",
     history: [{ created_by: "synthetic reviewed fixture" }],
@@ -738,6 +739,32 @@ describe("release image inspection contract", () => {
       },
     });
     expectRejected(shellStartup, /RELEASE_IMAGE_(?:ENTRYPOINT|COMMAND)/);
+  });
+
+  it.skipIf(!inspectorExists)("accepts the exact BuildKit CMD compatibility marker", () => {
+    const fixture = makeOciFixture();
+    const result = runInspector(fixture);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+  });
+
+  it.skipIf(!inspectorExists)("requires the exact BuildKit CMD compatibility marker", () => {
+    const missing = makeOciFixture({
+      mutateConfig: (config) => {
+        delete (config.config as Record<string, unknown>).ArgsEscaped;
+      },
+    });
+    expectRejected(missing, /RELEASE_IMAGE_ARGS_ESCAPED/);
+
+    for (const value of [false, null, "true", 1]) {
+      const fixture = makeOciFixture({
+        mutateConfig: (config) => {
+          (config.config as Record<string, unknown>).ArgsEscaped = value;
+        },
+      });
+      expectRejected(fixture, /RELEASE_IMAGE_ARGS_ESCAPED/);
+    }
   });
 
   it.skipIf(!inspectorExists)("rejects environment entries outside the exact surface contract", () => {

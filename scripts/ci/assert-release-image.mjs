@@ -742,6 +742,7 @@ function inspectArchive(archive, arguments_) {
   ) {
     fail("RELEASE_IMAGE_COMMAND");
   }
+  if (runtime.ArgsEscaped !== true) fail("RELEASE_IMAGE_ARGS_ESCAPED");
   if (
     runtime.Entrypoint !== undefined &&
     runtime.Entrypoint !== null &&

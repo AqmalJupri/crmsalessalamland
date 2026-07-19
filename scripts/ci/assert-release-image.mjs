@@ -564,21 +564,14 @@ function lexicalCredentialKey(source) {
   return false;
 }
 
-function embeddedKeyBefore(source, separator) {
-  let cursor = separator - 1;
-  while (cursor >= 0 && /\s/.test(source[cursor])) cursor -= 1;
-  while (cursor >= 1 && source[cursor - 1] === "*" && source[cursor] === "/") {
-    const commentStart = source.lastIndexOf("/*", cursor - 2);
-    if (commentStart === -1) return "";
-    cursor = commentStart - 1;
-    while (cursor >= 0 && /\s/.test(source[cursor])) cursor -= 1;
-  }
-  if (cursor < 0) return "";
+function embeddedKeyBefore(source, keyEnd, recordStart) {
+  let cursor = keyEnd - 1;
+  if (cursor < recordStart) return "";
   if (["'", '"', "`"].includes(source[cursor])) {
     const quote = source[cursor];
     const end = cursor;
     cursor -= 1;
-    while (cursor >= 0 && end - cursor <= 128) {
+    while (cursor >= recordStart && end - cursor <= 128) {
       if (source[cursor] === quote && source[cursor - 1] !== "\\") {
         return source.slice(cursor + 1, end);
       }
@@ -587,7 +580,11 @@ function embeddedKeyBefore(source, separator) {
     return "";
   }
   const end = cursor + 1;
-  while (cursor >= 0 && end - cursor <= 128 && /[A-Za-z0-9_$ .\\-]/.test(source[cursor])) {
+  while (
+    cursor >= recordStart &&
+    end - cursor <= 128 &&
+    /[A-Za-z0-9_$ .\\-]/.test(source[cursor])
+  ) {
     cursor -= 1;
   }
   return source.slice(cursor + 1, end).trim();
@@ -601,7 +598,9 @@ function embeddedValueCharacters(source, separator) {
   let escaped = false;
   for (; cursor < source.length; cursor += 1) {
     const character = source[cursor];
-    if (escaped) {
+    if (character === "\0") {
+      break;
+    } else if (escaped) {
       escaped = false;
       if (!/\s/.test(character)) count += 1;
     } else if (character === "\\") {
@@ -616,14 +615,6 @@ function embeddedValueCharacters(source, separator) {
   return count;
 }
 
-function embeddedKeySeparator(source, valueSeparator) {
-  let separator = valueSeparator;
-  if (source[valueSeparator] === "=") {
-    while (separator > 0 && /[|?&+\-*\/%]/.test(source[separator - 1])) separator -= 1;
-  }
-  return separator;
-}
-
 function embeddedQuotedValue(source, separator) {
   let cursor = separator + 1;
   while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
@@ -631,7 +622,12 @@ function embeddedQuotedValue(source, separator) {
   if (quote !== "'" && quote !== '"') return undefined;
   const valueStart = ++cursor;
   while (cursor < source.length && source[cursor] !== quote) {
-    if (source[cursor] === "\\" || source[cursor] === "\n" || source[cursor] === "\r") {
+    if (
+      source[cursor] === "\0" ||
+      source[cursor] === "\\" ||
+      source[cursor] === "\n" ||
+      source[cursor] === "\r"
+    ) {
       return undefined;
     }
     cursor += 1;
@@ -640,30 +636,108 @@ function embeddedQuotedValue(source, separator) {
   return { value: source.slice(valueStart, cursor), end: cursor + 1 };
 }
 
-function isSafeEmbeddedCredentialControl(source, valueSeparator, keySeparator) {
-  const key = embeddedKeyBefore(source, keySeparator);
+function isSafeEmbeddedCredentialControl(source, valueSeparator, key) {
   if (lexicalCredentialSegments(key).join("_") !== "credentials") return false;
   const quoted = embeddedQuotedValue(source, valueSeparator);
   if (!quoted || !SAFE_CREDENTIAL_CONTROL_VALUES.has(quoted.value)) return false;
   let cursor = quoted.end;
   while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
-  return cursor >= source.length || /[,;}\])]/.test(source[cursor]);
+  return cursor >= source.length || source[cursor] === "\0" || /[,;}\])]/.test(source[cursor]);
 }
 
 function hasEmbeddedCredentialAssignment(source) {
+  let recordStart = 0;
+  let blockCommentStart = -1;
+  let blockCommentTriviaStart = -1;
+  let trailingTriviaStart = -1;
+  let operatorRunStart = -1;
+  let operatorKeyEnd = -1;
   for (let cursor = 0; cursor < source.length; cursor += 1) {
-    if (source[cursor] !== ":" && source[cursor] !== "=") continue;
-    const keySeparator = embeddedKeySeparator(source, cursor);
-    const key = embeddedKeyBefore(source, keySeparator);
-    const credentialControl = lexicalCredentialSegments(key).join("_") === "credentials";
-    if (
-      lexicalCredentialKey(key) &&
-      !isSafeEmbeddedCredentialControl(source, cursor, keySeparator) &&
-      (embeddedValueCharacters(source, cursor) >= MIN_CREDENTIAL_LITERAL_CHARACTERS ||
-        (credentialControl && embeddedQuotedValue(source, cursor) !== undefined))
-    ) {
-      return true;
+    if (source[cursor] === "\0") {
+      recordStart = cursor + 1;
+      blockCommentStart = -1;
+      blockCommentTriviaStart = -1;
+      trailingTriviaStart = -1;
+      operatorRunStart = -1;
+      operatorKeyEnd = -1;
+      continue;
     }
+
+    if (
+      blockCommentStart >= recordStart &&
+      source[cursor] === "*" &&
+      source[cursor + 1] === "/"
+    ) {
+      blockCommentStart = -1;
+      trailingTriviaStart = blockCommentTriviaStart;
+      blockCommentTriviaStart = -1;
+      operatorRunStart = -1;
+      operatorKeyEnd = -1;
+      cursor += 1;
+      continue;
+    }
+
+    if (
+      blockCommentStart < recordStart &&
+      source[cursor] === "/" &&
+      source[cursor + 1] === "*"
+    ) {
+      blockCommentStart = cursor;
+      blockCommentTriviaStart =
+        trailingTriviaStart >= recordStart ? trailingTriviaStart : cursor;
+      trailingTriviaStart = -1;
+      operatorRunStart = -1;
+      operatorKeyEnd = -1;
+      cursor += 1;
+      continue;
+    }
+
+    const contextStart = blockCommentStart >= recordStart ? blockCommentStart + 2 : recordStart;
+    if (source[cursor] === ":" || source[cursor] === "=") {
+      const compoundAssignment =
+        source[cursor] === "=" && operatorRunStart >= contextStart;
+      const keyEnd = compoundAssignment
+        ? operatorKeyEnd
+        : trailingTriviaStart >= contextStart
+          ? trailingTriviaStart
+          : cursor;
+      const key = embeddedKeyBefore(source, keyEnd, contextStart);
+      const credentialControl = lexicalCredentialSegments(key).join("_") === "credentials";
+      const quotedValue = credentialControl ? embeddedQuotedValue(source, cursor) : undefined;
+      if (
+        lexicalCredentialKey(key) &&
+        !isSafeEmbeddedCredentialControl(source, cursor, key) &&
+        (embeddedValueCharacters(source, cursor) >= MIN_CREDENTIAL_LITERAL_CHARACTERS ||
+          (credentialControl && quotedValue !== undefined))
+      ) {
+        return true;
+      }
+      trailingTriviaStart = -1;
+      operatorRunStart = -1;
+      operatorKeyEnd = -1;
+      continue;
+    }
+
+    if (/\s/.test(source[cursor])) {
+      if (trailingTriviaStart < contextStart) trailingTriviaStart = cursor;
+      operatorRunStart = -1;
+      operatorKeyEnd = -1;
+      continue;
+    }
+
+    if (/[|?&+\-*\/%]/.test(source[cursor])) {
+      if (operatorRunStart < contextStart) {
+        operatorRunStart = cursor;
+        operatorKeyEnd =
+          trailingTriviaStart >= contextStart ? trailingTriviaStart : cursor;
+      }
+      trailingTriviaStart = -1;
+      continue;
+    }
+
+    trailingTriviaStart = -1;
+    operatorRunStart = -1;
+    operatorKeyEnd = -1;
   }
   return false;
 }

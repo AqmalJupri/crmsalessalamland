@@ -1641,6 +1641,247 @@ describe("release image inspection contract", () => {
     },
   );
 
+  for (const [offset, content] of [
+    [
+      12_571_457,
+      Buffer.from(
+        "Unable to read socket credentials: %s\0error getting unicast ttl: %s\0error getting broadcast: %s\0",
+        "latin1",
+      ),
+    ],
+    [
+      12_580_733,
+      Buffer.from("GCredentials:\0linux-ucred:\0pid=%li,\0uid=%li,\0gid=%li,\0", "latin1"),
+    ],
+  ] as const) {
+    it.skipIf(!inspectorExists)(
+      `accepts the locked libvips ELF string-table record at offset ${offset}`,
+      () => {
+        const scanner = loadSensitiveScannerHarness();
+        expect(() =>
+          scanner.assertSensitiveContent(
+            content,
+            canary,
+            "app/node_modules/.pnpm/@img+sharp-libvips-linux-x64@1.2.4/node_modules/@img/sharp-libvips-linux-x64/lib/libvips-cpp.so.8.17.3",
+            scanner.createSensitiveScanBudget(),
+          ),
+        ).not.toThrow();
+      },
+    );
+  }
+
+  it.skipIf(!inspectorExists)(
+    "keeps NUL-free non-JavaScript separator scanning linear",
+    () => {
+      const scanner = loadSensitiveScannerHarness();
+      const separators = Buffer.from("x:".repeat(125_000), "latin1");
+      const startedAt = Date.now();
+      expect(() =>
+        scanner.assertSensitiveContent(
+          separators,
+          canary,
+          "app/node_modules/native/separator-table.bin",
+          scanner.createSensitiveScanBudget(),
+        ),
+      ).not.toThrow();
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+    },
+    15_000,
+  );
+
+  it.skipIf(!inspectorExists)(
+    "bounds unmatched block-comment trivia before non-JavaScript separators",
+    () => {
+      const scanner = loadSensitiveScannerHarness();
+      const separators = Buffer.from("x*/:".repeat(62_500), "latin1");
+      const startedAt = Date.now();
+      expect(() =>
+        scanner.assertSensitiveContent(
+          separators,
+          canary,
+          "app/node_modules/native/comment-table.bin",
+          scanner.createSensitiveScanBudget(),
+        ),
+      ).not.toThrow();
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+    },
+    15_000,
+  );
+
+  it.skipIf(!inspectorExists)(
+    "rejects credential assignments when block-comment text contains nested opener bytes",
+    () => {
+      const scanner = loadSensitiveScannerHarness();
+      for (const content of [
+        "password/*xx/* */:abcdefgh",
+        "password/*xx/* */=abcdefgh",
+        '"password"/*xx/* */:"abcdefgh"',
+        '"password"/*xx/* */="abcdefgh"',
+        `password/*${"x".repeat(256)}/* */:abcdefgh`,
+        "password/*one*//*two*/||=abcdefgh",
+      ]) {
+        expect(() =>
+          scanner.assertSensitiveContent(
+            Buffer.from(content, "latin1"),
+            canary,
+            "app/node_modules/native/comment-records.bin",
+            scanner.createSensitiveScanBudget(),
+          ),
+        ).toThrow(/RELEASE_IMAGE_SENSITIVE_CONTENT/);
+      }
+    },
+  );
+
+  it.skipIf(!inspectorExists)(
+    "preserves safe controls while scanning nested-opener comment content",
+    () => {
+      const scanner = loadSensitiveScannerHarness();
+      const scan = (content: string) =>
+        scanner.assertSensitiveContent(
+          Buffer.from(content, "latin1"),
+          canary,
+          "app/node_modules/native/comment-controls.bin",
+          scanner.createSensitiveScanBudget(),
+        );
+
+      expect(() => scan('credentials/*a/*b*/:"include"')).not.toThrow();
+      expect(() => scan('credentials/*a/*b*/:"cors"')).toThrow(
+        /RELEASE_IMAGE_SENSITIVE_CONTENT/,
+      );
+      expect(() => scan('credentials/* password:abcdefgh */:"include"')).toThrow(
+        /RELEASE_IMAGE_SENSITIVE_CONTENT/,
+      );
+    },
+  );
+
+  it.skipIf(!inspectorExists)(
+    "keeps nested-opener comment floods linear",
+    () => {
+      const scanner = loadSensitiveScannerHarness();
+      const content = Buffer.from(`password/*${"/*x".repeat(83_334)}*/:abcdefgh`, "latin1");
+      const startedAt = Date.now();
+      expect(() =>
+        scanner.assertSensitiveContent(
+          content,
+          canary,
+          "app/node_modules/native/comment-flood.bin",
+          scanner.createSensitiveScanBudget(),
+        ),
+      ).toThrow(/RELEASE_IMAGE_SENSITIVE_CONTENT/);
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+    },
+    15_000,
+  );
+
+  for (const [caseName, content] of [
+    ["a NUL after a seven-character diagnostic value", Buffer.from("password:abcdefg\0h")],
+    [
+      "an escaped NUL after a short diagnostic value",
+      Buffer.concat([
+        Buffer.from("password:abcdef\\", "latin1"),
+        Buffer.from([0]),
+        Buffer.from("h", "latin1"),
+      ]),
+    ],
+    [
+      "a quoted key split across NUL records",
+      Buffer.concat([
+        Buffer.from('"password', "latin1"),
+        Buffer.from([0]),
+        Buffer.from('\":\"abcdefgh\"', "latin1"),
+      ]),
+    ],
+    [
+      "a Unicode-escaped quoted key split across NUL records",
+      Buffer.concat([
+        Buffer.from('"pass\\u0077ord', "latin1"),
+        Buffer.from([0]),
+        Buffer.from('\":\"abcdefgh\"', "latin1"),
+      ]),
+    ],
+    [
+      "comment trivia split across NUL records",
+      Buffer.concat([
+        Buffer.from('"password"/*', "latin1"),
+        Buffer.from([0]),
+        Buffer.from('gap*/:\"abcdefgh\"', "latin1"),
+      ]),
+    ],
+    [
+      "an active block comment split across NUL records",
+      Buffer.concat([
+        Buffer.from("password/*gap", "latin1"),
+        Buffer.from([0]),
+        Buffer.from("*/:abcdefgh", "latin1"),
+      ]),
+    ],
+    [
+      "a quoted credential control split across NUL records",
+      Buffer.concat([
+        Buffer.from('credentials:\"omi', "latin1"),
+        Buffer.from([0]),
+        Buffer.from('t\"', "latin1"),
+      ]),
+    ],
+    [
+      "an exact credential control terminated by a NUL record boundary",
+      Buffer.concat([
+        Buffer.from('credentials:\"same-origin\"', "latin1"),
+        Buffer.from([0]),
+      ]),
+    ],
+  ] as const) {
+    it.skipIf(!inspectorExists)(`accepts ${caseName}`, () => {
+      const scanner = loadSensitiveScannerHarness();
+      expect(() =>
+        scanner.assertSensitiveContent(
+          content,
+          canary,
+          "app/node_modules/native/librecords.so.1",
+          scanner.createSensitiveScanBudget(),
+        ),
+      ).not.toThrow();
+    });
+  }
+
+  it.skipIf(!inspectorExists)(
+    "rejects contiguous secrets and raw signatures in NUL-containing native buffers",
+    () => {
+      const scanner = loadSensitiveScannerHarness();
+      const elfHeader = Buffer.from(
+        "7f454c4602010103000000000000000003003e000100000000c0100000000000400000000000000050f4fd000000000000000000400038000a0040001d001c00",
+        "hex",
+      );
+      for (const content of [
+        "password:synthetic-but-forbidden-value",
+        "password:abcdefgh\0h",
+        'credentials:"cors"\0',
+        'credentials:"same-origin"x\0',
+        'credentials:"same-origin"+"synthetic-but-forbidden-value"',
+        canary,
+        "-----BEGIN OPENSSH PRIVATE KEY-----\nnot-real\n-----END OPENSSH PRIVATE KEY-----",
+        "AKIAIOSFODNN7EXAMPLE",
+        `ghp_${"a".repeat(20)}`,
+        "postgresql://crm_user:synthetic-password@db.internal/crm",
+      ]) {
+        const bytes = Buffer.concat([
+          elfHeader,
+          Buffer.from([0]),
+          Buffer.from(content, "utf8"),
+          Buffer.from([0]),
+        ]);
+        expect(() =>
+          scanner.assertSensitiveContent(
+            bytes,
+            canary,
+            "app/node_modules/native/libadversarial.so.1",
+            scanner.createSensitiveScanBudget(),
+          ),
+        ).toThrow(/RELEASE_IMAGE_SENSITIVE_CONTENT/);
+      }
+    },
+  );
+
   it.skipIf(!inspectorExists)("rejects exact canary and credential content without logging values", () => {
     for (const [caseIndex, content] of [
       canary,

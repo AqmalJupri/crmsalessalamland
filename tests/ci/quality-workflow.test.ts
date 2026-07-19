@@ -3,6 +3,16 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { PlaywrightTestConfig } from "@playwright/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  isAlias,
+  isMap,
+  isPair,
+  isScalar,
+  isSeq,
+  parseDocument,
+  type Node as YamlNode,
+  type Pair,
+} from "yaml";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const qualityWorkflow = readFileSync(
@@ -201,6 +211,165 @@ function expectSurfaceBindings(job: string) {
   const rows = surfaceBindings(job);
   expect(rows).toEqual(expectedSurfaceBindings);
   return rows;
+}
+
+interface WorkflowStepValue {
+  readonly name?: unknown;
+  readonly if?: unknown;
+  readonly uses?: unknown;
+  readonly run?: unknown;
+  readonly with?: unknown;
+  readonly env?: unknown;
+}
+
+interface WorkflowJobValue {
+  readonly needs?: unknown;
+  readonly if?: unknown;
+  readonly "runs-on"?: unknown;
+  readonly permissions?: unknown;
+  readonly strategy?: unknown;
+  readonly steps?: unknown;
+  readonly env?: unknown;
+}
+
+interface StrictWorkflowValue {
+  readonly jobs: Readonly<Record<string, WorkflowJobValue>>;
+}
+
+function assertSafeYamlNode(node: YamlNode | Pair | null): void {
+  if (!node) return;
+  if (isAlias(node)) throw new Error("YAML aliases are forbidden.");
+  if ("anchor" in node && node.anchor) throw new Error("YAML anchors are forbidden.");
+  if ("tag" in node && node.tag) throw new Error("Explicit YAML tags are forbidden.");
+
+  if (isPair(node)) {
+    if (!isScalar(node.key) || typeof node.key.value !== "string") {
+      throw new Error("YAML mapping keys must be plain strings.");
+    }
+    if (node.key.value === "<<") throw new Error("YAML merge keys are forbidden.");
+    assertSafeYamlNode(node.key);
+    assertSafeYamlNode(node.value as YamlNode | null);
+    return;
+  }
+  if (isMap(node)) {
+    for (const item of node.items) assertSafeYamlNode(item);
+    return;
+  }
+  if (isSeq(node)) {
+    for (const item of node.items) assertSafeYamlNode(item as YamlNode | null);
+  }
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
+  );
+}
+
+function parseStrictWorkflow(source: string): StrictWorkflowValue {
+  const document = parseDocument(source, {
+    schema: "core",
+    strict: true,
+    stringKeys: true,
+    uniqueKeys: true,
+  });
+  if (document.errors.length) {
+    throw new Error(`Invalid workflow YAML: ${document.errors.map(String).join("; ")}`);
+  }
+  if (document.warnings.length) {
+    throw new Error(`Workflow YAML warnings are forbidden: ${document.warnings.map(String).join("; ")}`);
+  }
+  assertSafeYamlNode(document.contents);
+
+  const value: unknown = document.toJS({ maxAliasCount: 0 });
+  if (!isPlainRecord(value) || !isPlainRecord(value.jobs)) {
+    throw new Error("Workflow root and jobs must be mappings.");
+  }
+  for (const [name, job] of Object.entries(value.jobs)) {
+    if (!/^[a-z][a-z0-9-]*$/.test(name) || !isPlainRecord(job)) {
+      throw new Error(`Workflow job ${name} must be a plain mapping.`);
+    }
+  }
+  return value as unknown as StrictWorkflowValue;
+}
+
+const strictWorkflow = parseStrictWorkflow(qualityWorkflow);
+
+const reviewedRunner = "ubuntu-24.04";
+const reviewedActionPins = new Set([
+  "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+  "pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1",
+  "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+  "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+  "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
+  "actions/attest@a1948c3f048ba23858d222213b7c278aabede763",
+]);
+
+function strictJob(name: string): WorkflowJobValue {
+  const job = strictWorkflow.jobs[name];
+  if (!job) throw new Error(`Workflow job ${name} must exist.`);
+  return job;
+}
+
+function strictSteps(job: WorkflowJobValue): readonly WorkflowStepValue[] {
+  if (!Array.isArray(job.steps) || job.steps.some((step) => !isPlainRecord(step))) {
+    throw new Error("Workflow steps must be an array of plain mappings.");
+  }
+  return job.steps as readonly WorkflowStepValue[];
+}
+
+function strictStep(job: WorkflowJobValue, name: string): WorkflowStepValue {
+  const matches = strictSteps(job).filter((step) => step.name === name);
+  if (matches.length !== 1) throw new Error(`Workflow step ${name} must exist exactly once.`);
+  return matches[0]!;
+}
+
+function strictNeeds(job: WorkflowJobValue): readonly string[] {
+  if (typeof job.needs === "string") return [job.needs];
+  if (Array.isArray(job.needs) && job.needs.every((value) => typeof value === "string")) {
+    return job.needs;
+  }
+  throw new Error("Workflow needs must be a string or string array.");
+}
+
+function strictReleaseSurfaces(job: WorkflowJobValue): readonly string[] {
+  if (!isPlainRecord(job.strategy) || !isPlainRecord(job.strategy.matrix)) {
+    throw new Error("Release job must define a matrix mapping.");
+  }
+  const include = job.strategy.matrix.include;
+  if (!Array.isArray(include) || include.some((row) => !isPlainRecord(row))) {
+    throw new Error("Release matrix include must contain mappings.");
+  }
+  return include.map((row) => {
+    if (Object.keys(row).length !== 1 || !["crm", "tasha"].includes(String(row.surface))) {
+      throw new Error("Release matrix rows may contain only literal crm/tasha surfaces.");
+    }
+    return String(row.surface);
+  });
+}
+
+function expectPinnedActions(job: WorkflowJobValue): void {
+  const actions = strictSteps(job)
+    .map((step) => step.uses)
+    .filter((value): value is string => typeof value === "string");
+  expect(actions.length).toBeGreaterThan(0);
+  for (const action of actions) {
+    expect(reviewedActionPins.has(action), `unreviewed action ${action}`).toBe(true);
+  }
+}
+
+function expectExactCheckout(job: WorkflowJobValue): void {
+  const checkout = strictSteps(job).filter(
+    (step) => typeof step.uses === "string" && step.uses.startsWith("actions/checkout@"),
+  );
+  expect(checkout).toHaveLength(1);
+  expect(checkout[0]?.with).toEqual({
+    "persist-credentials": false,
+    ref: "${{ github.sha }}",
+  });
 }
 
 describe("Dual-surface Playwright contract", () => {
@@ -549,7 +718,9 @@ describe("Quality workflow deployment artifacts", () => {
         /\bpsql\b|\bpg_restore\b|\bpg_dump\b|\bcreatedb\b|\bdropdb\b|docker\s+exec|db:migrate/,
       );
       expect(preflightIndex).toBeGreaterThanOrEqual(0);
-      expect(preflightIndex).toBe(job.indexOf("- name:"));
+      expect(job.indexOf("- name: Assert runner architecture")).toBeLessThan(
+        preflightIndex,
+      );
       expect(preflightIndex).toBeLessThan(job.indexOf("- name: Checkout"));
       expect(preflightIndex).toBeLessThan(job.indexOf(`- name: ${firstDatabaseStep}`));
       for (const databaseOperation of [
@@ -809,15 +980,360 @@ describe("Quality workflow deployment artifacts", () => {
   it("publishes one terminal verify result that depends on every quality gate", () => {
     const verifyJob = workflowJob("verify");
 
-    expect(verifyJob).toContain("needs: [checks, build, runtime-smoke]");
+    expect(verifyJob).toContain(
+      "needs: [checks, build, runtime-smoke, image-build, image-evidence, image-manifest, image-runtime-smoke, image-attestation]",
+    );
     expect(verifyJob).toContain("if: always()");
     expect(verifyJob).toContain('CHECKS_RESULT: ${{ needs.checks.result }}');
     expect(verifyJob).toContain('BUILD_RESULT: ${{ needs.build.result }}');
     expect(verifyJob).toContain(
       'RUNTIME_SMOKE_RESULT: ${{ needs.runtime-smoke.result }}',
     );
+    expect(verifyJob).toContain(
+      'IMAGE_BUILD_RESULT: ${{ needs.image-build.result }}',
+    );
+    expect(verifyJob).toContain(
+      'IMAGE_EVIDENCE_RESULT: ${{ needs.image-evidence.result }}',
+    );
+    expect(verifyJob).toContain(
+      'IMAGE_MANIFEST_RESULT: ${{ needs.image-manifest.result }}',
+    );
+    expect(verifyJob).toContain(
+      'IMAGE_RUNTIME_SMOKE_RESULT: ${{ needs.image-runtime-smoke.result }}',
+    );
+    expect(verifyJob).toContain(
+      'IMAGE_ATTESTATION_RESULT: ${{ needs.image-attestation.result }}',
+    );
     expect(verifyJob).toContain('test "$CHECKS_RESULT" = "success"');
     expect(verifyJob).toContain('test "$BUILD_RESULT" = "success"');
     expect(verifyJob).toContain('test "$RUNTIME_SMOKE_RESULT" = "success"');
+    expect(verifyJob).toContain('test "$IMAGE_BUILD_RESULT" = "success"');
+    expect(verifyJob).toContain('test "$IMAGE_EVIDENCE_RESULT" = "success"');
+    expect(verifyJob).toContain('test "$IMAGE_MANIFEST_RESULT" = "success"');
+    expect(verifyJob).toContain(
+      'test "$IMAGE_RUNTIME_SMOKE_RESULT" = "success"',
+    );
+  });
+});
+
+describe("Release image workflow DAG", () => {
+  it("parses the workflow with unique keys and no aliases, anchors, merges, or tags", () => {
+    expect(Object.keys(strictWorkflow.jobs)).toEqual([
+      "checks",
+      "build",
+      "runtime-smoke",
+      "image-build",
+      "image-evidence",
+      "image-manifest",
+      "image-runtime-smoke",
+      "image-attestation",
+      "verify",
+    ]);
+  });
+
+  it("pins every job to the reviewed x64 runner contract", () => {
+    for (const [name, job] of Object.entries(strictWorkflow.jobs)) {
+      expect(job["runs-on"], `${name} must pin the reviewed runner`).toBe(reviewedRunner);
+      expect(strictSteps(job)[0]).toMatchObject({
+        name: "Assert runner architecture",
+        run: 'test "$RUNNER_ARCH" = "X64"',
+      });
+    }
+  });
+
+  it("allows only the exact reviewed action repositories and commits globally", () => {
+    const actions = Object.values(strictWorkflow.jobs).flatMap((job) =>
+      strictSteps(job)
+        .map((step) => step.uses)
+        .filter((value): value is string => typeof value === "string"),
+    );
+    expect([...new Set(actions)].sort()).toEqual([...reviewedActionPins].sort());
+    for (const action of actions) {
+      expect(reviewedActionPins.has(action), `unreviewed action ${action}`).toBe(true);
+    }
+  });
+
+  it("pins the patched Node 22 runtime in every workflow job that installs Node", () => {
+    const setupSteps = Object.values(strictWorkflow.jobs).flatMap((job) =>
+      strictSteps(job).filter(
+        (step) =>
+          typeof step.uses === "string" && step.uses.startsWith("actions/setup-node@"),
+      ),
+    );
+    expect(setupSteps).toHaveLength(7);
+    for (const step of setupSteps) {
+      if (!isPlainRecord(step.with)) throw new Error("setup-node must define with.");
+      expect(step.with["node-version"]).toBe("22.23.1");
+    }
+  });
+
+  it.each([
+    ["duplicate key", "jobs:\n  checks: {}\n  checks: {}\n"],
+    ["alias", "jobs:\n  checks: &shared {}\n  build: *shared\n"],
+    ["merge", "jobs:\n  checks: &shared {}\n  build:\n    <<: *shared\n"],
+    ["custom tag", "jobs:\n  checks: !unsafe {}\n"],
+  ])("rejects a %s mutation before evaluating workflow contracts", (_label, source) => {
+    expect(() => parseStrictWorkflow(source)).toThrow();
+  });
+
+  it("builds exact CRM and Tasha OCI outputs from the triggering SHA", () => {
+    const job = strictJob("image-build");
+    expect(strictNeeds(job)).toEqual(["checks"]);
+    expect(strictReleaseSurfaces(job)).toEqual(["crm", "tasha"]);
+    expectPinnedActions(job);
+    expectExactCheckout(job);
+
+    const build = strictStep(job, "Build and export exact release image");
+    expect(build.run).toMatch(/docker\s+buildx\s+build/);
+    expect(build.run).toContain('--target "release-${{ matrix.surface }}"');
+    expect(build.run).toContain('--build-arg "SOURCE_REVISION=${{ github.sha }}"');
+    expect(build.run).toContain('--build-arg "APP_VERSION=${{ github.sha }}"');
+    expect(build.run).toContain(
+      '--secret "id=release_image_canary,env=RELEASE_IMAGE_CANARY"',
+    );
+    expect(build.run).toContain("type=oci");
+    expect(build.run).not.toMatch(/(?:latest|:main|:master|\$\{\{\s*github\.ref)/);
+
+    const upload = strictStep(job, "Upload exact release image");
+    expect(upload.uses).toMatch(/^actions\/upload-artifact@[a-f0-9]{40}$/);
+    expect(upload.with).toMatchObject({
+      name: "release-image-${{ matrix.surface }}-${{ github.sha }}",
+      "if-no-files-found": "error",
+      "retention-days": 1,
+      overwrite: false,
+    });
+  });
+
+  it("verifies checksum-locked release tool bytes before extracting or executing them", () => {
+    const buildJob = strictJob("image-build");
+    const evidenceJob = strictJob("image-evidence");
+    const runtimeJob = strictJob("image-runtime-smoke");
+
+    for (const [job, stepName, tool] of [
+      [buildJob, "Install checksum-locked Buildx", "buildx"],
+      [evidenceJob, "Install checksum-locked Syft", "syft"],
+      [evidenceJob, "Install checksum-locked Trivy", "trivy"],
+      [runtimeJob, "Install checksum-locked OCI-capable Docker", "docker"],
+    ] as const) {
+      const install = strictStep(job, stepName);
+      const source = String(install.run ?? "");
+      expect(source).toContain("security/release-tool-lock.json");
+      expect(source).toContain("scripts/ci/assert-release-tool.mjs");
+      expect(source).toContain(`--tool ${tool}`);
+      expect(source).toContain("curl --fail --silent --show-error --location");
+      expect(source).toContain("--proto '=https'");
+      expect(source.indexOf("assert-release-tool.mjs")).toBeLessThan(
+        Math.max(source.indexOf("tar -x"), source.indexOf("chmod")),
+      );
+    }
+
+    const allUses = [buildJob, evidenceJob, runtimeJob]
+      .flatMap((job) => strictSteps(job))
+      .map((step) => String(step.uses ?? ""));
+    expect(allUses).not.toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^docker\/setup-buildx-action@/),
+        expect.stringMatching(/^anchore\/sbom-action\/download-syft@/),
+        expect.stringMatching(/^aquasecurity\/setup-trivy@/),
+        expect.stringMatching(/^docker\/setup-docker-action@/),
+      ]),
+    );
+  });
+
+  it("generates both SBOMs and a fail-closed scan from the downloaded image", () => {
+    const job = strictJob("image-evidence");
+    expect(strictNeeds(job)).toEqual(["image-build"]);
+    expect(strictReleaseSurfaces(job)).toEqual(["crm", "tasha"]);
+    expectPinnedActions(job);
+    expectExactCheckout(job);
+
+    const download = strictStep(job, "Download exact release image");
+    expect(download.with).toMatchObject({
+      name: "release-image-${{ matrix.surface }}-${{ github.sha }}",
+    });
+    const canary = strictStep(job, "Prove exact Trivy secret scanner");
+    expect(canary.run).toContain("--scanners secret");
+    expect(canary.run).toContain("--secret-config");
+    expect(canary.run).toContain("release-secret-scanner-canary");
+    expect(canary.run).toContain("Secrets");
+    expect(canary.run).toContain("trap 'rm -rf");
+    expect(canary.run).not.toMatch(/[a-f0-9]{64}/);
+
+    const scan = strictStep(job, "Scan exact image for vulnerabilities and secrets");
+    expect(scan.run).toContain("--scanners secret");
+    expect(scan.run).toContain("--image-config-scanners secret");
+    const versionCaptureIndex = String(scan.run).indexOf(
+      '> "$release_dir/trivy-version.json"',
+    );
+    const evaluationCaptureIndex = String(scan.run).indexOf("EVALUATION_TIME=");
+    const assertionIndex = String(scan.run).indexOf("scripts/ci/assert-release-scan.mjs");
+    expect(versionCaptureIndex).toBeGreaterThanOrEqual(0);
+    expect(evaluationCaptureIndex).toBeGreaterThan(versionCaptureIndex);
+    expect(assertionIndex).toBeGreaterThan(evaluationCaptureIndex);
+
+    const source = strictSteps(job).map((step) => String(step.run ?? "")).join("\n");
+    expect(source).toContain("sbom.cdx.json");
+    expect(source).toContain("sbom.spdx.json");
+    expect(source).toContain("scan-report.json");
+    expect(source).toContain("--scanners vuln");
+    expect(source).toContain("--scanners secret");
+    expect(source).toContain("--trivy-secret-report");
+    expect(source).toContain('--sbom-binding "$release_dir/sbom-binding.json"');
+    expect(source).not.toContain("--scanners vuln,secret");
+    expect(source).toContain('--evaluation-time "$EVALUATION_TIME"');
+    expect(source).toContain(
+      "--db-repository ghcr.io/aquasecurity/trivy-db:2",
+    );
+    expect(source).not.toMatch(/docker\s+(?:build|buildx)|build-push-action/);
+
+    const upload = strictStep(job, "Upload release evidence");
+    expect(upload.with).toMatchObject({
+      name: "release-evidence-${{ matrix.surface }}-${{ github.sha }}",
+      "if-no-files-found": "error",
+      "retention-days": 1,
+      overwrite: false,
+    });
+    expect(upload.with).toHaveProperty(
+      "path",
+      expect.stringMatching(
+        /sbom\.cdx\.json[\s\S]*sbom\.spdx\.json[\s\S]*sbom-binding\.json[\s\S]*trivy-raw\.json[\s\S]*trivy-secret-raw\.json[\s\S]*trivy-version\.json[\s\S]*scan-report\.json/,
+      ),
+    );
+  });
+
+  it("writes the manifest only after downloading the exact image, ledger and evidence", () => {
+    const job = strictJob("image-manifest");
+    expect(strictNeeds(job)).toEqual(["checks", "image-build", "image-evidence"]);
+    expect(strictReleaseSurfaces(job)).toEqual(["crm", "tasha"]);
+    expectPinnedActions(job);
+    expectExactCheckout(job);
+
+    expect(strictStep(job, "Download exact release image").with).toMatchObject({
+      name: "release-image-${{ matrix.surface }}-${{ github.sha }}",
+    });
+    expect(strictStep(job, "Download release evidence").with).toMatchObject({
+      name: "release-evidence-${{ matrix.surface }}-${{ github.sha }}",
+    });
+    expect(strictStep(job, "Download exact migration ledger").with).toMatchObject({
+      name: "migrated-db-${{ github.sha }}",
+    });
+    const write = strictStep(job, "Write bound release manifest");
+    expect(write.run).toContain("scripts/ci/write-release-manifest.mjs");
+    expect(write.run).toContain('--source-sha "${{ github.sha }}"');
+    expect(write.run).toContain('--surface "${{ matrix.surface }}"');
+    expect(String(write.run)).not.toMatch(/docker\s+(?:build|buildx)|build-push-action/);
+
+    const upload = strictStep(job, "Upload bound release manifest");
+    expect(upload.with).toMatchObject({
+      name: "release-manifest-${{ matrix.surface }}-${{ github.sha }}",
+      "if-no-files-found": "error",
+      "retention-days": 1,
+      overwrite: false,
+    });
+  });
+
+  it("smokes only the exact downloaded image and its bound evidence", () => {
+    const job = strictJob("image-runtime-smoke");
+    expect(strictNeeds(job)).toEqual([
+      "checks",
+      "image-build",
+      "image-evidence",
+      "image-manifest",
+    ]);
+    expect(strictReleaseSurfaces(job)).toEqual(["crm", "tasha"]);
+    expectPinnedActions(job);
+    expectExactCheckout(job);
+
+    const setupDocker = strictStep(job, "Install checksum-locked OCI-capable Docker");
+    expect(setupDocker.run).toContain('"containerd-snapshotter": true');
+    expect(setupDocker.run).toContain("dockerd");
+    expect(strictStep(job, "Verify OCI image store").run).toMatch(
+      /io\.containerd\.snapshotter\.v1/,
+    );
+    expect(strictStep(job, "Stop exact OCI-capable Docker").if).toBe("always()");
+
+    const install = strictStep(job, "Install probe dependencies");
+    expect(install.run).toBe("pnpm install --frozen-lockfile");
+    expect(install.run).not.toContain("--prod");
+
+    for (const [stepName, artifactName] of [
+      ["Download exact release image", "release-image"],
+      ["Download release evidence", "release-evidence"],
+      ["Download bound release manifest", "release-manifest"],
+      ["Download exact migration ledger", "migrated-db"],
+    ] as const) {
+      const step = strictStep(job, stepName);
+      const suffix = artifactName === "migrated-db" ? "" : "-${{ matrix.surface }}";
+      expect(step.with).toMatchObject({
+        name: `${artifactName}${suffix}-\${{ github.sha }}`,
+      });
+    }
+    const source = strictSteps(job).map((step) => String(step.run ?? "")).join("\n");
+    expect(source).toContain("scripts/ci/run-release-image-smoke.mjs");
+    expect(source).not.toMatch(
+      /docker\s+(?:build|buildx)|build-push-action|docker\s+pull|(?:latest|:main|:master)/,
+    );
+  });
+
+  it("attests the tested release bundle only on trusted main pushes", () => {
+    const job = strictJob("image-attestation");
+    expect(job.if).toBe(
+      "github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'AqmalJupri/crmsalessalamland'",
+    );
+    expect(job.permissions).toEqual({
+      contents: "read",
+      "id-token": "write",
+      attestations: "write",
+    });
+    expect(strictNeeds(job)).toEqual([
+      "image-build",
+      "image-evidence",
+      "image-manifest",
+      "image-runtime-smoke",
+    ]);
+    expect(strictReleaseSurfaces(job)).toEqual(["crm", "tasha"]);
+    expectPinnedActions(job);
+
+    const attest = strictStep(job, "Attest exact release bundle");
+    expect(attest.uses).toBe(
+      "actions/attest@a1948c3f048ba23858d222213b7c278aabede763",
+    );
+    expect(attest.with).toHaveProperty(
+      "subject-path",
+      expect.stringMatching(
+        /image\.oci\.tar[\s\S]*release-manifest\.json[\s\S]*sbom\.cdx\.json[\s\S]*sbom\.spdx\.json[\s\S]*sbom-binding\.json[\s\S]*scan-report\.json/,
+      ),
+    );
+  });
+
+  it("keeps both legacy gates and every release-image gate in terminal verification", () => {
+    const verify = strictJob("verify");
+    expect(strictNeeds(verify)).toEqual([
+      "checks",
+      "build",
+      "runtime-smoke",
+      "image-build",
+      "image-evidence",
+      "image-manifest",
+      "image-runtime-smoke",
+      "image-attestation",
+    ]);
+    const step = strictStep(verify, "Enforce successful quality gates");
+    expect(step.env).toMatchObject({
+      IMAGE_BUILD_RESULT: "${{ needs.image-build.result }}",
+      IMAGE_EVIDENCE_RESULT: "${{ needs.image-evidence.result }}",
+      IMAGE_MANIFEST_RESULT: "${{ needs.image-manifest.result }}",
+      IMAGE_RUNTIME_SMOKE_RESULT: "${{ needs.image-runtime-smoke.result }}",
+      IMAGE_ATTESTATION_RESULT: "${{ needs.image-attestation.result }}",
+      EVENT_NAME: "${{ github.event_name }}",
+      REF: "${{ github.ref }}",
+      REPOSITORY: "${{ github.repository }}",
+    });
+    expect(step.run).toMatch(/test "\$IMAGE_BUILD_RESULT" = "success"/);
+    expect(step.run).toMatch(/test "\$IMAGE_EVIDENCE_RESULT" = "success"/);
+    expect(step.run).toMatch(/test "\$IMAGE_MANIFEST_RESULT" = "success"/);
+    expect(step.run).toMatch(/test "\$IMAGE_RUNTIME_SMOKE_RESULT" = "success"/);
+    expect(step.run).toContain('test "$IMAGE_ATTESTATION_RESULT" = "success"');
+    expect(step.run).toContain('test "$IMAGE_ATTESTATION_RESULT" = "skipped"');
   });
 });

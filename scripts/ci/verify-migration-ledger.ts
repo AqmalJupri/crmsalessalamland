@@ -1,3 +1,4 @@
+import { open } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import postgres from "postgres";
 import {
@@ -11,6 +12,38 @@ export function assertCiMigrationLedgerCurrent(
 ): number {
   assertMigrationLedgerCurrent(rows);
   return EXPECTED_MIGRATIONS.length;
+}
+
+export async function writeMigrationLedgerEvidence(
+  rows: readonly MigrationLedgerRow[],
+  outputPath: string,
+): Promise<void> {
+  assertCiMigrationLedgerCurrent(rows);
+  const entries = rows.map(({ filename, checksum }) => ({ filename, checksum }));
+  const source = `${JSON.stringify({ schemaVersion: 1, entries }, null, 2)}\n`;
+  let output;
+  try {
+    output = await open(outputPath, "wx", 0o600);
+    await output.writeFile(source, "utf8");
+    await output.sync();
+  } catch (error: unknown) {
+    const code =
+      error instanceof Error && "code" in error ? error.code : undefined;
+    if (code === "EEXIST") {
+      throw new Error("Migration ledger evidence already exists.");
+    }
+    throw error;
+  } finally {
+    await output?.close();
+  }
+}
+
+function evidenceOutputArgument(argv: readonly string[]): string | undefined {
+  if (argv.length === 0) return undefined;
+  if (argv.length !== 2 || argv[0] !== "--output" || !argv[1]) {
+    throw new Error("Usage: verify-migration-ledger.ts [--output <path>]");
+  }
+  return argv[1];
 }
 
 async function verifyMigrationLedger(): Promise<void> {
@@ -31,6 +64,8 @@ async function verifyMigrationLedger(): Promise<void> {
       order by filename
     `;
     const migrationCount = assertCiMigrationLedgerCurrent(rows);
+    const outputPath = evidenceOutputArgument(process.argv.slice(2));
+    if (outputPath) await writeMigrationLedgerEvidence(rows, outputPath);
     process.stdout.write(
       `Verified exact frozen migration ledger (${migrationCount} rows).\n`,
     );

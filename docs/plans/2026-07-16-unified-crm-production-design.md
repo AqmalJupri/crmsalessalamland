@@ -233,7 +233,7 @@ flowchart TB
 ```
 
 - CI produces an identifiable immutable image/SBOM from a reviewed commit and promotes the same artifact through staging to production.
-- Runtime acceptance pins Node.js `22.22.0`/`<23` and an immutable base-image digest, runs as a non-root UID/GID with dropped capabilities and bounded resources, and proves health checks before traffic.
+- Runtime acceptance pins exact hosted/build Node.js `22.23.1` within the package contract `<23`, proves the immutable Distroless runtime index/platform/config/layer ancestry, runs as numeric non-root UID/GID `65532:65532` with dropped capabilities and bounded resources, and proves health checks before traffic.
 - App/API, dispatcher, worker, scheduler, migration, reporting, backup, monitoring, support, and break-glass use distinct least-privilege database/OS identities as applicable.
 - RLS is mandatory defence-in-depth for production tenant-owned tables, subject to D-19 approval of role design, transaction-local tenant context, pool reset, bypass/break-glass controls, `FORCE ROW LEVEL SECURITY` applicability, and read/write/join/export/prepared-statement policy tests. Application authorization remains mandatory.
 - PostgreSQL, queue, object storage, and administrative endpoints are private; Tailscale or equivalent controls administration.

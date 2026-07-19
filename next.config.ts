@@ -23,6 +23,7 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   env: {
     CRM_BUILD_SURFACE: process.env.PRODUCT_SURFACE ?? "",
   },

@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the current modular monolith and transactional PostgreSQL boundary. Build independently reviewable vertical slices around server-authoritative commands, durable import/integration evidence, explicit tenant and business-unit scope, and two deployment-configured UI surfaces. Production promotion remains gated by source reconciliation, security, recovery, performance, accessibility, and named business approval.
 
-**Tech Stack:** Node.js 22.22.0, pnpm 11.9.0, Next.js 16.2.10, React 19.2.7, TypeScript 6.0.3, PostgreSQL 16.14, Drizzle ORM 0.45.2, Zod 4.4.3, Vitest 4.1.10, Playwright 1.61.1, GitHub Actions, and a dedicated isolated Hostinger production stack.
+**Tech Stack:** exact hosted/build Node.js 22.23.1 (package compatibility `>=22.22.0 <23`), digest-locked Distroless Node 22 Debian 13 runtime, pnpm 11.9.0, Next.js 16.2.10, React 19.2.7, TypeScript 6.0.3, PostgreSQL 16.14, Drizzle ORM 0.45.2, Zod 4.4.3, Vitest 4.1.10, Playwright 1.61.1, GitHub Actions, and a dedicated isolated Hostinger production stack.
 
 ## Global Constraints
 

@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     services:
       postgres:
@@ -54,6 +54,9 @@ jobs:
       OIDC_REDIRECT_URI: https://crm-ci.example.test/api/v1/auth/oidc/callback
       VISUAL_CAPTURE_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.capture_visual_baselines }}
     steps:
+      - name: Assert runner architecture
+        run: test "$RUNNER_ARCH" = "X64"
+
       - name: Preflight exact migration database targets
         run: |
           node -e "
@@ -89,7 +92,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22.22.0
+          node-version: 22.23.1
           cache: pnpm
 
       - name: Install dependencies
@@ -121,7 +124,10 @@ jobs:
         run: pnpm db:migrate
 
       - name: Verify exact migration ledger before replay
-        run: pnpm exec tsx scripts/ci/verify-migration-ledger.ts
+        run: |
+          mkdir -p "$RUNNER_TEMP/migrated-db"
+          pnpm exec tsx scripts/ci/verify-migration-ledger.ts \
+            --output "$RUNNER_TEMP/migrated-db/migration-ledger.json"
 
       - name: Capture migration ledger before replay
         run: |
@@ -219,7 +225,7 @@ jobs:
 
   build:
     needs: checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -238,6 +244,9 @@ jobs:
       PRODUCT_SURFACE: ${{ matrix.surface }}
       APP_VERSION: ${{ github.sha }}
     steps:
+      - name: Assert runner architecture
+        run: test "$RUNNER_ARCH" = "X64"
+
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -252,7 +261,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22.22.0
+          node-version: 22.23.1
           cache: pnpm
 
       - name: Install dependencies
@@ -280,7 +289,7 @@ jobs:
 
   runtime-smoke:
     needs: [checks, build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -324,6 +333,9 @@ jobs:
       OIDC_REDIRECT_URI: ${{ matrix.app_url }}/api/v1/auth/oidc/callback
       CRM_DEMO_MODE: "false"
     steps:
+      - name: Assert runner architecture
+        run: test "$RUNNER_ARCH" = "X64"
+
       - name: Preflight exact migration database targets
         run: |
           node -e "
@@ -359,7 +371,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22.22.0
+          node-version: 22.23.1
           cache: pnpm
 
       - name: Install probe dependencies
@@ -435,18 +447,576 @@ jobs:
           cd "$RUNNER_TEMP/runtime-${{ matrix.surface }}"
           node "$GITHUB_WORKSPACE/scripts/ci/run-next-runtime-smoke.mjs"
 
+  image-build:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - surface: crm
+          - surface: tasha
+    steps:
+      - name: Assert runner architecture
+        run: test "$RUNNER_ARCH" = "X64"
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.1
+
+      - name: Install checksum-locked Buildx
+        run: |
+          set -euo pipefail
+          lock=security/release-tool-lock.json
+          plugin_dir="$HOME/.docker/cli-plugins"
+          artifact="$plugin_dir/docker-buildx"
+          mkdir -p "$plugin_dir"
+          source_url="$(node -e "const lock=require('./$lock'); process.stdout.write(lock.tools.buildx.sourceUrl)")"
+          curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 5 \
+            --output "$artifact" "$source_url"
+          node scripts/ci/assert-release-tool.mjs \
+            --lock "$lock" --tool buildx --artifact "$artifact"
+          chmod 0755 "$artifact"
+          builder="release-builder-${{ matrix.surface }}"
+          docker buildx create \
+            --name "$builder" \
+            --driver docker-container \
+            --driver-opt image=moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec \
+            --use
+          docker buildx inspect --bootstrap "$builder"
+          echo "BUILDX_BUILDER=$builder" >> "$GITHUB_ENV"
+
+      - name: Build and export exact release image
+        env:
+          RELEASE_IMAGE_CANARY: release-image-canary-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          release_dir="$RUNNER_TEMP/release-${{ matrix.surface }}"
+          mkdir -p "$release_dir"
+          docker buildx build \
+            --platform linux/amd64 \
+            --target "release-${{ matrix.surface }}" \
+            --build-arg "APP_VERSION=${{ github.sha }}" \
+            --build-arg "SOURCE_REVISION=${{ github.sha }}" \
+            --build-arg "OCI_SOURCE=https://github.com/${{ github.repository }}" \
+            --secret "id=release_image_canary,env=RELEASE_IMAGE_CANARY" \
+            --provenance=false \
+            --sbom=false \
+            --output "type=oci,dest=$release_dir/image.oci.tar,oci-mediatypes=true" \
+            .
+          node scripts/ci/assert-release-image.mjs \
+            --archive "$release_dir/image.oci.tar" \
+            --surface "${{ matrix.surface }}" \
+            --source-sha "${{ github.sha }}" \
+            --canary "$RELEASE_IMAGE_CANARY" \
+            --output "$release_dir/image-metadata.json"
+
+      - name: Upload exact release image
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-image-${{ matrix.surface }}-${{ github.sha }}
+          path: ${{ runner.temp }}/release-${{ matrix.surface }}
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          overwrite: false
+
+      - name: Remove exact Buildx builder
+        if: always()
+        run: |
+          set +e
+          docker buildx inspect "$BUILDX_BUILDER"
+          docker buildx rm --force "$BUILDX_BUILDER"
+
+  image-evidence:
+    needs: [image-build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - surface: crm
+          - surface: tasha
+    steps:
+      - name: Assert runner architecture
+        run: test "$RUNNER_ARCH" = "X64"
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.1
+
+      - name: Download exact release image
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-image-${{ matrix.surface }}-${{ github.sha }}
+          path: ${{ runner.temp }}/release-${{ matrix.surface }}
+
+      - name: Install checksum-locked Syft
+        run: |
+          set -euo pipefail
+          lock=security/release-tool-lock.json
+          tools_dir="$RUNNER_TEMP/release-tools"
+          artifact="$RUNNER_TEMP/syft.tar.gz"
+          mkdir -p "$tools_dir"
+          source_url="$(node -e "const lock=require('./$lock'); process.stdout.write(lock.tools.syft.sourceUrl)")"
+          curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 5 \
+            --output "$artifact" "$source_url"
+          node scripts/ci/assert-release-tool.mjs \
+            --lock "$lock" --tool syft --artifact "$artifact"
+          tar -xzf "$artifact" \
+            --directory "$tools_dir" \
+            --no-same-owner --no-same-permissions \
+            syft
+          chmod 0755 "$tools_dir/syft"
+          echo "$tools_dir" >> "$GITHUB_PATH"
+
+      - name: Generate CycloneDX and SPDX SBOMs
+        env:
+          SYFT_CHECK_FOR_APP_UPDATE: "false"
+        run: |
+          set -euo pipefail
+          release_dir="$RUNNER_TEMP/release-${{ matrix.surface }}"
+          syft scan \
+            "oci-archive:$release_dir/image.oci.tar" \
+            --platform linux/amd64 \
+            --source-name "${{ matrix.surface }}" \
+            --source-version "${{ github.sha }}" \
+            --quiet \
+            --output "cyclonedx-json@1.6=$release_dir/sbom.cdx.json" \
+            --output "spdx-json@2.3=$release_dir/sbom.spdx.json"
+
+      - name: Install checksum-locked Trivy
+        run: |
+          set -euo pipefail
+          lock=security/release-tool-lock.json
+          tools_dir="$RUNNER_TEMP/release-tools"
+          artifact="$RUNNER_TEMP/trivy.tar.gz"
+          mkdir -p "$tools_dir"
+          source_url="$(node -e "const lock=require('./$lock'); process.stdout.write(lock.tools.trivy.sourceUrl)")"
+          curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 5 \
+            --output "$artifact" "$source_url"
+          node scripts/ci/assert-release-tool.mjs \
+            --lock "$lock" --tool trivy --artifact "$artifact"
+          tar -xzf "$artifact" \
+            --directory "$tools_dir" \
+            --no-same-owner --no-same-permissions \
+            trivy
+          chmod 0755 "$tools_dir/trivy"
+          echo "$tools_dir" >> "$GITHUB_PATH"
+
+      - name: Prove exact Trivy secret scanner
+        run: |
+          set -euo pipefail
+          canary_dir="$(mktemp -d "$RUNNER_TEMP/trivy-secret-canary.XXXXXX")"
+          trap 'rm -rf "$canary_dir"' EXIT
+          umask 077
+          mkdir "$canary_dir/input"
+          canary_value="$(openssl rand -hex 32)"
+          printf 'secret="%s"\n' "$canary_value" > "$canary_dir/input/canary.sh"
+          cat > "$canary_dir/config.yaml" <<'YAML'
+          rules:
+            - id: release-secret-scanner-canary
+              category: test
+              title: Release secret scanner canary
+              severity: HIGH
+              path: .*\.sh
+              keywords:
+                - secret
+              regex: (?i)(?P<key>secret)(=|:).{0,5}['"](?P<secret>[0-9a-f]{64})['"]
+              secret-group-name: secret
+          YAML
+          trivy --cache-dir "$RUNNER_TEMP/trivy-cache" fs \
+            --scanners secret \
+            --secret-config "$canary_dir/config.yaml" \
+            --format json \
+            --output "$canary_dir/report.json" \
+            --exit-code 0 \
+            "$canary_dir/input"
+          node - "$canary_dir/report.json" <<'NODE'
+          const { readFileSync } = require("node:fs");
+          const report = JSON.parse(readFileSync(process.argv[2], "utf8"));
+          const findings = (report.Results ?? []).flatMap((result) => result.Secrets ?? []);
+          if (
+            findings.length !== 1 ||
+            findings[0]?.RuleID !== "release-secret-scanner-canary"
+          ) {
+            process.exit(1);
+          }
+          NODE
+
+      - name: Scan exact image for vulnerabilities and secrets
+        run: |
+          set -euo pipefail
+          release_dir="$RUNNER_TEMP/release-${{ matrix.surface }}"
+          trivy --cache-dir "$RUNNER_TEMP/trivy-cache" image \
+            --input "$release_dir/image.oci.tar" \
+            --db-repository ghcr.io/aquasecurity/trivy-db:2 \
+            --scanners vuln \
+            --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+            --format json \
+            --output "$release_dir/trivy-raw.json" \
+            --exit-code 0 \
+            --timeout 10m
+          trivy --cache-dir "$RUNNER_TEMP/trivy-cache" image \
+            --input "$release_dir/image.oci.tar" \
+            --scanners secret \
+            --image-config-scanners secret \
+            --format json \
+            --output "$release_dir/trivy-secret-raw.json" \
+            --exit-code 0 \
+            --timeout 10m
+          trivy --cache-dir "$RUNNER_TEMP/trivy-cache" version --format json \
+            > "$release_dir/trivy-version.json"
+          EVALUATION_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          node scripts/ci/assert-release-scan.mjs \
+            --trivy-report "$release_dir/trivy-raw.json" \
+            --trivy-secret-report "$release_dir/trivy-secret-raw.json" \
+            --trivy-version "$release_dir/trivy-version.json" \
+            --trivy-database "$RUNNER_TEMP/trivy-cache/db/trivy.db" \
+            --policy security/container-vulnerability-allowlist.json \
+            --image-metadata "$release_dir/image-metadata.json" \
+            --cyclonedx "$release_dir/sbom.cdx.json" \
+            --spdx "$release_dir/sbom.spdx.json" \
+            --sbom-binding "$release_dir/sbom-binding.json" \
+            --surface "${{ matrix.surface }}" \
+            --source-sha "${{ github.sha }}" \
+            --evaluation-time "$EVALUATION_TIME" \
+            --output "$release_dir/scan-report.json"
+          cp security/container-vulnerability-allowlist.json "$release_dir/policy.json"
+
+      - name: Upload release evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-evidence-${{ matrix.surface }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/release-${{ matrix.surface }}/sbom.cdx.json
+            ${{ runner.temp }}/release-${{ matrix.surface }}/sbom.spdx.json
+            ${{ runner.temp }}/release-${{ matrix.surface }}/sbom-binding.json
+            ${{ runner.temp }}/release-${{ matrix.surface }}/trivy-raw.json
+            ${{ runner.temp }}/release-${{ matrix.surface }}/trivy-secret-raw.json
+            ${{ runner.temp }}/release-${{ matrix.surface }}/trivy-version.json
+            ${{ runner.temp }}/release-${{ matrix.surface }}/scan-report.json
+            ${{ runner.temp }}/release-${{ matrix.surface }}/policy.json
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 6
+          overwrite: false
+
+  image-manifest:
+    needs: [checks, image-build, image-evidence]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - surface: crm
+          - surface: tasha
+    steps:
+      - name: Assert runner architecture
+        run: test "$RUNNER_ARCH" = "X64"
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.1
+
+      - name: Download exact release image
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-image-${{ matrix.surface }}-${{ github.sha }}
+          path: ${{ runner.temp }}/release-${{ matrix.surface }}
+
+      - name: Download release evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-evidence-${{ matrix.surface }}-${{ github.sha }}
+          path: ${{ runner.temp }}/release-${{ matrix.surface }}
+
+      - name: Download exact migration ledger
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: migrated-db-${{ github.sha }}
+          path: ${{ runner.temp }}/release-${{ matrix.surface }}
+
+      - name: Write bound release manifest
+        run: |
+          node scripts/ci/write-release-manifest.mjs \
+            --evidence-dir "$RUNNER_TEMP/release-${{ matrix.surface }}" \
+            --surface "${{ matrix.surface }}" \
+            --source-sha "${{ github.sha }}" \
+            --output "$RUNNER_TEMP/release-${{ matrix.surface }}/release-manifest.json"
+
+      - name: Upload bound release manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-manifest-${{ matrix.surface }}-${{ github.sha }}
+          path: ${{ runner.temp }}/release-${{ matrix.surface }}/release-manifest.json
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 6
+          overwrite: false
+
+  image-runtime-smoke:
+    needs: [checks, image-build, image-evidence, image-manifest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - surface: crm
+          - surface: tasha
+    steps:
+      - name: Assert runner architecture
+        run: test "$RUNNER_ARCH" = "X64"
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 11.9.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.1
+          cache: pnpm
+
+      - name: Install checksum-locked OCI-capable Docker
+        run: |
+          set -euo pipefail
+          lock=security/release-tool-lock.json
+          docker_root="$RUNNER_TEMP/exact-docker"
+          docker_bin="$docker_root/bin"
+          artifact="$docker_root/docker-29.6.2.tgz"
+          mkdir -p "$docker_bin" "$docker_root/data" "$docker_root/exec"
+          source_url="$(node -e "const lock=require('./$lock'); process.stdout.write(lock.tools.docker.sourceUrl)")"
+          curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 5 \
+            --output "$artifact" "$source_url"
+          node scripts/ci/assert-release-tool.mjs \
+            --lock "$lock" --tool docker --artifact "$artifact"
+          tar -xzf "$artifact" \
+            --directory "$docker_bin" \
+            --strip-components=1 \
+            --no-same-owner --no-same-permissions \
+            docker/containerd \
+            docker/containerd-shim-runc-v2 \
+            docker/ctr \
+            docker/docker \
+            docker/docker-init \
+            docker/docker-proxy \
+            docker/dockerd \
+            docker/runc
+          chmod 0755 "$docker_bin"/*
+          cat > "$docker_root/daemon.json" <<'JSON'
+          {
+            "features": {
+              "containerd-snapshotter": true
+            }
+          }
+          JSON
+          docker_host="unix://$docker_root/docker.sock"
+          pid_file="$docker_root/dockerd.pid"
+          log_file="$docker_root/dockerd.log"
+          sudo env PATH="$docker_bin:/usr/bin:/bin" \
+            "$docker_bin/dockerd" \
+              --config-file "$docker_root/daemon.json" \
+              --host "$docker_host" \
+              --data-root "$docker_root/data" \
+              --exec-root "$docker_root/exec" \
+              --pidfile "$pid_file" \
+              --bridge none \
+              > "$log_file" 2>&1 &
+          echo "$!" > "$docker_root/sudo.pid"
+          echo "$docker_bin" >> "$GITHUB_PATH"
+          echo "DOCKER_HOST=$docker_host" >> "$GITHUB_ENV"
+          echo "EXACT_DOCKER_ROOT=$docker_root" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 60); do
+            if DOCKER_HOST="$docker_host" "$docker_bin/docker" info >/dev/null 2>&1; then
+              exit 0
+            fi
+            if ! kill -0 "$(cat "$docker_root/sudo.pid")" 2>/dev/null; then
+              cat "$log_file"
+              exit 1
+            fi
+            sleep 1
+          done
+          cat "$log_file"
+          exit 1
+
+      - name: Verify OCI image store
+        run: |
+          docker info --format '{{json .DriverStatus}}' \
+            | grep --fixed-strings 'io.containerd.snapshotter.v1'
+
+      - name: Install probe dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download exact release image
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-image-${{ matrix.surface }}-${{ github.sha }}
+          path: ${{ runner.temp }}/release-${{ matrix.surface }}
+
+      - name: Download release evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-evidence-${{ matrix.surface }}-${{ github.sha }}
+          path: ${{ runner.temp }}/release-${{ matrix.surface }}
+
+      - name: Download bound release manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-manifest-${{ matrix.surface }}-${{ github.sha }}
+          path: ${{ runner.temp }}/release-${{ matrix.surface }}
+
+      - name: Download exact migration ledger
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: migrated-db-${{ github.sha }}
+          path: ${{ runner.temp }}/release-${{ matrix.surface }}
+
+      - name: Smoke restricted exact release image
+        env:
+          AUTH_HASH_KEY: image-smoke-auth-hash-key-at-least-32-characters
+          OIDC_CLIENT_SECRET: image-smoke-oidc-secret-at-least-16-characters
+        run: |
+          node scripts/ci/run-release-image-smoke.mjs \
+            --evidence-dir "$RUNNER_TEMP/release-${{ matrix.surface }}" \
+            --surface "${{ matrix.surface }}" \
+            --source-sha "${{ github.sha }}" \
+            --database-dump "$RUNNER_TEMP/release-${{ matrix.surface }}/crm_salam_codex_migration_platform.dump"
+
+      - name: Stop exact OCI-capable Docker
+        if: always()
+        run: |
+          set +e
+          docker info
+          sudo tail -n 200 "$EXACT_DOCKER_ROOT/dockerd.log"
+          if test -s "$EXACT_DOCKER_ROOT/dockerd.pid"; then
+            daemon_pid="$(cat "$EXACT_DOCKER_ROOT/dockerd.pid")"
+            sudo kill "$daemon_pid"
+            for attempt in $(seq 1 30); do
+              sudo kill -0 "$daemon_pid" 2>/dev/null || exit 0
+              sleep 1
+            done
+            sudo kill -KILL "$daemon_pid"
+          fi
+
+  image-attestation:
+    needs: [image-build, image-evidence, image-manifest, image-runtime-smoke]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'AqmalJupri/crmsalessalamland'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - surface: crm
+          - surface: tasha
+    steps:
+      - name: Assert runner architecture
+        run: test "$RUNNER_ARCH" = "X64"
+
+      - name: Download exact release image
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-image-${{ matrix.surface }}-${{ github.sha }}
+          path: ${{ runner.temp }}/release-${{ matrix.surface }}
+
+      - name: Download release evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-evidence-${{ matrix.surface }}-${{ github.sha }}
+          path: ${{ runner.temp }}/release-${{ matrix.surface }}
+
+      - name: Download bound release manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-manifest-${{ matrix.surface }}-${{ github.sha }}
+          path: ${{ runner.temp }}/release-${{ matrix.surface }}
+
+      - name: Attest exact release bundle
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763
+        with:
+          subject-path: |
+            ${{ runner.temp }}/release-${{ matrix.surface }}/image.oci.tar
+            ${{ runner.temp }}/release-${{ matrix.surface }}/release-manifest.json
+            ${{ runner.temp }}/release-${{ matrix.surface }}/sbom.cdx.json
+            ${{ runner.temp }}/release-${{ matrix.surface }}/sbom.spdx.json
+            ${{ runner.temp }}/release-${{ matrix.surface }}/sbom-binding.json
+            ${{ runner.temp }}/release-${{ matrix.surface }}/scan-report.json
+
   verify:
-    needs: [checks, build, runtime-smoke]
+    needs: [checks, build, runtime-smoke, image-build, image-evidence, image-manifest, image-runtime-smoke, image-attestation]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - name: Assert runner architecture
+        run: test "$RUNNER_ARCH" = "X64"
+
       - name: Enforce successful quality gates
         env:
           CHECKS_RESULT: ${{ needs.checks.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           RUNTIME_SMOKE_RESULT: ${{ needs.runtime-smoke.result }}
+          IMAGE_BUILD_RESULT: ${{ needs.image-build.result }}
+          IMAGE_EVIDENCE_RESULT: ${{ needs.image-evidence.result }}
+          IMAGE_MANIFEST_RESULT: ${{ needs.image-manifest.result }}
+          IMAGE_RUNTIME_SMOKE_RESULT: ${{ needs.image-runtime-smoke.result }}
+          IMAGE_ATTESTATION_RESULT: ${{ needs.image-attestation.result }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           test "$CHECKS_RESULT" = "success"
           test "$BUILD_RESULT" = "success"
           test "$RUNTIME_SMOKE_RESULT" = "success"
+          test "$IMAGE_BUILD_RESULT" = "success"
+          test "$IMAGE_EVIDENCE_RESULT" = "success"
+          test "$IMAGE_MANIFEST_RESULT" = "success"
+          test "$IMAGE_RUNTIME_SMOKE_RESULT" = "success"
+          if test "$EVENT_NAME" = "push" && \
+             test "$REF" = "refs/heads/main" && \
+             test "$REPOSITORY" = "AqmalJupri/crmsalessalamland"; then
+            test "$IMAGE_ATTESTATION_RESULT" = "success"
+          else
+            test "$IMAGE_ATTESTATION_RESULT" = "skipped"
+          fi

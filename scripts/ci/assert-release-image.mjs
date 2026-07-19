@@ -33,6 +33,26 @@ const MAX_TOTAL_TAR_ENTRIES = 250_000;
 const MAX_TAR_EXTENSION_BYTES = 64 * 1024;
 const MAX_APP_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_APP_SCAN_BYTES = 512 * 1024 * 1024;
+const MAX_CREDENTIAL_KEY_MATCHES = 4096;
+const MAX_CREDENTIAL_COMMENT_SPANS = 4096;
+const MAX_SENSITIVE_SOURCE_BYTES = MAX_APP_SCAN_BYTES + MAX_JSON_BYTES;
+const MAX_SENSITIVE_TOKENS = 4_000_000;
+const MAX_TEMPLATE_NESTING = 32;
+const MIN_CREDENTIAL_LITERAL_CHARACTERS = 8;
+const SAFE_CREDENTIAL_CONTROL_VALUES = new Set(["include", "omit", "same-origin"]);
+const CREDENTIAL_METADATA_SUFFIXES = new Set([
+  "error",
+  "hash",
+  "kind",
+  "label",
+  "mode",
+  "name",
+  "policy",
+  "provider",
+  "strength",
+  "type",
+  "url",
+]);
 const MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json";
 const INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json";
 const CONFIG_MEDIA_TYPE = "application/vnd.oci.image.config.v1+json";
@@ -432,22 +452,686 @@ function assertBlob(entries, item) {
   return entry.content;
 }
 
-function assertSensitiveContent(bytes, canary, path) {
+function createSensitiveScanBudget() {
+  return { sourceBytes: 0, tokens: 0, credentialKeys: 0, comments: 0 };
+}
+
+function chargeSensitiveSource(budget, bytes, path) {
+  budget.sourceBytes += bytes;
+  if (budget.sourceBytes > MAX_SENSITIVE_SOURCE_BYTES) {
+    fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+  }
+}
+
+function chargeSensitiveToken(state) {
+  state.budget.tokens += 1;
+  if (state.budget.tokens > MAX_SENSITIVE_TOKENS) {
+    fail("RELEASE_IMAGE_SENSITIVE_CONTENT", state.path);
+  }
+}
+
+function chargeCredentialKey(budget, path) {
+  budget.credentialKeys += 1;
+  if (budget.credentialKeys > MAX_CREDENTIAL_KEY_MATCHES) {
+    fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+  }
+}
+
+function significantLiteralCharacters(source) {
+  let count = 0;
+  for (const character of source) {
+    if (!/\s/.test(character)) count += 1;
+    if (count >= MIN_CREDENTIAL_LITERAL_CHARACTERS) break;
+  }
+  return count;
+}
+
+function decodeUnicodeEscapes(source) {
+  return source.replace(
+    /\\u(?:\{([0-9A-Fa-f]{1,6})\}|([0-9A-Fa-f]{4}))/g,
+    (_, braced, fixed) => {
+      const value = Number.parseInt(braced ?? fixed, 16);
+      return value <= 0x10ffff ? String.fromCodePoint(value) : "\ufffd";
+    },
+  );
+}
+
+function lexicalCredentialSegments(source) {
+  return decodeUnicodeEscapes(source)
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+function lexicalCredentialTermAt(segments, index) {
+  if (["password", "secret", "token", "credential", "credentials"].includes(segments[index])) {
+    return 1;
+  }
+  return ["private", "api"].includes(segments[index]) && segments[index + 1] === "key"
+    ? 2
+    : 0;
+}
+
+function lexicalCredentialKey(source) {
+  const segments = lexicalCredentialSegments(source);
+  for (let index = 0; index < segments.length; index += 1) {
+    const width = lexicalCredentialTermAt(segments, index);
+    if (width === 0) continue;
+    const suffix = segments[index + width];
+    const laterCredential = segments.some(
+      (_, laterIndex) =>
+        laterIndex >= index + width && lexicalCredentialTermAt(segments, laterIndex) > 0,
+    );
+    if (laterCredential || suffix === undefined || !CREDENTIAL_METADATA_SUFFIXES.has(suffix)) {
+      return true;
+    }
+    index += width - 1;
+  }
+  return false;
+}
+
+function embeddedKeyBefore(source, separator) {
+  let cursor = separator - 1;
+  while (cursor >= 0 && /\s/.test(source[cursor])) cursor -= 1;
+  if (cursor < 0) return "";
+  if (["'", '"', "`"].includes(source[cursor])) {
+    const quote = source[cursor];
+    const end = cursor;
+    cursor -= 1;
+    while (cursor >= 0 && end - cursor <= 128) {
+      if (source[cursor] === quote && source[cursor - 1] !== "\\") {
+        return source.slice(cursor + 1, end);
+      }
+      cursor -= 1;
+    }
+    return "";
+  }
+  const end = cursor + 1;
+  while (cursor >= 0 && end - cursor <= 128 && /[A-Za-z0-9_$ .\\-]/.test(source[cursor])) {
+    cursor -= 1;
+  }
+  return source.slice(cursor + 1, end).trim();
+}
+
+function embeddedValueCharacters(source, separator) {
+  let cursor = separator + 1;
+  while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
+  const quote = ["'", '"', "`"].includes(source[cursor]) ? source[cursor++] : undefined;
+  let count = 0;
+  let escaped = false;
+  for (; cursor < source.length; cursor += 1) {
+    const character = source[cursor];
+    if (escaped) {
+      escaped = false;
+      if (!/\s/.test(character)) count += 1;
+    } else if (character === "\\") {
+      escaped = true;
+    } else if ((quote && character === quote) || (!quote && /[\s,;}\]]/.test(character))) {
+      break;
+    } else if (!/\s/.test(character)) {
+      count += 1;
+    }
+    if (count >= MIN_CREDENTIAL_LITERAL_CHARACTERS) break;
+  }
+  return count;
+}
+
+function hasEmbeddedCredentialAssignment(source) {
+  for (let cursor = 0; cursor < source.length; cursor += 1) {
+    if (
+      (source[cursor] === ":" || source[cursor] === "=") &&
+      lexicalCredentialKey(embeddedKeyBefore(source, cursor)) &&
+      embeddedValueCharacters(source, cursor) >= MIN_CREDENTIAL_LITERAL_CHARACTERS
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isLexicalWhitespace(character) {
+  return character !== undefined && /\s/.test(character);
+}
+
+function isJsIdentifierStart(character) {
+  if (character === undefined) return false;
+  const code = character.charCodeAt(0);
+  return /[A-Za-z_$]/.test(character) || character === "\\" || code >= 0x80;
+}
+
+function isJsIdentifierPart(character) {
+  return isJsIdentifierStart(character) || (character !== undefined && /[0-9]/.test(character));
+}
+
+function decodeJsEscape(source, cursor, path) {
+  const escape = source[cursor + 1];
+  if (escape === undefined) fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+  if (escape === "x") {
+    const digits = source.slice(cursor + 2, cursor + 4);
+    if (!/^[0-9A-Fa-f]{2}$/.test(digits)) fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+    return { value: String.fromCodePoint(Number.parseInt(digits, 16)), cursor: cursor + 4 };
+  }
+  if (escape === "u") {
+    if (source[cursor + 2] === "{") {
+      const end = source.indexOf("}", cursor + 3);
+      const digits = end === -1 ? "" : source.slice(cursor + 3, end);
+      const value = Number.parseInt(digits, 16);
+      if (!/^[0-9A-Fa-f]{1,6}$/.test(digits) || value > 0x10ffff) {
+        fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+      }
+      return { value: String.fromCodePoint(value), cursor: end + 1 };
+    }
+    const digits = source.slice(cursor + 2, cursor + 6);
+    if (!/^[0-9A-Fa-f]{4}$/.test(digits)) fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+    return { value: String.fromCodePoint(Number.parseInt(digits, 16)), cursor: cursor + 6 };
+  }
+  if (escape === "\n") return { value: "", cursor: cursor + 2 };
+  if (escape === "\r") {
+    return { value: "", cursor: cursor + (source[cursor + 2] === "\n" ? 3 : 2) };
+  }
+  const simple = { b: "\b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v", 0: "\0" };
+  return { value: simple[escape] ?? escape, cursor: cursor + 2 };
+}
+
+function pushLexicalToken(state, tokens, token) {
+  chargeSensitiveToken(state);
+  const lexicalToken = { ...token, lineBreakBefore: state.lineBreakBefore };
+  tokens.push(lexicalToken);
+  state.lineBreakBefore = false;
+  return lexicalToken;
+}
+
+function inspectLexicalComment(state, content) {
+  state.budget.comments += 1;
+  if (
+    state.budget.comments > MAX_CREDENTIAL_COMMENT_SPANS ||
+    hasEmbeddedCredentialAssignment(content)
+  ) {
+    fail("RELEASE_IMAGE_SENSITIVE_CONTENT", state.path);
+  }
+}
+
+function skipLexicalTrivia(state) {
+  const { source } = state;
+  let progressed = true;
+  while (progressed && state.cursor < source.length) {
+    progressed = false;
+    while (isLexicalWhitespace(source[state.cursor])) {
+      if (source[state.cursor] === "\n" || source[state.cursor] === "\r") {
+        state.lineBreakBefore = true;
+      }
+      state.cursor += 1;
+      progressed = true;
+    }
+    if (source.startsWith("#!", state.cursor) && state.cursor === 0) {
+      const end = source.indexOf("\n", state.cursor + 2);
+      inspectLexicalComment(
+        state,
+        source.slice(state.cursor + 2, end === -1 ? source.length : end),
+      );
+      state.cursor = end === -1 ? source.length : end;
+      progressed = true;
+    } else if (source.startsWith("//", state.cursor)) {
+      const end = source.indexOf("\n", state.cursor + 2);
+      inspectLexicalComment(
+        state,
+        source.slice(state.cursor + 2, end === -1 ? source.length : end),
+      );
+      state.cursor = end === -1 ? source.length : end;
+      progressed = true;
+    } else if (source.startsWith("/*", state.cursor)) {
+      const end = source.indexOf("*/", state.cursor + 2);
+      if (end === -1) fail("RELEASE_IMAGE_SENSITIVE_CONTENT", state.path);
+      const comment = source.slice(state.cursor + 2, end);
+      if (comment.includes("\n") || comment.includes("\r")) state.lineBreakBefore = true;
+      inspectLexicalComment(state, comment);
+      state.cursor = end + 2;
+      progressed = true;
+    }
+  }
+}
+
+function scanJsString(state) {
+  const { source, path } = state;
+  const start = state.cursor;
+  const quote = source[state.cursor++];
+  let value = "";
+  while (state.cursor < source.length) {
+    const character = source[state.cursor];
+    if (character === quote) {
+      state.cursor += 1;
+      if (hasEmbeddedCredentialAssignment(value)) {
+        fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+      }
+      return { kind: "string", value, start, end: state.cursor };
+    }
+    if (character === "\n" || character === "\r") {
+      fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+    }
+    if (character === "\\") {
+      const decoded = decodeJsEscape(source, state.cursor, path);
+      value += decoded.value;
+      state.cursor = decoded.cursor;
+    } else {
+      value += character;
+      state.cursor += 1;
+    }
+  }
+  fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+}
+
+function scanJsIdentifier(state) {
+  const { source, path } = state;
+  const start = state.cursor;
+  let value = "";
+  while (state.cursor < source.length && isJsIdentifierPart(source[state.cursor])) {
+    if (source[state.cursor] === "\\") {
+      const decoded = decodeJsEscape(source, state.cursor, path);
+      if (decoded.cursor === state.cursor + 2 || !isJsIdentifierPart(decoded.value)) {
+        fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+      }
+      value += decoded.value;
+      state.cursor = decoded.cursor;
+    } else {
+      value += source[state.cursor++];
+    }
+  }
+  return { kind: "identifier", value, start, end: state.cursor };
+}
+
+function scanJsNumber(state) {
+  const start = state.cursor;
+  const number = /(?:0[xX][0-9A-Fa-f](?:_?[0-9A-Fa-f])*n?|0[bB][01](?:_?[01])*n?|0[oO][0-7](?:_?[0-7])*n?|\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?(?:[eE][+-]?\d(?:_?\d)*)?n?|\.\d(?:_?\d)*(?:[eE][+-]?\d(?:_?\d)*)?)/y;
+  number.lastIndex = start;
+  const match = number.exec(state.source);
+  if (!match) fail("RELEASE_IMAGE_SENSITIVE_CONTENT", state.path);
+  state.cursor = number.lastIndex;
+  return { kind: "number", value: match[0], start, end: state.cursor };
+}
+
+function canStartRegex(tokens) {
+  const previous = tokens.at(-1);
+  if (!previous) return true;
+  if (previous.value === ")" && previous.closesControlParenthesis) return true;
+  if (["string", "number", "template", "regex"].includes(previous.kind)) return false;
+  if (previous.kind === "identifier") {
+    return [
+      "await",
+      "case",
+      "delete",
+      "do",
+      "else",
+      "in",
+      "instanceof",
+      "new",
+      "of",
+      "return",
+      "throw",
+      "typeof",
+      "void",
+      "yield",
+    ].includes(previous.value);
+  }
+  return ![")", "]", "}", "++", "--"].includes(previous.value);
+}
+
+function scanJsRegex(state) {
+  const { source, path } = state;
+  const start = state.cursor++;
+  let escaped = false;
+  let characterClass = false;
+  while (state.cursor < source.length) {
+    const character = source[state.cursor++];
+    if (character === "\n" || character === "\r") {
+      fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+    }
+    if (escaped) escaped = false;
+    else if (character === "\\") escaped = true;
+    else if (character === "[") characterClass = true;
+    else if (character === "]") characterClass = false;
+    else if (character === "/" && !characterClass) {
+      while (/[A-Za-z]/.test(source[state.cursor] ?? "")) state.cursor += 1;
+      return {
+        kind: "regex",
+        value: source.slice(start, state.cursor),
+        start,
+        end: state.cursor,
+      };
+    }
+  }
+  fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+}
+
+function scanJsPunctuator(state) {
+  const start = state.cursor;
+  const operators = [
+    ">>>=", "===", "!==", "**=", "&&=", "||=", "??=", "<<=", ">>=", ">>>", "...",
+    "=>", "==", "!=", "<=", ">=", "++", "--", "&&", "||", "??", "?.", "+=", "-=",
+    "*=", "/=", "%=", "**", "<<", ">>", "&=", "|=", "^=",
+  ];
+  const value =
+    operators.find((operator) => state.source.startsWith(operator, start)) ?? state.source[start];
+  state.cursor += value.length;
+  return { kind: "punctuator", value, start, end: state.cursor };
+}
+
+function scanJsTemplate(state, nesting) {
+  if (nesting > MAX_TEMPLATE_NESTING) {
+    fail("RELEASE_IMAGE_SENSITIVE_CONTENT", state.path);
+  }
+  const { source, path } = state;
+  const start = state.cursor++;
+  const expressions = [];
+  let staticCharacters = 0;
+  let staticValue = "";
+  while (state.cursor < source.length) {
+    const character = source[state.cursor];
+    if (character === "`") {
+      state.cursor += 1;
+      if (hasEmbeddedCredentialAssignment(staticValue)) {
+        fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+      }
+      staticCharacters = Math.min(
+        MIN_CREDENTIAL_LITERAL_CHARACTERS,
+        staticCharacters + significantLiteralCharacters(staticValue),
+      );
+      return {
+        kind: "template",
+        value: "",
+        staticCharacters,
+        expressions,
+        start,
+        end: state.cursor,
+      };
+    }
+    if (source.startsWith("${", state.cursor)) {
+      if (hasEmbeddedCredentialAssignment(staticValue)) {
+        fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+      }
+      staticCharacters = Math.min(
+        MIN_CREDENTIAL_LITERAL_CHARACTERS,
+        staticCharacters + significantLiteralCharacters(staticValue),
+      );
+      staticValue = "";
+      state.cursor += 2;
+      expressions.push(scanJsTokens(state, true, nesting + 1));
+      continue;
+    }
+    if (character === "\\") {
+      const decoded = decodeJsEscape(source, state.cursor, path);
+      staticValue += decoded.value;
+      state.cursor = decoded.cursor;
+    } else {
+      staticValue += character;
+      state.cursor += 1;
+    }
+  }
+  fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+}
+
+function scanJsTokens(state, stopOnTemplateBrace = false, nesting = 0) {
+  const tokens = [];
+  const delimiters = [];
+  let braceDepth = 0;
+  while (state.cursor < state.source.length) {
+    skipLexicalTrivia(state);
+    if (state.cursor >= state.source.length) break;
+    const character = state.source[state.cursor];
+    if (stopOnTemplateBrace && character === "}" && braceDepth === 0) {
+      state.cursor += 1;
+      return tokens;
+    }
+    let token;
+    if (character === "'" || character === '"') token = scanJsString(state);
+    else if (character === "`") token = scanJsTemplate(state, nesting);
+    else if (isJsIdentifierStart(character)) token = scanJsIdentifier(state);
+    else if (
+      /[0-9]/.test(character) ||
+      (character === "." && /[0-9]/.test(state.source[state.cursor + 1] ?? ""))
+    ) {
+      token = scanJsNumber(state);
+    } else if (
+      character === "/" &&
+      !state.source.startsWith("//", state.cursor) &&
+      !state.source.startsWith("/*", state.cursor) &&
+      canStartRegex(tokens)
+    ) {
+      token = scanJsRegex(state);
+    } else {
+      token = scanJsPunctuator(state);
+    }
+    if ([")", "]", "}"].includes(token.value)) {
+      const active = delimiters.pop();
+      if (token.value === ")" && active?.value === "(") {
+        token.closesControlParenthesis = active.control;
+      }
+    }
+    const lexicalToken = pushLexicalToken(state, tokens, token);
+    if (["(", "[", "{"].includes(token.value)) {
+      const previous = tokens.at(-2);
+      delimiters.push({
+        value: token.value,
+        control:
+          token.value === "(" &&
+          previous?.kind === "identifier" &&
+          ["catch", "for", "if", "switch", "while", "with"].includes(previous.value),
+      });
+    }
+    if (token.closesControlParenthesis) lexicalToken.closesControlParenthesis = true;
+    if (token.value === "{") braceDepth += 1;
+    else if (token.value === "}" && braceDepth > 0) braceDepth -= 1;
+  }
+  if (stopOnTemplateBrace) fail("RELEASE_IMAGE_SENSITIVE_CONTENT", state.path);
+  return tokens;
+}
+
+function credentialTokenContext(tokens, path) {
+  const opening = { "(": ")", "[": "]", "{": "}" };
+  const closing = { ")": "(", "]": "[", "}": "{" };
+  const stack = [];
+  const parentheses = [];
+  const depthBefore = [];
+  const containingParenthesis = [];
+  const boundary = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    depthBefore[index] = stack.length;
+    containingParenthesis[index] = parentheses.at(-1);
+    boundary[index] =
+      [",", ";", ")", "]", "}"].includes(token.value) ||
+      (token.lineBreakBefore &&
+        token.kind === "identifier" &&
+        ["class", "const", "export", "function", "import", "let", "var"].includes(
+          token.value,
+        ));
+    if (opening[token.value]) {
+      stack.push({ value: token.value, index });
+      if (token.value === "(") parentheses.push(index);
+    } else if (closing[token.value]) {
+      const active = stack.pop();
+      if (active?.value !== closing[token.value]) {
+        fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+      }
+      if (token.value === ")") parentheses.pop();
+    }
+  }
+  if (stack.length > 0) fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+
+  const nextBoundaryAtDepth = new Map();
+  const nextBoundary = [];
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    nextBoundary[index] = nextBoundaryAtDepth.get(depthBefore[index]) ?? tokens.length;
+    if (boundary[index]) nextBoundaryAtDepth.set(depthBefore[index], index);
+  }
+  return { boundary, containingParenthesis, nextBoundary };
+}
+
+function lexicalCalleeBefore(tokens, openingParenthesis) {
+  let cursor = openingParenthesis - 1;
+  const parts = [];
+  while (cursor >= 0 && parts.length < 64) {
+    const token = tokens[cursor];
+    if (token.kind === "identifier" || token.value === "." || token.value === "?.") {
+      parts.unshift(token.value === "?." ? "." : token.value);
+      cursor -= 1;
+    } else {
+      break;
+    }
+  }
+  return parts.join("");
+}
+
+function isCredentialLookupString(tokens, index, context) {
+  const token = tokens[index];
+  const propertyPrefix = tokens[index - 1];
+  const computedPropertyPrefix = tokens[index - 2];
+  if (
+    (["{", ","].includes(propertyPrefix?.value) && tokens[index + 1]?.value === ":") ||
+    (tokens[index - 1]?.value === "[" &&
+      tokens[index + 1]?.value === "]" &&
+      tokens[index + 2]?.value === ":" &&
+      ["{", ","].includes(computedPropertyPrefix?.value))
+  ) {
+    return true;
+  }
+  if (!lexicalCredentialKey(token.value)) return false;
+  if (tokens[index - 1]?.value === "[" && tokens[index + 1]?.value === "]") {
+    const base = tokens[index - 2];
+    if (base && (base.kind === "identifier" || [")", "]"].includes(base.value))) return true;
+    const optionalBase = base?.value === "?." ? tokens[index - 3] : undefined;
+    if (
+      optionalBase &&
+      (optionalBase.kind === "identifier" || [")", "]"].includes(optionalBase.value))
+    ) {
+      return true;
+    }
+  }
+  const openingParenthesis = context.containingParenthesis[index];
+  if (openingParenthesis === undefined) return false;
+  const callee = lexicalCalleeBefore(tokens, openingParenthesis);
+  return callee === "Reflect.get" || callee.endsWith(".get") || callee === "vault.read";
+}
+
+function numericLiteralCharacters(source) {
+  const normalized = source.replaceAll("_", "").replace(/n$/i, "");
+  const digits = /^0[xob]/i.test(normalized) ? normalized.slice(2) : normalized;
+  return [...digits].filter((character) => /[0-9A-Fa-f]/.test(character)).length;
+}
+
+function credentialTokenLiteralWeight(tokens, index, context, templateCharacters) {
+  const token = tokens[index];
+  if (token.kind === "regex") return MIN_CREDENTIAL_LITERAL_CHARACTERS;
+  if (
+    token.kind === "number" &&
+    numericLiteralCharacters(token.value) >= MIN_CREDENTIAL_LITERAL_CHARACTERS
+  ) {
+    return MIN_CREDENTIAL_LITERAL_CHARACTERS;
+  }
+  if (token.kind === "string" && !isCredentialLookupString(tokens, index, context)) {
+    return significantLiteralCharacters(token.value);
+  }
+  if (token.kind === "template") {
+    return token.staticCharacters + (templateCharacters.get(token) ?? 0);
+  }
+  return 0;
+}
+
+function isCredentialAssignmentOperator(value) {
+  return [":", "=", "||=", "??=", "&&=", "+=", "-=", "*=", "/=", "%="].includes(
+    value,
+  );
+}
+
+function credentialAssignmentTokenIndex(tokens, index) {
+  if (isCredentialAssignmentOperator(tokens[index + 1]?.value)) return index + 1;
+  if (
+    tokens[index - 1]?.value === "[" &&
+    tokens[index + 1]?.value === "]" &&
+    isCredentialAssignmentOperator(tokens[index + 2]?.value)
+  ) {
+    return index + 2;
+  }
+  return undefined;
+}
+
+function analyzeCredentialTokens(tokens, path, budget) {
+  const templateCharacters = new Map();
+  for (const token of tokens) {
+    if (token.kind === "template") {
+      let characters = 0;
+      for (const expression of token.expressions) {
+        characters += analyzeCredentialTokens(expression, path, budget);
+      }
+      templateCharacters.set(token, characters);
+    }
+  }
+  const context = credentialTokenContext(tokens, path);
+  const literalPrefix = [0];
+  for (let index = 0; index < tokens.length; index += 1) {
+    literalPrefix[index + 1] =
+      literalPrefix[index] +
+      credentialTokenLiteralWeight(tokens, index, context, templateCharacters);
+  }
+  for (let index = 0; index < tokens.length; index += 1) {
+    const key = tokens[index];
+    if (!["identifier", "string"].includes(key.kind) || !lexicalCredentialKey(key.value)) {
+      continue;
+    }
+    const operatorIndex = credentialAssignmentTokenIndex(tokens, index);
+    if (operatorIndex === undefined) continue;
+    chargeCredentialKey(budget, path);
+    const start = operatorIndex + 1;
+    const end =
+      start >= tokens.length
+        ? tokens.length
+        : context.boundary[start]
+          ? start
+          : context.nextBoundary[start];
+    if (key.value.toLowerCase() === "credentials") {
+      const safeControl =
+        end - start === 1 &&
+        tokens[start].kind === "string" &&
+        SAFE_CREDENTIAL_CONTROL_VALUES.has(tokens[start].value);
+      if (!safeControl) fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+      continue;
+    }
+    if (
+      literalPrefix[end] - literalPrefix[start] >= MIN_CREDENTIAL_LITERAL_CHARACTERS ||
+      (tokens[operatorIndex].value !== ":" &&
+        key.value === key.value.toUpperCase() &&
+        end > start)
+    ) {
+      fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+    }
+  }
+  return literalPrefix.at(-1);
+}
+
+function assertSensitiveContentLexically(bytes, canary, path, budget) {
+  chargeSensitiveSource(budget, bytes.byteLength, path);
   if (bytes.includes(Buffer.from(canary, "utf8"))) {
     fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
   }
   const source = bytes.toString("latin1");
-  const patterns = [
-    /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/,
-    /\bAKIA[0-9A-Z]{16}\b/,
-    /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/,
-    /(?:PASSWORD|SECRET|TOKEN|CREDENTIAL|PRIVATE_KEY)\s*[:=]\s*["']?[A-Za-z0-9_./+:-]{8,}/i,
-    /\bAPI_KEY\s*[:=]\s*["']?[A-Za-z0-9_./+:-]{8,}/i,
-    /\b[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i,
-  ];
-  if (patterns.some((pattern) => pattern.test(source))) {
+  if (
+    /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----|\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9_]{20,}\b|\b[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i.test(source)
+  ) {
     fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
   }
+  if (!/\.(?:c|m)?js$/i.test(path)) {
+    if (hasEmbeddedCredentialAssignment(source)) {
+      fail("RELEASE_IMAGE_SENSITIVE_CONTENT", path);
+    }
+    return;
+  }
+  const state = { source, cursor: 0, path, budget, lineBreakBefore: false };
+  const tokens = scanJsTokens(state);
+  analyzeCredentialTokens(tokens, path, budget);
+}
+
+function assertSensitiveContent(bytes, canary, path, budget) {
+  assertSensitiveContentLexically(bytes, canary, path, budget);
 }
 
 function appRoot(path) {
@@ -587,7 +1271,7 @@ function assertRuntimeBaseAncestry(layerDescriptors, config) {
   return RUNTIME_BASE_IMAGE.layers.length;
 }
 
-function inspectLayers(layerDescriptors, blobEntries, config, canary, baseLayerCount) {
+function inspectLayers(layerDescriptors, blobEntries, config, canary, baseLayerCount, scanBudget) {
   const rootfs = record(config.rootfs, "RELEASE_IMAGE_ROOTFS");
   const finalApp = new Map();
   let scannedBytes = 0;
@@ -623,7 +1307,7 @@ function inspectLayers(layerDescriptors, blobEntries, config, canary, baseLayerC
         if (entry.size > MAX_APP_FILE_BYTES) fail("RELEASE_IMAGE_APP_BOUNDS", entry.path);
         scannedBytes += entry.size;
         if (scannedBytes > MAX_APP_SCAN_BYTES) fail("RELEASE_IMAGE_APP_BOUNDS");
-        assertSensitiveContent(entry.content, canary, entry.path);
+        assertSensitiveContent(entry.content, canary, entry.path, scanBudget);
       }
       finalApp.set(
         entry.path,
@@ -760,13 +1444,15 @@ function inspectArchive(archive, arguments_) {
   ) {
     fail("RELEASE_IMAGE_LABELS");
   }
-  assertSensitiveContent(configBytes, arguments_.canary, "image-config");
+  const scanBudget = createSensitiveScanBudget();
+  assertSensitiveContent(configBytes, arguments_.canary, "image-config", scanBudget);
   inspectLayers(
     layerDescriptors,
     entries,
     config,
     arguments_.canary,
     baseLayerCount,
+    scanBudget,
   );
 
   return Object.freeze({

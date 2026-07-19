@@ -180,6 +180,18 @@ function defaultLayerEntries(): TarEntry[] {
   ];
 }
 
+function layerEntriesWithServerContent(
+  content: string,
+  additionalEntries: readonly TarEntry[] = [],
+): TarEntry[] {
+  return [
+    ...defaultLayerEntries().map((entry) =>
+      entry.path === "app/server.js" ? { ...entry, content } : entry,
+    ),
+    ...additionalEntries,
+  ];
+}
+
 function makeOciFixture(options: OciFixtureOptions = {}): OciFixture {
   const directory = mkdtempSync(join(tmpdir(), "crm-release-image-inspection-"));
   temporaryDirectories.push(directory);
@@ -323,9 +335,10 @@ function expectRejected(
   fixture: OciFixture,
   code: RegExp,
   overrides: Parameters<typeof runInspector>[1] = {},
+  diagnosticLabel?: string,
 ): void {
   const result = runInspector(fixture, overrides);
-  expect(result.status).not.toBe(0);
+  expect(result.status, diagnosticLabel).not.toBe(0);
   expect(result.signal).toBeNull();
   expect(result.stdout).toBe("");
   expect(result.stderr).toMatch(code);
@@ -906,23 +919,301 @@ describe("release image inspection contract", () => {
     }
   });
 
+  it.skipIf(!inspectorExists)("accepts credential-shaped code references without literal values", () => {
+    const fixture = makeOciFixture({
+      layerEntries: defaultLayerEntries().map((entry) =>
+        entry.path === "app/server.js"
+          ? {
+              ...entry,
+              content: [
+                'const route = pathname.replace(/^\\/_next\\/data\\//, "");',
+                "const endpoint = `${protocol}//${host}`; const inline = { password: this.password };",
+                "const url = { password: this.password };",
+                "const settings = { secret: config.secret };",
+                "const auth = { token: process.env.TOKEN };",
+                "const decoded = { password: decodeURIComponent(input.password) };",
+                "const configured = { password: config.get(input.password) };",
+                'const indexed = { password: config["password"] };',
+                'const optionalIndexed = { password: config?.["password"] };',
+                'const environment = { password: process.env["DATABASE_PASSWORD"] };',
+                'const reflected = { password: Reflect.get(config, "password") };',
+                'const keyed = { password: config.get("password") };',
+                "const optional = { secret: configuration?.secret };",
+                "const binary = { secret: e.readUInt32BE(9) };",
+                "const schema = { OIDC_CLIENT_SECRET: ld.string().min(16).optional() };",
+                "const getter = { getAssetToken: function(){ return tokenStore.current; } };",
+                'const schemaColumn = { tokenHash: column("token_hash") };',
+                'const request = fetch(url, { credentials: "same-origin" });',
+                'const metadata = { tokenType: "IdentifierName", tokenizer: "word-piece", passwordStrength: "very-strong", secretary: "department", credentialProvider: "web-identity", tokenError: "invalid-token" };',
+                'const claims = { "code id_token": condition ? current : fallback };',
+                "const aliases = { secret: null, token: t, client_secret: r, clientAssetToken: ap };",
+                'const quotedKey = { "password": this.password };',
+                'const nestedObject = { password: { "longPropertyName": this.password } };',
+                "const dynamic = { password: `${process.env.SECRET}` };",
+              ].join("\n"),
+            }
+          : entry,
+      ),
+    });
+
+    const result = runInspector(fixture);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+  });
+
+  it.skipIf(!inspectorExists)(
+    "accepts lexical data markers, long URLs and dynamic credential locations",
+    () => {
+      const quotedUrls = Array.from(
+        { length: 4_097 },
+        (_, index) => `const url${index} = "https://example.test/assets/${index}";`,
+      );
+      const quotedCommentMarkers = Array.from(
+        { length: 4_097 },
+        (_, index) => `const marker${index} = "/* safe */";`,
+      );
+      const content = [
+        'const open="/*"; const x={password:this.password}; const close="*/";',
+        ...quotedUrls,
+        ...quotedCommentMarkers,
+        `const longUrl = "https://example.test/${"segment/".repeat(9_000)}"; const longUrlConfig = { password: this.password };`,
+        "const interpolatedUrl = `https://${host}/${({ password: this.password }).password}`;",
+        'const division = { password: numerator / denominator }; const regexData = /["\']\\/\\/not-a-comment/;',
+        'if (enabled) /["\']\\/\\/not-a-comment/.test(input); const afterControlRegex = { password: this.password };',
+        'const metadata = { passwordLabel: "Database password", passwordPolicy: "managed", tokenUrl: "https://example.test/token", tokenKind: "bearer", tokenName: "access", TOKEN_TYPE: "Bearer", credentialProvider: "vault", tokenHash: "sha256", tokenType: "Bearer", passwordStrength: "strong", tokenError: "missing" };',
+        'const locations = { password: vault.read("secret/database/password"), secret: secrets["DATABASE_SECRET"], token: Reflect.get(config, "client-secret"), apiKey: config.get("database.password"), escaped: config["pass\\u0077ord"] };',
+        'const nestedTemplate = { password: `${`${process.env.SECRET}`}` };',
+        'fetch(url, { credentials: "include" }); fetch(url, { credentials: "omit" }); fetch(url, { credentials: "same-origin" });',
+      ].join("\n");
+      const fixture = makeOciFixture({ layerEntries: layerEntriesWithServerContent(content) });
+
+      const result = runInspector(fixture);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+    },
+  );
+
+  it.skipIf(!inspectorExists)(
+    "rejects real comments after misleading regex, URL and quote text",
+    () => {
+      for (const content of [
+        'const x=1; // "https://example.test" password:synthetic-but-forbidden-value\nconst ok=true;',
+        "const r=/'/; // 'note' password:synthetic-but-forbidden-value\nconst ok=true;",
+        "const x=1; /* note https://example.test 'quoted' password:synthetic-but-forbidden-value */ const ok=true;",
+      ]) {
+        const fixture = makeOciFixture({
+          layerEntries: layerEntriesWithServerContent(content),
+        });
+        expectRejected(fixture, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
+      }
+    },
+  );
+
+  it.skipIf(!inspectorExists)(
+    "rejects separated, computed, escaped and later-dangerous credential keys",
+    () => {
+      for (const content of [
+        '{"client-secret":"synthetic-but-forbidden-value"}',
+        '{"database.password":"synthetic-but-forbidden-value"}',
+        '{"api key":"synthetic-but-forbidden-value"}',
+        '{"database_password":"synthetic-but-forbidden-value"}',
+        '{"DATABASE_PASSWORD":"synthetic-but-forbidden-value"}',
+        'config["api-key"] = "synthetic-but-forbidden-value";',
+        'const config = { pass\\u0077ord: "synthetic-but-forbidden-value" };',
+        'const config = { "client\\u002dsecret": "synthetic-but-forbidden-value" };',
+        'const config = { password: "synthetic\\x2dbut\\x2dforbidden\\x2dvalue" };',
+        'const config = { credentialProviderSecret: "synthetic-but-forbidden-value" };',
+        'const config = { tokenHashSecret: "synthetic-but-forbidden-value" };',
+        'const payload = "{\\\"database-password\\\":\\\"synthetic-but-forbidden-value\\\"}";',
+      ]) {
+        const fixture = makeOciFixture({
+          layerEntries: layerEntriesWithServerContent(content),
+        });
+        expectRejected(fixture, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
+      }
+    },
+  );
+
+  it.skipIf(!inspectorExists)(
+    "rejects every long numeric and regex credential literal form",
+    () => {
+      for (const content of [
+        "const config = { password: Number(1e12345678) };",
+        "const config = { password: Number(1234.5678) };",
+        "const config = { password: 0x12345678 };",
+        "const config = { password: 0b10101010 };",
+        "const config = { password: 0o12345670 };",
+        "const config = { password: BigInt(0x12345678n) };",
+        "const config = { password: { nested: 1234.5678 } };",
+        "const config = { password: flag ? /x/ : dynamic };",
+        "const config = { password: make(/x/) };",
+        "const config = { password: ((/x/)) };",
+        "const config = { password: source / /synthetic-but-forbidden-value/.source };",
+        'const config = { password: `${"synthetic-but-"}${`${"forbidden-value"}`}` };',
+        "const config = { password: `${process.env.PASSWORD}-synthetic-but-forbidden-value` };",
+        "const config = { password: `${process.env.PASSWORD}",
+      ]) {
+        const fixture = makeOciFixture({
+          layerEntries: layerEntriesWithServerContent(content),
+        });
+        expectRejected(fixture, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
+      }
+    },
+  );
+
+  it.skipIf(!inspectorExists)("accepts only the exact Fetch credentials controls", () => {
+    for (const value of ["", "cors", "same", "origin"]) {
+      const fixture = makeOciFixture({
+        layerEntries: layerEntriesWithServerContent(
+          `fetch(url, { credentials: ${JSON.stringify(value)} });`,
+        ),
+      });
+      expectRejected(fixture, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
+    }
+  });
+
+  it.skipIf(!inspectorExists)(
+    "fails closed when credential scanning exceeds one shared image budget",
+    () => {
+      const references = "({password:reference});".repeat(4_096);
+      const adversarialFiles = Array.from({ length: 40 }, (_, index) => ({
+        path: `app/.next/static/chunks/adversarial-${index}.js`,
+        content: references,
+        uid: 0,
+        gid: 0,
+      }));
+      const fixture = makeOciFixture({
+        layerEntries: layerEntriesWithServerContent("export {};\n", adversarialFiles),
+      });
+
+      expectRejected(fixture, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
+    },
+  );
+
+  it.skipIf(!inspectorExists)(
+    "accepts a representative multi-file compiled JavaScript corpus under budget",
+    () => {
+      const compiledFiles = Array.from({ length: 250 }, (_, index) => ({
+        path: `app/.next/static/chunks/compiled-${index}.js`,
+        content: `const ratio${index}=left/right;const matcher${index}=/["']\\/\\/not-a-comment/;const config${index}={password:this.password};`,
+        uid: 0,
+        gid: 0,
+      }));
+      const fixture = makeOciFixture({
+        layerEntries: layerEntriesWithServerContent("export {};\n", compiledFiles),
+      });
+
+      const result = runInspector(fixture);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+    },
+  );
+
   it.skipIf(!inspectorExists)("rejects exact canary and credential content without logging values", () => {
-    for (const content of [
+    for (const [caseIndex, content] of [
       canary,
       "-----BEGIN OPENSSH PRIVATE KEY-----\nnot-real\n-----END OPENSSH PRIVATE KEY-----",
+      `ghp_${"a".repeat(20)}`,
       "DATABASE_PASSWORD=synthetic-but-forbidden-value",
+      "DATABASE_PASSWORD=prod.password",
+      "PASSWORD=P@ssw0rd!",
+      "AWS_SECRET_ACCESS_KEY=abcdefghijklmnopqrstuvwxyz1234567890ABCD",
+      "SECRET_KEY_BASE=synthetic-but-forbidden-value",
+      "JWT_SECRET_KEY=synthetic-but-forbidden-value",
+      "PASSWORD_B64=synthetic-but-forbidden-value",
+      'const env = "API_KEY=service.token";',
+      'const config = { "password": "synthetic-but-forbidden-value" };',
+      'const config = { "DATABASE_PASSWORD": "synthetic-but-forbidden-value" };',
+      'const config = { "OIDC_CLIENT_SECRET": "synthetic-but-forbidden-value" };',
+      'const config = { password: "this.password" };',
+      'const config = { password: "P@ssw0rd!" };',
+      'const config = { password: "synthe\\x74ic" };',
+      'const config = { password: "synthe\\u0074ic" };',
+      'const config = { password: "synthe" + "tic" };',
+      'const config = { password: " synthetic-but-forbidden-value" };',
+      'const config = { password: "id: synthetic-but-forbidden-value" };',
+      "const config = { password: `synthetic-but-forbidden-value` };",
+      "const config = { password: `${dynamic}synthetic-but-forbidden-value` };",
+      "const config = { password: `${process.env.SECRET}-synthetic-but-forbidden-value` };",
+      'const config = { password: `${flag ? "synthetic-but-forbidden-value" : dynamic}` };',
+      'const config = { password: `${flag ? `synthetic-but-forbidden-value` : dynamic}` };',
+      'const config = { password: `${"synt"}${"hetic"}` };',
+      'const config = { password: decrypt("hardcoded_password_value") };',
+      'const config = { password: flag ? "synthetic_token_value" : dynamic };',
+      'const request = { credentials: "include" + "synthetic-but-forbidden-value" };',
+      'config["password"] = "synthetic-but-forbidden-value";',
+      "config['password'] = 'synthetic-but-forbidden-value';",
+      'const config = { ["password"]: "synthetic-but-forbidden-value" };',
+      'config.password ||= "synthetic-but-forbidden-value";',
+      'config.password ??= "synthetic-but-forbidden-value";',
+      'config.password += "synthetic-but-forbidden-value";',
+      'const config = { password: ("synthetic-but-forbidden-value") };',
+      'const config = { password: ["synthetic-but-forbidden-value"] };',
+      'const config = { password /* reviewed gap */ : "synthetic-but-forbidden-value" };',
+      'const config = { "password"/* reviewed gap */:"synthetic-but-forbidden-value" };',
+      'const raw = "prefix password:synthetic-but-forbidden-value,";',
+      'const raw = "password:prod.secret,";',
+      "const raw = 'prefix password:synthetic-but-forbidden-value,';",
+      "const raw = `prefix password:synthetic-but-forbidden-value,`;",
+      "/* password:synthetic-but-forbidden-value, */",
+      "/* password:prod.secret, */",
+      "/* password:prod.secret */",
+      "const x = 1; /* password:synthetic-but-forbidden-value trailing */",
+      "const x = 1; // password:synthetic-but-forbidden-value trailing\nconst ok = true;",
+      "const x = 1// password:synthetic-but-forbidden-value trailing\n;",
+      'const x = 1; // note "quoted" password:synthetic-but-forbidden-value trailing\nconst ok = true;',
+      "const matcher = /'/; // password:synthetic-but-forbidden-value trailing\nconst ok = true;",
+      "const matcher = /'/; /* password:synthetic-but-forbidden-value trailing */",
+      "const wrapped = `${ // password:synthetic-but-forbidden-value trailing\n dynamic}`;",
+      `/* ${"x".repeat(5000)} password:prod.secret, */`,
+      "// password:prod.secret,\nconst ok = true;",
+      "// password:P@ssw0rd!\nconst ok = true;",
+      `// ${"x".repeat(5000)} password:synthetic-but-forbidden-value trailing\nconst ok = true;`,
+      `// ${"x".repeat(70_000)} password:synthetic-but-forbidden-value trailing\nconst ok = true;`,
+      "const config = { password: 12345678 };",
+      "const config = { password: 12345678n };",
+      "const config = { password: /synthetic-but-forbidden-value/ };",
+      "const config = { password: /(?:synthetic-but-forbidden-value)/ };",
+      "const config = { password: { value: 12345678 } };",
+      "const config = { password: Number(12345678) };",
+      'const config = { password: this.password || "synthetic-but-forbidden-value" };',
+      'const config = { password: this.password + "synthetic-but-forbidden-value" };',
+      'const config = { password: this.password ? "synthetic-value-a" : "synthetic-value-b" };',
+      'const config = { password: decodeURIComponent("synthetic-but-forbidden-value") };',
+      'const config = { password: config.get("synthetic-but-forbidden-value") };',
       "DATABASE_URL=postgresql://crm_user:synthetic-password@db.internal/crm",
       "postgresql://crm_user:synthetic-password@db.internal/crm",
       "API_KEY=synthetic-api-key-value",
       "AKIAIOSFODNN7EXAMPLE",
-    ]) {
+    ].entries()) {
       const fixture = makeOciFixture({
         layerEntries: defaultLayerEntries().map((entry) =>
           entry.path === "app/server.js" ? { ...entry, content } : entry,
         ),
       });
-      expectRejected(fixture, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
+      expectRejected(
+        fixture,
+        /RELEASE_IMAGE_SENSITIVE_CONTENT/,
+        {},
+        `credential rejection case ${caseIndex}`,
+      );
     }
+
+    const nonJavaScriptReference = makeOciFixture({
+      layerEntries: [
+        ...defaultLayerEntries(),
+        {
+          path: "app/public/config.yaml",
+          content: "password:this.password\n",
+          uid: 0,
+          gid: 0,
+        },
+      ],
+    });
+    expectRejected(nonJavaScriptReference, /RELEASE_IMAGE_SENSITIVE_CONTENT/);
 
     const canaryPath = makeOciFixture({
       layerEntries: [

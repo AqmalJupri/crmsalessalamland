@@ -1557,7 +1557,7 @@ function analyzeCredentialTokens(tokens, path, budget) {
             token.kind !== "string" &&
             (token.kind !== "punctuator" ||
               ![
-                "(", ")", ",", ".", "?.", "??", "[", "]", "?", ":", "==", "===",
+                "(", ")", ",", ".", "?.", "??", "||", "[", "]", "?", ":", "==", "===",
                 "!=", "!==", "<", "<=", ">", ">=",
               ].includes(token.value))),
       );

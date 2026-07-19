@@ -1501,6 +1501,7 @@ describe("release image inspection contract", () => {
           "const reference = { credentials: inheritedCredentials };",
           'const bracket = { credentials: request["credentials"] };',
           'const fallback = { credentials: request.credentials ?? "same-origin" };',
+          'this.credentials = options.credentials || this.credentials || "same-origin";',
           'const cors = { credentials: corsAttributeState === "anonymous" ? "same-origin" : "omit" };',
           "const store = { credentials: {} };",
         ].join("\n"),
@@ -1516,6 +1517,9 @@ describe("release image inspection contract", () => {
   it.skipIf(!inspectorExists)("rejects a non-control Fetch credentials fallback", () => {
     for (const content of [
       'const fallback = { credentials: request.credentials ?? "cors" };',
+      'const fallback = { credentials: request.credentials || "cors" };',
+      'this.credentials = options.credentials || "same-origin" || "synthetic-but-forbidden-value";',
+      'this.credentials = options.credentials || loadCredentials("synthetic-but-forbidden-value") || "same-origin";',
       'const conditional = { credentials: corsAttributeState === "anonymous" ? "cors" : "omit" };',
       'const comparison = { credentials: input === "synthetic-but-forbidden-value" ? "include" : "omit" };',
       'const nonempty = { credentials: { mode: "include" } };',

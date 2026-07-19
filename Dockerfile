@@ -16,6 +16,7 @@ ENV APP_VERSION=$APP_VERSION \
     PRODUCT_SURFACE=crm
 COPY . .
 RUN pnpm build
+RUN node scripts/ci/sanitize-standalone-package.mjs /app/.next/standalone/package.json
 RUN find /app/.next/standalone /app/.next/static /app/public -type d -exec chmod 0755 -- {} + && \
     find /app/.next/standalone /app/.next/static /app/public -type f -perm /111 -exec chmod 0755 -- {} + && \
     find /app/.next/standalone /app/.next/static /app/public -type f ! -perm /111 -exec chmod 0644 -- {} +
@@ -26,6 +27,7 @@ ENV APP_VERSION=$APP_VERSION \
     PRODUCT_SURFACE=tasha
 COPY . .
 RUN pnpm build
+RUN node scripts/ci/sanitize-standalone-package.mjs /app/.next/standalone/package.json
 RUN find /app/.next/standalone /app/.next/static /app/public -type d -exec chmod 0755 -- {} + && \
     find /app/.next/standalone /app/.next/static /app/public -type f -perm /111 -exec chmod 0755 -- {} + && \
     find /app/.next/standalone /app/.next/static /app/public -type f ! -perm /111 -exec chmod 0644 -- {} +

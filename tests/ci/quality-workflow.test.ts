@@ -1309,6 +1309,10 @@ describe("Release image workflow DAG", () => {
     const setupDocker = strictStep(job, "Install checksum-locked OCI-capable Docker");
     expect(setupDocker.run).toContain('"containerd-snapshotter": true');
     expect(setupDocker.run).toContain("dockerd");
+    expect(setupDocker.run).toContain(
+      'sudo env PATH="$docker_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"',
+    );
+    expect(setupDocker.run).not.toContain('sudo env PATH="$docker_bin:/usr/bin:/bin"');
     expect(strictStep(job, "Verify OCI image store").run).toMatch(
       /io\.containerd\.snapshotter\.v1/,
     );

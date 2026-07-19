@@ -876,7 +876,7 @@ jobs:
           docker_host="unix://$docker_root/docker.sock"
           pid_file="$docker_root/dockerd.pid"
           log_file="$docker_root/dockerd.log"
-          sudo env PATH="$docker_bin:/usr/bin:/bin" \
+          sudo env PATH="$docker_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
             "$docker_bin/dockerd" \
               --config-file "$docker_root/daemon.json" \
               --host "$docker_host" \

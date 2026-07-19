@@ -25,6 +25,7 @@ COPY . .
 RUN pnpm build
 
 FROM gcr.io/distroless/nodejs22-debian13:nonroot@sha256:a2723a2817c5b01b8e7b98d567bc8b5a6b0e713e25bfb0a82b6ade4b9db06f50 AS runtime-base
+USER 0:0
 WORKDIR /app
 ENV HOME=/tmp \
     HOSTNAME=0.0.0.0 \

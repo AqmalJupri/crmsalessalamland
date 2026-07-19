@@ -371,6 +371,7 @@ function assertDockerfileContract(source: string): void {
   expect(
     runtimeBase.instructions.map((instruction) => [instruction.name, instruction.value]),
   ).toEqual([
+    ["USER", "0:0"],
     ["WORKDIR", "/app"],
     [
       "ENV",
@@ -432,6 +433,7 @@ FROM dependencies AS build-tasha
 ENV PRODUCT_SURFACE=tasha
 RUN pnpm build
 FROM ${exactRuntimeBase} AS runtime-base
+USER 0:0
 WORKDIR /app
 ENV HOME=/tmp HOSTNAME=0.0.0.0 NEXT_TELEMETRY_DISABLED=1 NODE_ENV=production PORT=3000
 EXPOSE 3000
@@ -513,6 +515,10 @@ describe("release image source contract", () => {
     ["root name", validDockerfileFixture.replace("USER 65532:65532", "USER root")],
     ["root ID", validDockerfileFixture.replace("USER 65532:65532", "USER 0:0")],
     ["variable user", validDockerfileFixture.replace("USER 65532:65532", "USER ${UID}")],
+    [
+      "runtime workdir before root owner",
+      validDockerfileFixture.replace("USER 0:0\nWORKDIR /app", "WORKDIR /app\nUSER 0:0"),
+    ],
     ["floating base", validDockerfileFixture.replace(/@sha256:[a-f0-9]{64}/, "")],
     [
       "second external base",

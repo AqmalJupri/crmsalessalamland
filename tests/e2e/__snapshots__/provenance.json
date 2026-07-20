@@ -1,9 +1,9 @@
 {
   "schemaVersion": 3,
-  "sourceCommit": "c0a8d90c5d9904fd55f822b5ceaf882444a63b45",
+  "sourceCommit": "771d9fe33ee2deb1494bc7fec30fef2ee533fe00",
   "sourceBinding": {
     "algorithm": "sha256-path-null-digest-lf-v1",
-    "digest": "dbe71912552ebe1b9f514255be99760e29a4729e68cb6d4ac8a8811968eede1b",
+    "digest": "11ce504e93bdc3fa14d4d178f254b285d898ce12bf2543697566a4b88ac28612",
     "fileCount": 102
   },
   "comparisonBinding": {
@@ -13,7 +13,7 @@
   },
   "syntheticOnly": true,
   "dynamicData": "none-present",
-  "capturedAt": "2026-07-18T21:10:16.193Z",
+  "capturedAt": "2026-07-19T16:14:34.074Z",
   "capture": {
     "os": "Linux",
     "runnerImage": "ubuntu24",
@@ -49,7 +49,7 @@
     "crm/ui-visual.spec.ts/desktop-chromium-768x1024/crm-pipeline.png": "78f3fdff2c19cd08a02a1a810e04ae466f9be3f18930c93c2d5d761ffbae2fb2",
     "crm/ui-visual.spec.ts/desktop-chromium-768x1024/login.png": "2cfa78d839fb0282c8d33e7b7076ab48f66841cb15ed110f6a3f3fec63ee3bf3",
     "crm/ui-visual.spec.ts/desktop-chromium-768x1024/operation-states.png": "7ff2369349ddcdf5fe8903c5fe8c618ce90ddf310d9608902067b55a657549ab",
-    "crm/ui-visual.spec.ts/mobile-chromium-320x800/company-switcher.png": "80aca5861c925b13b1a221d8ca9afba0a5a2e3e67805f5ebde9b356ad87253ec",
+    "crm/ui-visual.spec.ts/mobile-chromium-320x800/company-switcher.png": "b8f9b753a923c7585a3dc419e536d70d786667a855b9ce8a112d37c4f26a860e",
     "crm/ui-visual.spec.ts/mobile-chromium-320x800/crm-dashboard.png": "705126668d669ba4bcad1c6593c1b469c909ad0df6b288da61a3330a65d2cc51",
     "crm/ui-visual.spec.ts/mobile-chromium-320x800/crm-integrations-unknown.png": "77aa61472394e4e10c3ef7b2a48bbdc40bea2848c706fa0e60501b53be128e95",
     "crm/ui-visual.spec.ts/mobile-chromium-320x800/crm-leads.png": "4c2067d1e8327009f19ded60ab64a6fe97c947724a145295746aee34cdf720c8",
@@ -60,7 +60,7 @@
     "crm/ui-visual.spec.ts/mobile-chromium-390x844/crm-dashboard.png": "45e54c4d2dfb8bbc1fd8dcd09df457e2d1fa4da1233b36d35af186af10b8b33a",
     "crm/ui-visual.spec.ts/mobile-chromium-390x844/crm-integrations-unknown.png": "547ad7d4c17d1329c4b02be2215c5fad19057363184cd7e3eef6c1143a247581",
     "crm/ui-visual.spec.ts/mobile-chromium-390x844/crm-leads.png": "ff59e02ad494bec965a8e985fc487cf220c6ae961670ef2cd79bb30fcc361a06",
-    "crm/ui-visual.spec.ts/mobile-chromium-390x844/crm-pipeline.png": "74c0a88ea08fc8dd583c144dc07f6167f84a933d9717af51639f404204946e0b",
+    "crm/ui-visual.spec.ts/mobile-chromium-390x844/crm-pipeline.png": "c3939e243fb2417b5361cc2ff4d39dfb5f4dcd55b9c3c819b6b99e8410fc0393",
     "crm/ui-visual.spec.ts/mobile-chromium-390x844/login.png": "f8344b7a0489dbd91be93e07b5a93a9816a6403e05f44e0f98ebbefa09df4887",
     "crm/ui-visual.spec.ts/mobile-chromium-390x844/operation-states.png": "2be1d7760e193d2056400246b3de7cef0a53125af537f639d7a86e5fd3f8eed8",
     "tasha/ui-visual.spec.ts/desktop-chromium-1024x768/company-switcher.png": "b99613995778e3cfe5e8898a3a0c5c6050502293ca7cb50ab564c3dbb10a712c",
@@ -76,7 +76,7 @@
     "tasha/ui-visual.spec.ts/desktop-chromium-768x1024/company-switcher.png": "3703fd2aec8f9560db109d2910d16ad7212e14d848c222735ab7f81e65f22d31",
     "tasha/ui-visual.spec.ts/desktop-chromium-768x1024/login.png": "fa495af7d8eec97d427849e2834e27c1f245e9c654f0f6f2b98c8d1b1ff1876a",
     "tasha/ui-visual.spec.ts/desktop-chromium-768x1024/operation-states.png": "7ff2369349ddcdf5fe8903c5fe8c618ce90ddf310d9608902067b55a657549ab",
-    "tasha/ui-visual.spec.ts/desktop-chromium-768x1024/tasha-home.png": "865dc3ad274591551af5690d1ad39c99c90761d3b2dc504fc5213bde73c59481",
+    "tasha/ui-visual.spec.ts/desktop-chromium-768x1024/tasha-home.png": "feeff9e0ca6f43f37a67c2a2bc7c4e1dbed71445452994fca8ad5cb45d39c2a2",
     "tasha/ui-visual.spec.ts/desktop-chromium-768x1024/tasha-inventory.png": "4710e0d434350232388d6be9bf849afb4f29129b12f24c2fc669d5cf1c2edc7c",
     "tasha/ui-visual.spec.ts/mobile-chromium-320x800/company-switcher.png": "51813a24a1825505731475340b2175b3215ace51483033afd47aa1c644944c58",
     "tasha/ui-visual.spec.ts/mobile-chromium-320x800/login.png": "89c44cc47ffadda19320102a1657e8681ff0061a7d01887cc1370f9d634dca08",
